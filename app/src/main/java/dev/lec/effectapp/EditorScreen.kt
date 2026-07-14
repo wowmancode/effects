@@ -533,6 +533,7 @@ private fun editorMetadata(context: Context, uri: Uri): Pair<String, Long> {
     return name to duration
 }
 
+@OptIn(UnstableApi::class)
 private suspend fun capturePresetThumbnail(context: Context, playerView: androidx.media3.ui.PlayerView): String? {
     val surface = playerView.videoSurfaceView ?: return null
     if (surface.width <= 0 || surface.height <= 0) return null
