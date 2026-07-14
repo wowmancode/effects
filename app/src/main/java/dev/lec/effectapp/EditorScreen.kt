@@ -108,8 +108,10 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 if (player.mediaItemCount > 0) {
                     val item = player.currentMediaItemIndex.coerceAtLeast(0)
                     val position = player.currentPosition.coerceAtLeast(0)
-                    player.prepare()
+                    // Tear down a failed decoder/effect chain before asking Media3 to retry it.
+                    player.stop()
                     player.seekTo(item, position)
+                    player.prepare()
                 }
             }
         }
@@ -163,12 +165,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         val clip = previewClip ?: return@LaunchedEffect
         // Avoid rebuilding the GL chain dozens of times per second while a slider is dragged.
         delay(160)
-        val itemIndex = player.currentMediaItemIndex.coerceAtLeast(0)
-        val position = player.currentPosition.coerceAtLeast(0)
-        val resumePlayback = player.playWhenReady
-        player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip))
-        if (!player.isPlaying) player.seekTo(itemIndex, position) // Redraw only when paused.
-        player.playWhenReady = resumePlayback
+        rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip))
     }
 
     Scaffold(
@@ -224,6 +221,28 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             onPick = { id -> viewModel.addSegment(pending.clipId, id, pending.startMs); pendingSegment = null },
         )
     }
+}
+
+@OptIn(UnstableApi::class)
+private fun rebuildPreviewPipeline(player: ExoPlayer, effects: List<androidx.media3.common.Effect>) {
+    if (player.mediaItemCount == 0) {
+        player.setVideoEffects(effects)
+        return
+    }
+
+    val itemIndex = player.currentMediaItemIndex.coerceIn(0, player.mediaItemCount - 1)
+    val position = player.currentPosition.coerceAtLeast(0)
+    val resumePlayback = player.playWhenReady
+
+    // A live one-pass -> multi-pass update can leave frames held by the old GL chain on some
+    // devices. Stopping releases that chain while retaining the playlist, so prepare() creates
+    // the complete replacement atomically instead of splicing it into frames already in flight.
+    player.playWhenReady = false
+    player.stop()
+    player.setVideoEffects(effects)
+    player.seekTo(itemIndex, position)
+    player.prepare()
+    player.playWhenReady = resumePlayback
 }
 
 @Composable
