@@ -3,10 +3,8 @@ package dev.lec.effectapp.pipeline
 import android.graphics.Matrix
 import android.net.Uri
 import androidx.annotation.OptIn
-import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
-import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.Presentation
@@ -18,7 +16,6 @@ import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.audioProcessorFor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
-import dev.lec.effectapp.model.TimelineSegment
 
 @OptIn(UnstableApi::class)
 object ProjectCompositionFactory {
@@ -62,29 +59,8 @@ object ProjectCompositionFactory {
             )
             .build()
         val audioProcessors = clip.audioSegments.filter { it.enabled }.mapNotNull(::audioProcessorFor)
-        val builder = EditedMediaItem.Builder(mediaItem).setEffects(Effects(audioProcessors, videoEffects(clip)))
-        val pitchSegments = clip.audioSegments.filter { it.enabled && it.effectId == "pitch_change" }
-        if (pitchSegments.isNotEmpty()) builder.setSpeed(SegmentSpeedProvider(pitchSegments))
-        return builder.build()
-    }
-}
-
-@OptIn(UnstableApi::class)
-private class SegmentSpeedProvider(segments: List<TimelineSegment>) : SpeedProvider {
-    private val segments = segments.sortedBy { it.startMs }
-
-    override fun getSpeed(timeUs: Long): Float {
-        val timeMs = timeUs / 1_000
-        return segments.lastOrNull { timeMs in it.startMs until it.endMs }?.params?.get("speed") ?: 1f
-    }
-
-    override fun getNextSpeedChangeTimeUs(timeUs: Long): Long {
-        val timeMs = timeUs / 1_000
-        return segments.asSequence()
-            .flatMap { sequenceOf(it.startMs, it.endMs) }
-            .filter { it > timeMs }
-            .minOrNull()
-            ?.times(1_000)
-            ?: C.TIME_UNSET
+        return EditedMediaItem.Builder(mediaItem)
+            .setEffects(Effects(audioProcessors, videoEffects(clip)))
+            .build()
     }
 }

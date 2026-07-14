@@ -34,6 +34,7 @@ fun EditPanel(
     selection: Selection?,
     modifier: Modifier = Modifier,
     onAddVisualEffect: (String) -> Unit,
+    onAddAudioEffect: (String) -> Unit,
 ) {
     var activeCategory by remember(selection) { mutableStateOf(selection?.category ?: EffectCategory.EFFECTS) }
     Column(modifier.fillMaxSize().padding(8.dp)) {
@@ -49,6 +50,9 @@ fun EditPanel(
                 activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> TransformEditor(viewModel, selectedClip)
                 activeCategory == EffectCategory.EFFECTS && selectedClip != null && selection.segmentId == null -> {
                     VisualEffectStack(viewModel, selectedClip, onAddVisualEffect)
+                }
+                activeCategory == EffectCategory.AUDIO && selectedClip != null && selection.segmentId == null -> {
+                    AudioEffectStack(viewModel, selectedClip, onAddAudioEffect)
                 }
                 selectedClip != null && selection.segmentId != null -> {
                     val segment = (selectedClip.effectSegments + selectedClip.audioSegments).find { it.id == selection.segmentId }
@@ -92,6 +96,11 @@ fun EditPanel(
                                     onClick = { onAddVisualEffect(selectedClip.id) },
                                     modifier = Modifier.weight(1f),
                                 ) { Text("+ Stack effect") }
+                            } else if (activeCategory == EffectCategory.AUDIO) {
+                                OutlinedButton(
+                                    onClick = { onAddAudioEffect(selectedClip.id) },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("+ Audio effect") }
                             }
                             OutlinedButton(
                                 onClick = viewModel::removeSelectedSegment,

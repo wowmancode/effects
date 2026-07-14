@@ -59,7 +59,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
-import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -184,18 +183,6 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     LaunchedEffect(previewAudioProcessor, previewClip?.audioSegments) {
         previewAudioProcessor.setSegments(previewClip?.audioSegments.orEmpty())
     }
-    LaunchedEffect(player, currentClipIndex, previewClip?.audioSegments) {
-        while (true) {
-            val position = player.currentPosition.coerceAtLeast(0)
-            val speed = previewClip?.audioSegments
-                ?.lastOrNull { segment ->
-                    segment.enabled && segment.effectId == "pitch_change" && position in segment.startMs until segment.endMs
-                }
-                ?.params?.get("speed") ?: 1f
-            if (player.playbackParameters.speed != speed) player.playbackParameters = PlaybackParameters(speed)
-            delay(100)
-        }
-    }
     val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
     LaunchedEffect(player, currentClipIndex, previewEffectKey) {
         val clip = previewClip ?: return@LaunchedEffect
@@ -246,6 +233,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 selection = selection,
                 modifier = Modifier.weight(0.36f),
                 onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
+                onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
             )
         }
     }

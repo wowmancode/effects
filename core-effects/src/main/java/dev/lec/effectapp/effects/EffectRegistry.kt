@@ -21,6 +21,12 @@ object EffectRegistry {
         AudioEchoEffect(),
         ChorusEffect(),
         PitchChangeEffect(),
+        SplitPitchEffect(),
+        VocoderEffect("vocoder_square", "Vocoder · square"),
+        VocoderEffect("vocoder_saw", "Vocoder · saw"),
+        VocoderEffect("vocoder_sine", "Vocoder · sine"),
+        VocoderEffect("vocoder_triangle", "Vocoder · triangle"),
+        VocoderEffect("vocoder_custom", "Vocoder · custom carrier", customCarrier = true),
     )
     val all: List<LecEffect> get() = registered
 
