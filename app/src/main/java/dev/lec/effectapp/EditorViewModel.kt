@@ -56,15 +56,15 @@ class EditorViewModel : ViewModel() {
         _selection.value = null
     }
 
-    fun addSegment(clipId: String, effectId: String, startMs: Long = 0) {
+    fun addSegment(clipId: String, effectId: String) {
         val effect = requireNotNull(EffectRegistry.byId(effectId))
         val clip = requireNotNull(_project.value.clips.find { it.id == clipId })
         val isAudio = effect.category == EffectCategory.AUDIO
         val segment = TimelineSegment(
             id = UUID.randomUUID().toString(),
             effectId = effectId,
-            startMs = if (isAudio) startMs.coerceIn(0, clip.durationMs) else 0,
-            endMs = if (isAudio) (startMs + 2_000).coerceIn(0, clip.durationMs) else clip.durationMs,
+            startMs = 0,
+            endMs = clip.durationMs,
             params = effect.params.associate { it.id to it.default },
         )
         updateClip(clipId) {
@@ -80,7 +80,7 @@ class EditorViewModel : ViewModel() {
                 effectSegments = effectSegments.map {
                     if (it.id == segmentId) transform(it).copy(startMs = 0, endMs = durationMs) else it
                 },
-                audioSegments = audioSegments.map { if (it.id == segmentId) transform(it).constrainedTo(durationMs) else it },
+                audioSegments = audioSegments.map { if (it.id == segmentId) transform(it).forWholeClip(durationMs) else it },
             )
         }
     }
@@ -117,7 +117,10 @@ class EditorViewModel : ViewModel() {
         val loaded = ProjectJson.decode(json)
         _project.value = loaded.copy(
             clips = loaded.clips.map { clip ->
-                clip.copy(effectSegments = clip.effectSegments.map { it.copy(startMs = 0, endMs = clip.durationMs) })
+                clip.copy(
+                    effectSegments = clip.effectSegments.map { it.forWholeClip(clip.durationMs) },
+                    audioSegments = clip.audioSegments.map { it.forWholeClip(clip.durationMs) },
+                )
             },
         )
         _selection.value = null

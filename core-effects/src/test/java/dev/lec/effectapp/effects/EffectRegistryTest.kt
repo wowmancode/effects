@@ -35,5 +35,10 @@ class EffectRegistryTest {
 
         val godRays = requireNotNull(EffectRegistry.byId("god_rays"))
         assertTrue(godRays.params.any { it.id == "position_x" })
+
+        val mirror = requireNotNull(EffectRegistry.byId("mirror"))
+        val sourceSide = requireNotNull(mirror.params.singleOrNull { it.id == "source_side" })
+        assertEquals(0f, sourceSide.min)
+        assertEquals(3f, sourceSide.max)
     }
 }

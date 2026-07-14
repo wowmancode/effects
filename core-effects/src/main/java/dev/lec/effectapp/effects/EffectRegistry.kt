@@ -18,6 +18,7 @@ object EffectRegistry {
         VhsEffect(),
         FreezeFrameEffect(),
         MirrorFlipEffect(),
+        MirrorEffect(),
         AudioEchoEffect(),
         ChorusEffect(),
         PitchChangeEffect(),

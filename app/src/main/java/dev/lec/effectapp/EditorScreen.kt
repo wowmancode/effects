@@ -253,7 +253,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         EffectPicker(
             category = pending.category,
             onDismiss = { pendingSegment = null },
-            onPick = { id -> viewModel.addSegment(pending.clipId, id, pending.startMs); pendingSegment = null },
+            onPick = { id -> viewModel.addSegment(pending.clipId, id); pendingSegment = null },
         )
     }
 }
@@ -353,7 +353,7 @@ private fun Lane(
                     selected = selection?.segmentId == segment.id,
                     row = index % 2,
                     category = category,
-                    resizable = category == EffectCategory.AUDIO,
+                    resizable = false,
                     onSegment = onSegment,
                     onResize = onResize,
                 )

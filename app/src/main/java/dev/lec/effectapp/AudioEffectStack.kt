@@ -13,7 +13,7 @@ import dev.lec.effectapp.model.Clip
 @Composable
 internal fun AudioEffectStack(viewModel: EditorViewModel, clip: Clip, onAddAudioEffect: (String) -> Unit) {
     Text("${clip.displayName} · audio stack", style = MaterialTheme.typography.titleMedium)
-    Text("Audio effects can overlap and stack. Drag their timeline edges to choose when they play.")
+    Text("Every audio effect applies to the entire clip. Add, stack, and reorder as many as you need.")
     OutlinedButton(onClick = { onAddAudioEffect(clip.id) }) { Text("+ Add audio effect") }
     if (clip.audioSegments.isEmpty()) {
         Text("No audio effects yet.")

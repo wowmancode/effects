@@ -64,8 +64,7 @@ fun EditPanel(
                         val stackIndex = stack.indexOfFirst { it.id == segment.id }
                         Text(effect.displayName, style = MaterialTheme.typography.titleMedium)
                         Text("Clip: ${selectedClip.displayName}")
-                        if (activeCategory == EffectCategory.EFFECTS) Text("Applies to the entire clip")
-                        else Text("${formatTime(segment.startMs)} – ${formatTime(segment.endMs)}")
+                        Text("Applies to the entire clip")
                         Text("Stack position ${stackIndex + 1} of ${stack.size} · later effects render on top")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
@@ -81,6 +80,9 @@ fun EditPanel(
                         }
                         when (effect.id) {
                             "gradient_map" -> GradientMapEditor(segment.params) { params ->
+                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            }
+                            "mirror" -> MirrorEditor(segment.params) { params ->
                                 viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
                             }
                             "split_pitch" -> SplitPitchEditor(segment.params) { params ->
