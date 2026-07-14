@@ -62,6 +62,7 @@ object ProjectCompositionFactory {
     }
 }
 
+@OptIn(UnstableApi::class)
 private class SegmentSpeedProvider(segments: List<TimelineSegment>) : SpeedProvider {
     private val segments = segments.sortedBy { it.startMs }
 
