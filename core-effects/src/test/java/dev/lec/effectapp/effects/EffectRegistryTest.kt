@@ -25,8 +25,15 @@ class EffectRegistryTest {
         assertEquals(setOf("position_x", "position_y", "strength", "stretch"), wave.params.map { it.id }.toSet())
 
         val pinch = requireNotNull(EffectRegistry.byId("pinch_bulge"))
+        assertTrue(pinch.params.any { it.id == "radius" })
         val strength = requireNotNull(pinch.params.find { it.id == "strength" })
         assertEquals(-1f, strength.min)
         assertEquals(1f, strength.max)
+
+        val glow = requireNotNull(EffectRegistry.byId("glow"))
+        assertEquals(setOf("radius", "strength", "threshold"), glow.params.map { it.id }.toSet())
+
+        val godRays = requireNotNull(EffectRegistry.byId("god_rays"))
+        assertTrue(godRays.params.any { it.id == "position_x" })
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
@@ -57,15 +59,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.effects.PreviewAudioProcessor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.TimelineSegment
@@ -98,9 +105,23 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.load(reader.readText()) } }
     }
 
-    val player = remember {
+    val previewAudioProcessor = remember { PreviewAudioProcessor() }
+    val renderersFactory = remember(previewAudioProcessor) {
+        object : DefaultRenderersFactory(context.applicationContext) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioOutputPlaybackParams: Boolean,
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(false)
+                .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
+                .setAudioProcessors(arrayOf(previewAudioProcessor))
+                .build()
+        }
+    }
+    val player = remember(renderersFactory) {
         // Media3 requires the effect pipeline to be enabled before the first prepare().
-        ExoPlayer.Builder(context.applicationContext).build().apply { setVideoEffects(emptyList()) }
+        ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply { setVideoEffects(emptyList()) }
     }
     DisposableEffect(player, lifecycleOwner) {
         val listener = object : Player.Listener {
@@ -160,6 +181,21 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         }
     }
     val previewClip = project.clips.getOrNull(currentClipIndex)
+    LaunchedEffect(previewAudioProcessor, previewClip?.audioSegments) {
+        previewAudioProcessor.setSegments(previewClip?.audioSegments.orEmpty())
+    }
+    LaunchedEffect(player, currentClipIndex, previewClip?.audioSegments) {
+        while (true) {
+            val position = player.currentPosition.coerceAtLeast(0)
+            val speed = previewClip?.audioSegments
+                ?.lastOrNull { segment ->
+                    segment.enabled && segment.effectId == "pitch_change" && position in segment.startMs until segment.endMs
+                }
+                ?.params?.get("speed") ?: 1f
+            if (player.playbackParameters.speed != speed) player.playbackParameters = PlaybackParameters(speed)
+            delay(100)
+        }
+    }
     val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
     LaunchedEffect(player, currentClipIndex, previewEffectKey) {
         val clip = previewClip ?: return@LaunchedEffect
@@ -405,7 +441,7 @@ private fun EffectPicker(category: EffectCategory, onDismiss: () -> Unit, onPick
         onDismissRequest = onDismiss,
         title = { Text(if (category == EffectCategory.AUDIO) "Add audio effect" else "Add visual effect") },
         text = {
-            Column {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                 EffectRegistry.byCategory(category).forEach { effect ->
                     TextButton(onClick = { onPick(effect.id) }, modifier = Modifier.fillMaxWidth()) { Text(effect.displayName) }
                 }

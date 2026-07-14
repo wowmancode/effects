@@ -82,6 +82,7 @@ class PinchBulgeEffect : LecEffect {
     override val params = listOf(
         EffectParam("position_x", "Position X", 0f, 1f, 0.5f),
         EffectParam("position_y", "Position Y", 0f, 1f, 0.5f),
+        EffectParam("radius", "Radius", 0.05f, 1f, 0.75f),
         EffectParam("strength", "Strength", -1f, 1f, 0f),
     )
 
@@ -90,7 +91,7 @@ class PinchBulgeEffect : LecEffect {
         centerX = values["position_x"] ?: 0.5f,
         centerY = values["position_y"] ?: 0.5f,
         first = values["strength"] ?: 0f,
-        second = 0f,
+        second = values["radius"] ?: 0.75f,
     )
 }
 
@@ -197,7 +198,8 @@ private class SpatialWarpShaderProgram(
                 float phase = (uv.y - uCenter.y) * 12.56637 * stretch;
                 uv.x += sin(phase) * uParams.x * 0.12 * falloff;
               } else {
-                float influence = 1.0 - smoothstep(0.0, 0.75, distanceFromCenter);
+                float radius = max(uParams.y, 0.001);
+                float influence = 1.0 - smoothstep(0.0, radius, distanceFromCenter);
                 float scale = max(0.05, 1.0 + uParams.x * influence);
                 corrected *= scale;
                 uv = uCenter + vec2(corrected.x / uParams.z, corrected.y);
