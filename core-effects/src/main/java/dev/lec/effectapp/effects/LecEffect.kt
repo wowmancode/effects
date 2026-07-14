@@ -1,6 +1,8 @@
 package dev.lec.effectapp.effects
 
+import androidx.annotation.OptIn
 import androidx.media3.common.Effect
+import androidx.media3.common.util.UnstableApi
 
 enum class EffectCategory { EFFECTS, TRANSFORM, AUDIO }
 
@@ -15,6 +17,7 @@ data class EffectParam(
     val kind: ParamKind = ParamKind.FLOAT,
 )
 
+@OptIn(UnstableApi::class)
 interface LecEffect {
     val id: String
     val displayName: String

@@ -1,7 +1,10 @@
 package dev.lec.effectapp.effects
 
+import androidx.annotation.OptIn
 import androidx.media3.common.Effect
+import androidx.media3.common.util.UnstableApi
 
+@OptIn(UnstableApi::class)
 class PitchChangeEffect : LecEffect {
     override val id = "pitch_change"
     override val displayName = "Pitch / speed"
