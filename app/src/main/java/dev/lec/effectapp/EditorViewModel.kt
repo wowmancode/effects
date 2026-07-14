@@ -7,6 +7,7 @@ import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.EffectPreset
 import dev.lec.effectapp.model.ProjectJson
+import dev.lec.effectapp.model.PresetJson
 import dev.lec.effectapp.model.TimelineSegment
 import dev.lec.effectapp.model.TransformSettings
 import java.util.UUID
@@ -43,6 +44,10 @@ class EditorViewModel : ViewModel() {
     fun removeClip(id: String) {
         _project.value = _project.value.copy(clips = _project.value.clips.filterNot { it.id == id })
         if (_selection.value?.clipId == id) _selection.value = null
+    }
+
+    fun replaceClipMedia(id: String, uri: String, displayName: String, durationMs: Long) {
+        updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
     }
 
     fun selectClip(id: String) {
@@ -159,6 +164,20 @@ class EditorViewModel : ViewModel() {
 
     fun removePreset(id: String) {
         _project.value = _project.value.copy(presets = _project.value.presets.filterNot { it.id == id })
+    }
+
+    fun encodePreset(id: String): String? =
+        _project.value.presets.find { it.id == id }?.let(PresetJson::encode)
+
+    fun importPreset(json: String) {
+        val decoded = PresetJson.decode(json)
+        val imported = decoded.copy(
+            id = UUID.randomUUID().toString(),
+            thumbnailPath = null,
+            effectSegments = decoded.effectSegments.map { it.copy(id = "") },
+            audioSegments = decoded.audioSegments.map { it.copy(id = "") },
+        )
+        _project.value = _project.value.copy(presets = _project.value.presets + imported)
     }
 
     fun encode(): String = ProjectJson.encode(_project.value)

@@ -43,6 +43,9 @@ internal fun EditorWorkspace(
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
     onSavePreset: (String, String) -> Unit,
+    onImportPreset: () -> Unit,
+    onExportPreset: (String) -> Unit,
+    onReplaceMedia: (String) -> Unit,
     onPlayerView: (PlayerView) -> Unit,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -57,6 +60,7 @@ internal fun EditorWorkspace(
                     project = project,
                     currentClipIndex = currentClipIndex,
                     onAddClip = onAddClip,
+                    onReplaceMedia = onReplaceMedia,
                     onPlayerView = onPlayerView,
                     modifier = Modifier.weight(0.46f).fillMaxHeight(),
                 )
@@ -82,6 +86,8 @@ internal fun EditorWorkspace(
                             modifier = Modifier.fillMaxWidth().weight(1f),
                             currentClipId = project.clips.getOrNull(currentClipIndex)?.id,
                             onSavePreset = onSavePreset,
+                            onImportPreset = onImportPreset,
+                            onExportPreset = onExportPreset,
                             onAddVisualEffect = onAddVisualEffect,
                             onAddAudioEffect = onAddAudioEffect,
                         )
@@ -106,6 +112,7 @@ internal fun EditorWorkspace(
                     project = project,
                     currentClipIndex = currentClipIndex,
                     onAddClip = onAddClip,
+                    onReplaceMedia = onReplaceMedia,
                     modifier = Modifier.fillMaxWidth().weight(0.35f),
                     onPlayerView = onPlayerView,
                 )
@@ -128,6 +135,8 @@ internal fun EditorWorkspace(
                     onAddVisualEffect = onAddVisualEffect,
                     currentClipId = project.clips.getOrNull(currentClipIndex)?.id,
                     onSavePreset = onSavePreset,
+                    onImportPreset = onImportPreset,
+                    onExportPreset = onExportPreset,
                     onAddAudioEffect = onAddAudioEffect,
                 )
             }
@@ -168,6 +177,7 @@ private fun PreviewPane(
     project: EditProject,
     currentClipIndex: Int,
     onAddClip: () -> Unit,
+    onReplaceMedia: (String) -> Unit,
     onPlayerView: (PlayerView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -191,6 +201,13 @@ private fun PreviewPane(
                 "Clip ${if (project.clips.isEmpty()) 0 else currentClipIndex + 1}/${project.clips.size}",
                 Modifier.weight(1f),
             )
+            val currentClip = project.clips.getOrNull(currentClipIndex)
+            OutlinedButton(
+                onClick = { currentClip?.let { onReplaceMedia(it.id) } },
+                enabled = currentClip != null,
+            ) {
+                Text("Replace")
+            }
             OutlinedButton(onClick = onAddClip) { Text("+ Clip") }
         }
     }

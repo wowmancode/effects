@@ -93,6 +93,8 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     var playerPositionMs by remember { mutableLongStateOf(0) }
     var currentClipIndex by remember { mutableIntStateOf(0) }
     var pendingSegment by remember { mutableStateOf<PendingSegment?>(null) }
+    var pendingPresetExportId by remember { mutableStateOf<String?>(null) }
+    var pendingReplaceClipId by remember { mutableStateOf<String?>(null) }
 
     val scope = rememberCoroutineScope()
     var previewEntries by remember { mutableStateOf<List<PreviewEntry>>(emptyList()) }
@@ -109,6 +111,38 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     val loadProject = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.load(reader.readText()) } }
+    }
+    val importPreset = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
+                runCatching { viewModel.importPreset(reader.readText()) }
+            }
+        }
+    }
+    val exportPreset = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        val presetId = pendingPresetExportId
+        pendingPresetExportId = null
+        if (uri != null && presetId != null) {
+            viewModel.encodePreset(presetId)?.let { json ->
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer -> writer.write(json) }
+            }
+        }
+    }
+    val replaceMedia = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val clipId = pendingReplaceClipId
+        pendingReplaceClipId = null
+        if (uri != null && clipId != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            val metadata = editorMetadata(context, uri)
+            viewModel.replaceClipMedia(clipId, uri.toString(), metadata.first, metadata.second)
+        }
     }
 
     val previewAudioProcessor = remember { PreviewAudioProcessor() }
@@ -237,6 +271,22 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             onSeek = { seekPreview(player, project, previewEntries, it) },
             onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
             onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
+            onImportPreset = { importPreset.launch(arrayOf("application/json", "text/json", "text/plain")) },
+            onExportPreset = { presetId ->
+                val preset = project.presets.find { it.id == presetId }
+                if (preset != null) {
+                    pendingPresetExportId = presetId
+                    val fileName = preset.name
+                        .replace(Regex("[^A-Za-z0-9._-]+"), "-")
+                        .trim('-')
+                        .ifEmpty { "effect-preset" }
+                    exportPreset.launch("$fileName.json")
+                }
+            },
+            onReplaceMedia = { clipId ->
+                pendingReplaceClipId = clipId
+                replaceMedia.launch(arrayOf("video/*"))
+            },
             modifier = Modifier.fillMaxSize().padding(padding),
             onSavePreset = { name, clipId ->
                 scope.launch {

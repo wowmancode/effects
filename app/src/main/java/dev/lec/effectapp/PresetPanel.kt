@@ -35,6 +35,8 @@ internal fun PresetPanel(
     onSave: (String, String) -> Unit,
     onApply: (String, String) -> Unit,
     onRemove: (String) -> Unit,
+    onImport: () -> Unit,
+    onExport: (String) -> Unit,
 ) {
     var search by remember { mutableStateOf("") }
     var namingPreset by remember { mutableStateOf(false) }
@@ -54,6 +56,9 @@ internal fun PresetPanel(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("+ Save current clip as preset")
+    }
+    OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+        Text("Import preset")
     }
     if (targetClipId == null) {
         Text("Select or preview a clip before saving or applying a preset.")
@@ -92,6 +97,7 @@ internal fun PresetPanel(
                         onClick = { targetClipId?.let { onApply(preset.id, it) } },
                         enabled = targetClipId != null,
                     ) { Text("Apply") }
+                    TextButton(onClick = { onExport(preset.id) }) { Text("Export") }
                     TextButton(onClick = { onRemove(preset.id) }) { Text("Delete") }
                 }
             }

@@ -50,4 +50,41 @@ class ProjectJsonTest {
         assertEquals(project, ProjectJson.decode(ProjectJson.encode(project)))
     }
 
+    @Test
+    fun portablePresetOmitsThumbnail() {
+        val preset = EffectPreset(
+            id = "preset",
+            name = "Portable look",
+            thumbnailPath = "/private/preview.jpg",
+            effectSegments = listOf(TimelineSegment("", "glow", 0, 2_000)),
+        )
+
+        assertEquals(preset.copy(thumbnailPath = null), PresetJson.decode(PresetJson.encode(preset)))
+    }
+
+    @Test
+    fun replacingMediaKeepsEditsAndFitsEffectsToNewDuration() {
+        val clip = Clip(
+            id = "clip",
+            sourceUri = "content://old",
+            displayName = "old.mp4",
+            trimStartMs = 500,
+            trimEndMs = 2_500,
+            transform = TransformSettings(scale = 1.5f, rotationDegrees = 20f),
+            effectSegments = listOf(TimelineSegment("visual", "glow", 300, 900)),
+            audioSegments = listOf(TimelineSegment("audio", "pitch", 200, 800)),
+        )
+
+        val replaced = clip.withReplacedMedia("content://new", "new.mp4", 6_000)
+
+        assertEquals("clip", replaced.id)
+        assertEquals("content://new", replaced.sourceUri)
+        assertEquals("new.mp4", replaced.displayName)
+        assertEquals(clip.transform, replaced.transform)
+        assertEquals(0, replaced.trimStartMs)
+        assertEquals(6_000, replaced.trimEndMs)
+        assertEquals(clip.effectSegments.map { it.forWholeClip(6_000) }, replaced.effectSegments)
+        assertEquals(clip.audioSegments.map { it.forWholeClip(6_000) }, replaced.audioSegments)
+    }
+
 }

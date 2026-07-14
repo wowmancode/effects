@@ -33,6 +33,18 @@ data class Clip(
     val audioSegments: List<TimelineSegment> = emptyList(),
 ) {
     val durationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0)
+
+    fun withReplacedMedia(sourceUri: String, displayName: String, durationMs: Long): Clip {
+        val replacementDuration = durationMs.coerceAtLeast(1)
+        return copy(
+            sourceUri = sourceUri,
+            displayName = displayName,
+            trimStartMs = 0,
+            trimEndMs = replacementDuration,
+            effectSegments = effectSegments.map { it.forWholeClip(replacementDuration) },
+            audioSegments = audioSegments.map { it.forWholeClip(replacementDuration) },
+        )
+    }
 }
 
 @Serializable

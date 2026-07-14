@@ -36,6 +36,8 @@ fun EditPanel(
     modifier: Modifier = Modifier,
     currentClipId: String?,
     onSavePreset: (String, String) -> Unit,
+    onImportPreset: () -> Unit,
+    onExportPreset: (String) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
 ) {
@@ -61,6 +63,8 @@ fun EditPanel(
                     onSave = onSavePreset,
                     onApply = viewModel::applyPreset,
                     onRemove = viewModel::removePreset,
+                    onImport = onImportPreset,
+                    onExport = onExportPreset,
                 )
                 selection == null -> Text("Select a clip to edit its effect stack.")
                 activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> TransformEditor(viewModel, selectedClip)

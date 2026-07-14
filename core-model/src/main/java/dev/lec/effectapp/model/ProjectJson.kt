@@ -14,3 +14,15 @@ object ProjectJson {
 
     fun decode(value: String): EditProject = json.decodeFromString(value)
 }
+
+object PresetJson {
+    private val json = Json {
+        prettyPrint = true
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+
+    fun encode(preset: EffectPreset): String = json.encodeToString(preset.copy(thumbnailPath = null))
+
+    fun decode(value: String): EffectPreset = json.decodeFromString<EffectPreset>(value).copy(thumbnailPath = null)
+}
