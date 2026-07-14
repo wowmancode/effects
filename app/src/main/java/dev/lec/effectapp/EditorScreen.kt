@@ -154,7 +154,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         while (true) {
             currentClipIndex = player.currentMediaItemIndex.coerceAtLeast(0)
             playerPositionMs = project.clips.take(currentClipIndex).sumOf { it.durationMs } + player.currentPosition
-            delay(50)
+            delay(200)
         }
     }
     val previewClip = project.clips.getOrNull(currentClipIndex)
@@ -166,7 +166,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         val itemIndex = player.currentMediaItemIndex.coerceAtLeast(0)
         val position = player.currentPosition.coerceAtLeast(0)
         val resumePlayback = player.playWhenReady
-        player.setVideoEffects(ProjectCompositionFactory.videoEffects(clip))
+        player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip))
         if (!player.isPlaying) player.seekTo(itemIndex, position) // Redraw only when paused.
         player.playWhenReady = resumePlayback
     }

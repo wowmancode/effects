@@ -9,6 +9,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.MatrixTransformation
+import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -43,6 +44,11 @@ object ProjectCompositionFactory {
             EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.params)?.let(result::add)
         }
         return result
+    }
+
+    fun previewVideoEffects(clip: Clip): List<Effect> = buildList {
+        add(Presentation.createForHeight(540))
+        addAll(videoEffects(clip))
     }
 
     private fun editedItem(clip: Clip): EditedMediaItem {

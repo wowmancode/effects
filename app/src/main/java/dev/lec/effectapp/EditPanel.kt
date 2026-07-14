@@ -16,6 +16,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -152,6 +153,12 @@ private fun RowScope.CategoryButton(
 
 @Composable
 private fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    Text("$label: ${"%.2f".format(value)}")
-    Slider(value = value.coerceIn(range.start, range.endInclusive), onValueChange = onChange, valueRange = range)
+    var sliderValue by remember(value, range.start, range.endInclusive) { mutableFloatStateOf(value) }
+    Text("$label: ${"%.2f".format(sliderValue)}")
+    Slider(
+        value = sliderValue.coerceIn(range.start, range.endInclusive),
+        onValueChange = { sliderValue = it },
+        onValueChangeFinished = { onChange(sliderValue) },
+        valueRange = range,
+    )
 }
