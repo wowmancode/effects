@@ -1,3 +1,4 @@
+![Downloads](https://img.shields.io/github/downloads/wowmancode/effects/total)
 # effect-app
 
 A free and open-source Android video editor focused on stacking time-ranged visual and audio effects across hard-cut video sequences.
