@@ -1,6 +1,7 @@
 package dev.lec.effectapp
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -30,6 +32,7 @@ import dev.lec.effectapp.effects.GradientMapEffect
 @Composable
 internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String, Float>) -> Unit) {
     val stops = GradientMapEffect.decodeStops(values)
+    var expandedPoint by remember { mutableIntStateOf(-1) }
     val gradientColors = stops.map { stop ->
         stop.position to Color(stop.red, stop.green, stop.blue)
     }.toTypedArray()
@@ -48,12 +51,28 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(Modifier.size(28.dp).background(Color(stop.red, stop.green, stop.blue)))
+                Box(
+                    Modifier.size(32.dp).background(Color(stop.red, stop.green, stop.blue)).clickable {
+                        expandedPoint = if (expandedPoint == index) -1 else index
+                    },
+                )
                 Text("Point ${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = { expandedPoint = if (expandedPoint == index) -1 else index }) {
+                    Text(if (expandedPoint == index) "Close picker" else "Pick color")
+                }
                 TextButton(
                     onClick = { onChange(GradientMapEffect.encodeStops(stops.filterIndexed { i, _ -> i != index })) },
                     enabled = stops.size > 2,
                 ) { Text("Remove") }
+            }
+            if (expandedPoint == index) {
+                HsvColorPicker(Color(stop.red, stop.green, stop.blue)) { color ->
+                    onChange(
+                        GradientMapEffect.encodeStops(
+                            stops.replaced(index, stop.copy(red = color.red, green = color.green, blue = color.blue)),
+                        ),
+                    )
+                }
             }
             GradientStopSlider("Position", stop.position) { value ->
                 onChange(GradientMapEffect.encodeStops(stops.replaced(index, stop.copy(position = value))))

@@ -31,9 +31,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.ExportException
+import dev.lec.effectapp.effects.CarrierAudioStore
 import dev.lec.effectapp.pipeline.ProjectExporter
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private enum class ExportState { IDLE, RUNNING, DONE, ERROR }
 
@@ -47,6 +50,10 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var state by remember { mutableStateOf(ExportState.IDLE) }
     var progress by remember { mutableIntStateOf(0) }
     var error by remember { mutableStateOf<String?>(null) }
+    val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
+        .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
+    var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
+    var carrierError by remember(carrierUris) { mutableStateOf<String?>(null) }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
         uri?.let { destination ->
             context.contentResolver.openOutputStream(destination)?.use { target -> output.inputStream().use { it.copyTo(target) } }
@@ -54,6 +61,15 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     }
 
     DisposableEffect(exporter) { onDispose { if (state == ExportState.RUNNING) exporter.cancel() } }
+    LaunchedEffect(carrierUris) {
+        carriersReady = carrierUris.isEmpty()
+        carrierError = null
+        carrierUris.forEach { uri ->
+            val result = withContext(Dispatchers.IO) { CarrierAudioStore.load(context, uri) }
+            if (result.isFailure) carrierError = result.exceptionOrNull()?.message ?: "Could not load carrier audio"
+        }
+        carriersReady = carrierError == null
+    }
     LaunchedEffect(state) {
         while (state == ExportState.RUNNING) {
             exporter.progress()?.let { progress = it }
@@ -76,6 +92,8 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
             when (state) {
                 ExportState.IDLE -> {
                     Text("Export ${project.clips.size} clips with hard cuts and all enabled effects.")
+                    if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
+                    carrierError?.let { Text("Carrier audio error: $it") }
                     Button(
                         onClick = {
                             output.delete()
@@ -93,7 +111,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 },
                             )
                         },
-                        enabled = project.clips.isNotEmpty(),
+                        enabled = project.clips.isNotEmpty() && carriersReady,
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {

@@ -14,11 +14,15 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
     @Volatile
     private var requestedSegments: List<TimelineSegment> = emptyList()
     private var appliedSegments: List<TimelineSegment> = emptyList()
+    @Volatile
+    private var requestedRevision = 0
+    private var appliedRevision = -1
     private var states: List<AudioDspState> = emptyList()
     private var sampleIndex = 0L
 
     fun setSegments(segments: List<TimelineSegment>) {
         requestedSegments = segments.filter { it.enabled && isAudioDspEffect(it.effectId) }
+        requestedRevision++
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -36,11 +40,12 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
     override fun onReset() {
         sampleIndex = 0
         appliedSegments = emptyList()
+        appliedRevision = -1
         states = emptyList()
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
-        if (requestedSegments != appliedSegments) rebuildStates()
+        if (requestedRevision != appliedRevision) rebuildStates()
         val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
         while (inputBuffer.remaining() >= 2) {
@@ -57,6 +62,7 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
     private fun rebuildStates() {
         val next = requestedSegments
         appliedSegments = next
+        appliedRevision = requestedRevision
         if (inputAudioFormat == AudioProcessor.AudioFormat.NOT_SET) {
             states = emptyList()
             return

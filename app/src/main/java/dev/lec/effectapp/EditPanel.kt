@@ -79,14 +79,31 @@ fun EditPanel(
                                 modifier = Modifier.weight(1f),
                             ) { Text("Move later") }
                         }
-                        if (effect.id == "gradient_map") {
-                            GradientMapEditor(segment.params) { params ->
+                        when (effect.id) {
+                            "gradient_map" -> GradientMapEditor(segment.params) { params ->
                                 viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
                             }
-                        } else effect.params.forEach { parameter ->
-                            ParameterSlider(parameter.displayName, segment.params[parameter.id] ?: parameter.default, parameter.min..parameter.max) { value ->
-                                viewModel.updateSegment(selectedClip.id, segment.id) {
-                                    it.copy(params = it.params + (parameter.id to value))
+                            "split_pitch" -> SplitPitchEditor(segment.params) { params ->
+                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            }
+                            else -> {
+                                if (effect.id == "vocoder_custom") {
+                                    CustomCarrierEditor(segment.stringParams) { values ->
+                                        viewModel.updateSegment(selectedClip.id, segment.id) {
+                                            it.copy(stringParams = values)
+                                        }
+                                    }
+                                }
+                                effect.params.forEach { parameter ->
+                                    ParameterSlider(
+                                        parameter.displayName,
+                                        segment.params[parameter.id] ?: parameter.default,
+                                        parameter.min..parameter.max,
+                                    ) { value ->
+                                        viewModel.updateSegment(selectedClip.id, segment.id) {
+                                            it.copy(params = it.params + (parameter.id to value))
+                                        }
+                                    }
                                 }
                             }
                         }

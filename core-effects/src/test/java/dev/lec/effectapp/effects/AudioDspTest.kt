@@ -32,11 +32,16 @@ class AudioDspTest {
     }
 
     @Test
-    fun splitPitchStartsOneSemitoneApartInBothDirections() {
-        val split = requireNotNull(EffectRegistry.byId("split_pitch"))
+    fun splitPitchSupportsAResizableVoiceList() {
+        assertEquals(listOf(-1f, 1f), SplitPitchEffect.decodeVoices(emptyMap()).map { it.semitones })
+        val voices = List(6) { index -> SplitPitchVoice(index.toFloat() - 3f, level = 0.75f) }
+        val encoded = SplitPitchEffect.encodeVoices(voices, mapOf("dry_mix" to 0.2f))
+        val decoded = SplitPitchEffect.decodeVoices(encoded)
 
-        assertEquals(-1f, split.params.first { it.id == "lower_semitones" }.default)
-        assertEquals(1f, split.params.first { it.id == "upper_semitones" }.default)
+        assertEquals(6, decoded.size)
+        assertEquals(-3f, decoded.first().semitones)
+        assertEquals(0.75f, decoded.last().level)
+        assertEquals(0.2f, encoded["dry_mix"])
     }
 
     @Test
@@ -49,6 +54,6 @@ class AudioDspTest {
             ),
         )
         val custom = requireNotNull(EffectRegistry.byId("vocoder_custom"))
-        assertTrue(custom.params.any { it.id == "harmonic_4" })
+        assertFalse(custom.params.any { it.id == "frequency_hz" })
     }
 }

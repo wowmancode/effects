@@ -41,6 +41,7 @@ data class TimelineSegment(
     val endMs: Long,
     val enabled: Boolean = true,
     val params: Map<String, Float> = emptyMap(),
+    val stringParams: Map<String, String> = emptyMap(),
 ) {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0)
 

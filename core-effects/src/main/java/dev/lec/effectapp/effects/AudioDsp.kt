@@ -117,13 +117,11 @@ private class DelayDspState(
     }
 }
 
-private data class PitchVoice(val semitones: Float, val gain: Float)
-
 private class PitchDspState(
     private val segment: TimelineSegment,
     private val sampleRate: Int,
     private val channels: Int,
-    private val voices: List<PitchVoice>,
+    private val voices: List<SplitPitchVoice>,
     private val dryMix: Float,
     private val wetMix: Float,
 ) : AudioDspState {
@@ -132,13 +130,14 @@ private class PitchDspState(
     private val ratios = voices.map { 2.0.pow(it.semitones.toDouble() / 12.0).toFloat() }
     private val phases = FloatArray(voices.size) { 0.25f }
     private var writeIndex = 0
+    private val totalVoiceLevel = voices.sumOf { it.level.toDouble() }.toFloat().coerceAtLeast(0.0001f)
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
         buffers[channel][writeIndex] = normalized
         var wet = 0f
         voices.forEachIndexed { index, voice ->
-            wet += shiftedSample(channel, phases[index], ratios[index]) * voice.gain
+            wet += shiftedSample(channel, phases[index], ratios[index]) * voice.level / totalVoiceLevel
         }
         val active = timeMs in segment.startMs until segment.endMs
         val rendered = if (active) normalized * dryMix + wet * wetMix else normalized
@@ -174,7 +173,7 @@ private class PitchDspState(
             segment = segment,
             sampleRate = sampleRate,
             channels = channels,
-            voices = listOf(PitchVoice(segment.params["semitones"] ?: 0f, 1f)),
+            voices = listOf(SplitPitchVoice(segment.params["semitones"] ?: 0f)),
             dryMix = 1f - (segment.params["mix"] ?: 1f),
             wetMix = segment.params["mix"] ?: 1f,
         )
@@ -183,10 +182,7 @@ private class PitchDspState(
             segment = segment,
             sampleRate = sampleRate,
             channels = channels,
-            voices = listOf(
-                PitchVoice(segment.params["lower_semitones"] ?: -1f, 0.5f),
-                PitchVoice(segment.params["upper_semitones"] ?: 1f, 0.5f),
-            ),
+            voices = SplitPitchEffect.decodeVoices(segment.params),
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
         )
@@ -207,6 +203,8 @@ private class VocoderDspState(
     private val lowAlpha = FloatArray(bandCount)
     private val highAlpha = FloatArray(bandCount)
     private var phase = 0f
+    private var carrierFrame = 0L
+    private val importedCarrier = CarrierAudioStore.get(segment.stringParams["carrier_uri"])
 
     init {
         repeat(bandCount) { band ->
@@ -218,7 +216,8 @@ private class VocoderDspState(
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
-        val carrier = carrierSample(phase)
+        val active = timeMs in segment.startMs until segment.endMs
+        val carrier = if (active) carrierSample(phase) else 0f
         val response = segment.params["response"] ?: 0.45f
         val attack = 0.03f + response * 0.3f
         val release = 0.002f + response * 0.04f
@@ -240,9 +239,10 @@ private class VocoderDspState(
         if (channel == channels - 1) {
             val frequency = segment.params["frequency_hz"] ?: 120f
             phase = wrapUnit(phase + frequency / sampleRate)
+            if (active) carrierFrame++
         }
-        val active = timeMs in segment.startMs until segment.endMs
-        val mix = if (active) segment.params["mix"] ?: 0.85f else 0f
+        val carrierReady = segment.effectId != "vocoder_custom" || importedCarrier != null
+        val mix = if (active && carrierReady) segment.params["mix"] ?: 0.85f else 0f
         val rendered = normalized * (1f - mix) + tanh(vocoded.toDouble()).toFloat() * mix
         return (rendered * 32767f).toInt()
     }
@@ -251,16 +251,7 @@ private class VocoderDspState(
         "vocoder_square" -> if (phase < 0.5f) 1f else -1f
         "vocoder_saw" -> phase * 2f - 1f
         "vocoder_triangle" -> 1f - 4f * abs(phase - 0.5f)
-        "vocoder_custom" -> {
-            val second = segment.params["harmonic_2"] ?: 0.6f
-            val third = segment.params["harmonic_3"] ?: 0.35f
-            val fourth = segment.params["harmonic_4"] ?: 0.2f
-            val value = sin(2.0 * PI * phase) +
-                second.toDouble() * sin(4.0 * PI * phase) +
-                third.toDouble() * sin(6.0 * PI * phase) +
-                fourth.toDouble() * sin(8.0 * PI * phase)
-            (value / (1.0 + second + third + fourth)).toFloat()
-        }
+        "vocoder_custom" -> importedCarrier?.sampleAt(carrierFrame, sampleRate) ?: 0f
         else -> sin(2.0 * PI * phase).toFloat()
     }
 

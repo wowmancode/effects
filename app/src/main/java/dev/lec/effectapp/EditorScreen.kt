@@ -71,12 +71,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.effects.CarrierAudioStore
 import dev.lec.effectapp.effects.PreviewAudioProcessor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.TimelineSegment
 import dev.lec.effectapp.pipeline.ProjectCompositionFactory
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val PIXELS_PER_SECOND = 48f
 
@@ -181,6 +184,14 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     val previewClip = project.clips.getOrNull(currentClipIndex)
     LaunchedEffect(previewAudioProcessor, previewClip?.audioSegments) {
+        previewAudioProcessor.setSegments(previewClip?.audioSegments.orEmpty())
+    }
+    val previewCarrierUris = previewClip?.audioSegments.orEmpty()
+        .filter { it.effectId == "vocoder_custom" }
+        .mapNotNull { it.stringParams["carrier_uri"] }
+        .distinct()
+    LaunchedEffect(previewCarrierUris) {
+        previewCarrierUris.forEach { uri -> withContext(Dispatchers.IO) { CarrierAudioStore.load(context, uri) } }
         previewAudioProcessor.setSegments(previewClip?.audioSegments.orEmpty())
     }
     val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
