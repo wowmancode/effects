@@ -1,0 +1,12 @@
+package dev.lec.effectapp.effects
+
+import androidx.media3.common.Effect
+
+class PitchChangeEffect : LecEffect {
+    override val id = "pitch_change"
+    override val displayName = "Pitch / speed"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(EffectParam("speed", "Speed", 0.25f, 4f, 1f))
+
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
