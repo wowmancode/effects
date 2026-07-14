@@ -16,7 +16,7 @@ class ProjectJsonTest {
                     displayName = "video.mp4",
                     trimEndMs = 5_000,
                     effectSegments = listOf(
-                        TimelineSegment("segment", "hue_rotate", 500, 2_000, params = mapOf("degrees" to 90f)),
+                        TimelineSegment("segment", "hue_rotate", 0, 5_000, params = mapOf("degrees" to 90f)),
                     ),
                 ),
             ),
@@ -29,5 +29,11 @@ class ProjectJsonTest {
     fun segmentIsConstrainedToClip() {
         val segment = TimelineSegment("id", "effect", -10, 10_000)
         assertEquals(TimelineSegment("id", "effect", 0, 1_000), segment.constrainedTo(1_000))
+    }
+
+    @Test
+    fun visualEffectCanBeNormalizedToWholeClip() {
+        val segment = TimelineSegment("id", "effect", 250, 500)
+        assertEquals(TimelineSegment("id", "effect", 0, 4_000), segment.forWholeClip(4_000))
     }
 }

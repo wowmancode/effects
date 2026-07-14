@@ -167,7 +167,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         val position = player.currentPosition.coerceAtLeast(0)
         val resumePlayback = player.playWhenReady
         player.setVideoEffects(ProjectCompositionFactory.videoEffects(clip))
-        player.seekTo(itemIndex, position) // Redraw the current frame when editing while paused.
+        if (!player.isPlaying) player.seekTo(itemIndex, position) // Redraw only when paused.
         player.playWhenReady = resumePlayback
     }
 
@@ -207,7 +207,13 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 },
             )
             HorizontalDivider()
-            EditPanel(viewModel, project, selection, Modifier.weight(0.36f))
+            EditPanel(
+                viewModel = viewModel,
+                project = project,
+                selection = selection,
+                modifier = Modifier.weight(0.36f),
+                onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
+            )
         }
     }
 
@@ -293,6 +299,7 @@ private fun Lane(
                     selected = selection?.segmentId == segment.id,
                     row = index % 2,
                     category = category,
+                    resizable = category == EffectCategory.AUDIO,
                     onSegment = onSegment,
                     onResize = onResize,
                 )
@@ -311,6 +318,7 @@ private fun SegmentBlock(
     selected: Boolean,
     row: Int,
     category: EffectCategory,
+    resizable: Boolean,
     onSegment: (String, String, EffectCategory) -> Unit,
     onResize: (String, String, Long, Long) -> Unit,
 ) {
@@ -321,9 +329,9 @@ private fun SegmentBlock(
             .width(msToDp(segment.durationMs).coerceAtLeast(24.dp)).height(24.dp)
             .background(color).clickable { onSegment(clipId, segment.id, category) },
     ) {
-        ResizeHandle(Modifier.align(Alignment.CenterStart), segment, true, density, clipId, onResize)
+        if (resizable) ResizeHandle(Modifier.align(Alignment.CenterStart), segment, true, density, clipId, onResize)
         Text(EffectRegistry.byId(segment.effectId)?.displayName ?: segment.effectId, Modifier.padding(horizontal = 8.dp), maxLines = 1)
-        ResizeHandle(Modifier.align(Alignment.CenterEnd), segment, false, density, clipId, onResize)
+        if (resizable) ResizeHandle(Modifier.align(Alignment.CenterEnd), segment, false, density, clipId, onResize)
     }
 }
 

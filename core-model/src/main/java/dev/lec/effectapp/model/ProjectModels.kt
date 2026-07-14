@@ -49,4 +49,7 @@ data class TimelineSegment(
         val end = endMs.coerceIn(start, clipDurationMs)
         return copy(startMs = start, endMs = end)
     }
+
+    fun forWholeClip(clipDurationMs: Long): TimelineSegment =
+        copy(startMs = 0, endMs = clipDurationMs.coerceAtLeast(0))
 }

@@ -23,10 +23,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 
 @Composable
-fun EditPanel(viewModel: EditorViewModel, project: EditProject, selection: Selection?, modifier: Modifier = Modifier) {
+fun EditPanel(
+    viewModel: EditorViewModel,
+    project: EditProject,
+    selection: Selection?,
+    modifier: Modifier = Modifier,
+    onAddVisualEffect: (String) -> Unit,
+) {
     var activeCategory by remember(selection) { mutableStateOf(selection?.category ?: EffectCategory.EFFECTS) }
     Column(modifier.fillMaxSize().padding(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -37,33 +44,23 @@ fun EditPanel(viewModel: EditorViewModel, project: EditProject, selection: Selec
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
             val selectedClip = selection?.let { selected -> project.clips.find { it.id == selected.clipId } }
             when {
-                selection == null -> Text("Select a clip or a timeline segment to edit it.")
-                activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> {
-                    Text("Clip transform", style = MaterialTheme.typography.titleMedium)
-                    ParameterSlider("Scale", selectedClip.transform.scale, 0.25f..4f) {
-                        viewModel.updateTransform(selectedClip.id, selectedClip.transform.copy(scale = it))
-                    }
-                    ParameterSlider("Rotation", selectedClip.transform.rotationDegrees, -180f..180f) {
-                        viewModel.updateTransform(selectedClip.id, selectedClip.transform.copy(rotationDegrees = it))
-                    }
-                    ParameterSlider("Horizontal offset", selectedClip.transform.offsetX, -1f..1f) {
-                        viewModel.updateTransform(selectedClip.id, selectedClip.transform.copy(offsetX = it))
-                    }
-                    ParameterSlider("Vertical offset", selectedClip.transform.offsetY, -1f..1f) {
-                        viewModel.updateTransform(selectedClip.id, selectedClip.transform.copy(offsetY = it))
-                    }
+                selection == null -> Text("Select a clip to edit its effect stack.")
+                activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> TransformEditor(viewModel, selectedClip)
+                activeCategory == EffectCategory.EFFECTS && selectedClip != null && selection.segmentId == null -> {
+                    VisualEffectStack(viewModel, selectedClip, onAddVisualEffect)
                 }
                 selectedClip != null && selection.segmentId != null -> {
                     val segment = (selectedClip.effectSegments + selectedClip.audioSegments).find { it.id == selection.segmentId }
                     val effect = segment?.let { EffectRegistry.byId(it.effectId) }
                     if (segment == null || effect == null || effect.category != activeCategory) {
-                        Text("Select a ${activeCategory.name.lowercase()} segment in its timeline lane.")
+                        Text("Select an item from the ${activeCategory.name.lowercase()} stack.")
                     } else {
                         val stack = if (activeCategory == EffectCategory.AUDIO) selectedClip.audioSegments else selectedClip.effectSegments
                         val stackIndex = stack.indexOfFirst { it.id == segment.id }
                         Text(effect.displayName, style = MaterialTheme.typography.titleMedium)
                         Text("Clip: ${selectedClip.displayName}")
-                        Text("${formatTime(segment.startMs)} – ${formatTime(segment.endMs)}")
+                        if (activeCategory == EffectCategory.EFFECTS) Text("Applies to the entire clip")
+                        else Text("${formatTime(segment.startMs)} – ${formatTime(segment.endMs)}")
                         Text("Stack position ${stackIndex + 1} of ${stack.size} · later effects render on top")
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
@@ -84,13 +81,61 @@ fun EditPanel(viewModel: EditorViewModel, project: EditProject, selection: Selec
                                 }
                             }
                         }
-                        OutlinedButton(onClick = viewModel::removeSelectedSegment) { Text("Remove segment") }
-                        Text("This effect belongs only to this clip. Overlapping effects are stacked in the order above.")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (activeCategory == EffectCategory.EFFECTS) {
+                                OutlinedButton(
+                                    onClick = { onAddVisualEffect(selectedClip.id) },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("+ Stack effect") }
+                            }
+                            OutlinedButton(
+                                onClick = viewModel::removeSelectedSegment,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Remove") }
+                        }
                     }
+                }
+                activeCategory == EffectCategory.EFFECTS && selectedClip != null -> {
+                    VisualEffectStack(viewModel, selectedClip, onAddVisualEffect)
                 }
                 else -> Text("Select an item in the ${activeCategory.name.lowercase()} lane.")
             }
         }
+    }
+}
+
+@Composable
+private fun VisualEffectStack(viewModel: EditorViewModel, clip: Clip, onAddVisualEffect: (String) -> Unit) {
+    Text("${clip.displayName} · effect stack", style = MaterialTheme.typography.titleMedium)
+    Text("Every effect applies to the entire clip. Add and stack as many as your device can preview.")
+    OutlinedButton(onClick = { onAddVisualEffect(clip.id) }) { Text("+ Add effect") }
+    if (clip.effectSegments.isEmpty()) {
+        Text("No effects yet.")
+    } else {
+        clip.effectSegments.forEachIndexed { index, segment ->
+            val name = EffectRegistry.byId(segment.effectId)?.displayName ?: segment.effectId
+            OutlinedButton(
+                onClick = { viewModel.selectSegment(clip.id, segment.id, EffectCategory.EFFECTS) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("${index + 1}. $name") }
+        }
+    }
+}
+
+@Composable
+private fun TransformEditor(viewModel: EditorViewModel, clip: Clip) {
+    Text("Clip transform", style = MaterialTheme.typography.titleMedium)
+    ParameterSlider("Scale", clip.transform.scale, 0.25f..4f) {
+        viewModel.updateTransform(clip.id, clip.transform.copy(scale = it))
+    }
+    ParameterSlider("Rotation", clip.transform.rotationDegrees, -180f..180f) {
+        viewModel.updateTransform(clip.id, clip.transform.copy(rotationDegrees = it))
+    }
+    ParameterSlider("Horizontal offset", clip.transform.offsetX, -1f..1f) {
+        viewModel.updateTransform(clip.id, clip.transform.copy(offsetX = it))
+    }
+    ParameterSlider("Vertical offset", clip.transform.offsetY, -1f..1f) {
+        viewModel.updateTransform(clip.id, clip.transform.copy(offsetY = it))
     }
 }
 

@@ -56,18 +56,19 @@ class EditorViewModel : ViewModel() {
         _selection.value = null
     }
 
-    fun addSegment(clipId: String, effectId: String, startMs: Long) {
+    fun addSegment(clipId: String, effectId: String, startMs: Long = 0) {
         val effect = requireNotNull(EffectRegistry.byId(effectId))
         val clip = requireNotNull(_project.value.clips.find { it.id == clipId })
+        val isAudio = effect.category == EffectCategory.AUDIO
         val segment = TimelineSegment(
             id = UUID.randomUUID().toString(),
             effectId = effectId,
-            startMs = startMs.coerceIn(0, clip.durationMs),
-            endMs = (startMs + 2_000).coerceIn(0, clip.durationMs),
+            startMs = if (isAudio) startMs.coerceIn(0, clip.durationMs) else 0,
+            endMs = if (isAudio) (startMs + 2_000).coerceIn(0, clip.durationMs) else clip.durationMs,
             params = effect.params.associate { it.id to it.default },
         )
         updateClip(clipId) {
-            if (effect.category == EffectCategory.AUDIO) copy(audioSegments = audioSegments + segment)
+            if (isAudio) copy(audioSegments = audioSegments + segment)
             else copy(effectSegments = effectSegments + segment)
         }
         selectSegment(clipId, segment.id, effect.category)
@@ -76,7 +77,9 @@ class EditorViewModel : ViewModel() {
     fun updateSegment(clipId: String, segmentId: String, transform: (TimelineSegment) -> TimelineSegment) {
         updateClip(clipId) {
             copy(
-                effectSegments = effectSegments.map { if (it.id == segmentId) transform(it).constrainedTo(durationMs) else it },
+                effectSegments = effectSegments.map {
+                    if (it.id == segmentId) transform(it).copy(startMs = 0, endMs = durationMs) else it
+                },
                 audioSegments = audioSegments.map { if (it.id == segmentId) transform(it).constrainedTo(durationMs) else it },
             )
         }
@@ -103,7 +106,7 @@ class EditorViewModel : ViewModel() {
                 audioSegments = audioSegments.filterNot { it.id == segmentId },
             )
         }
-        _selection.value = null
+        _selection.value = Selection(selected.clipId, null, selected.category)
     }
 
     fun updateTransform(clipId: String, value: TransformSettings) = updateClip(clipId) { copy(transform = value) }
@@ -111,7 +114,12 @@ class EditorViewModel : ViewModel() {
     fun encode(): String = ProjectJson.encode(_project.value)
 
     fun load(json: String) {
-        _project.value = ProjectJson.decode(json)
+        val loaded = ProjectJson.decode(json)
+        _project.value = loaded.copy(
+            clips = loaded.clips.map { clip ->
+                clip.copy(effectSegments = clip.effectSegments.map { it.copy(startMs = 0, endMs = clip.durationMs) })
+            },
+        )
         _selection.value = null
     }
 

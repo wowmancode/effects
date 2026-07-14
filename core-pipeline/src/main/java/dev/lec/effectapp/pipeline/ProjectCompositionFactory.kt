@@ -8,9 +8,7 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.effect.GlEffect
 import androidx.media3.effect.MatrixTransformation
-import androidx.media3.effect.TimestampWrapper
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -40,9 +38,9 @@ object ProjectCompositionFactory {
                 }
             }
         }
+        // Visual effects are deliberately clip-wide. List order is stack order and is unbounded.
         clip.effectSegments.filter { it.enabled }.forEach { segment ->
-            val effect = EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.params)
-            if (effect is GlEffect) result += TimestampWrapper(effect, segment.startMs * 1_000, segment.endMs * 1_000)
+            EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.params)?.let(result::add)
         }
         return result
     }
