@@ -42,6 +42,9 @@ internal fun EditorWorkspace(
     onEmptyLane: (String, Long, EffectCategory) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
+    onSavePreset: (String, String) -> Unit,
+    onPlayerView: (PlayerView) -> Unit,
+    onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var landscapeTab by remember { mutableIntStateOf(0) }
@@ -54,6 +57,7 @@ internal fun EditorWorkspace(
                     project = project,
                     currentClipIndex = currentClipIndex,
                     onAddClip = onAddClip,
+                    onPlayerView = onPlayerView,
                     modifier = Modifier.weight(0.46f).fillMaxHeight(),
                 )
                 Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -76,18 +80,20 @@ internal fun EditorWorkspace(
                             project = project,
                             selection = selection,
                             modifier = Modifier.fillMaxWidth().weight(1f),
+                            currentClipId = project.clips.getOrNull(currentClipIndex)?.id,
+                            onSavePreset = onSavePreset,
                             onAddVisualEffect = onAddVisualEffect,
                             onAddAudioEffect = onAddAudioEffect,
                         )
                     } else {
                         EditorTimeline(
                             viewModel = viewModel,
-                            player = player,
                             project = project,
                             selection = selection,
                             playerPositionMs = playerPositionMs,
                             compact = false,
                             onEmptyLane = onEmptyLane,
+                            onSeek = onSeek,
                             modifier = Modifier.fillMaxWidth().weight(1f),
                         )
                     }
@@ -101,15 +107,16 @@ internal fun EditorWorkspace(
                     currentClipIndex = currentClipIndex,
                     onAddClip = onAddClip,
                     modifier = Modifier.fillMaxWidth().weight(0.35f),
+                    onPlayerView = onPlayerView,
                 )
                 EditorTimeline(
                     viewModel = viewModel,
-                    player = player,
                     project = project,
                     selection = selection,
                     playerPositionMs = playerPositionMs,
                     compact = false,
                     onEmptyLane = onEmptyLane,
+                    onSeek = onSeek,
                     modifier = Modifier.fillMaxWidth().height(210.dp),
                 )
                 HorizontalDivider()
@@ -119,6 +126,8 @@ internal fun EditorWorkspace(
                     selection = selection,
                     modifier = Modifier.fillMaxWidth().weight(0.65f),
                     onAddVisualEffect = onAddVisualEffect,
+                    currentClipId = project.clips.getOrNull(currentClipIndex)?.id,
+                    onSavePreset = onSavePreset,
                     onAddAudioEffect = onAddAudioEffect,
                 )
             }
@@ -129,12 +138,12 @@ internal fun EditorWorkspace(
 @Composable
 private fun EditorTimeline(
     viewModel: EditorViewModel,
-    player: ExoPlayer,
     project: EditProject,
     selection: Selection?,
     playerPositionMs: Long,
     compact: Boolean,
     onEmptyLane: (String, Long, EffectCategory) -> Unit,
+    onSeek: (Long) -> Unit,
     modifier: Modifier,
 ) {
     Timeline(
@@ -143,7 +152,7 @@ private fun EditorTimeline(
         selection = selection,
         modifier = modifier,
         compact = compact,
-        onSeek = { globalMs -> seekGlobal(player, project, globalMs) },
+        onSeek = onSeek,
         onClip = viewModel::selectClip,
         onSegment = viewModel::selectSegment,
         onEmptyLane = onEmptyLane,
@@ -159,11 +168,18 @@ private fun PreviewPane(
     project: EditProject,
     currentClipIndex: Int,
     onAddClip: () -> Unit,
+    onPlayerView: (PlayerView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
         AndroidView(
-            factory = { PlayerView(it).apply { this.player = player; useController = true } },
+            factory = {
+                PlayerView(it).apply {
+                    this.player = player
+                    useController = true
+                    onPlayerView(this)
+                }
+            },
             modifier = Modifier.fillMaxWidth().weight(1f),
             update = { it.player = player },
         )

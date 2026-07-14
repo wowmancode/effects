@@ -63,6 +63,9 @@ class WaveEffect : LecEffect {
         EffectParam("position_y", "Position Y", 0f, 1f, 0.5f),
         EffectParam("strength", "Strength", 0f, 1f, 0.35f),
         EffectParam("stretch", "Stretch", 0.25f, 4f, 1f),
+        EffectParam("speed", "Speed", -5f, 5f, 1f),
+        EffectParam("wave_x", "X wave", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("wave_y", "Y wave", 0f, 1f, 0f, ParamKind.BOOLEAN),
     )
 
     override fun toMediaEffect(values: Map<String, Float>): Effect = SpatialWarpEffect(
@@ -71,6 +74,32 @@ class WaveEffect : LecEffect {
         centerY = values["position_y"] ?: 0.5f,
         first = values["strength"] ?: 0.35f,
         second = values["stretch"] ?: 1f,
+        third = values["speed"] ?: 1f,
+        fourth = (if ((values["wave_x"] ?: 1f) >= 0.5f) 1f else 0f) +
+            (if ((values["wave_y"] ?: 0f) >= 0.5f) 2f else 0f),
+    )
+}
+
+@OptIn(UnstableApi::class)
+class RippleEffect : LecEffect {
+    override val id = "ripple"
+    override val displayName = "Ripple"
+    override val category = EffectCategory.EFFECTS
+    override val params = listOf(
+        EffectParam("position_x", "Position X", 0f, 1f, 0.5f),
+        EffectParam("position_y", "Position Y", 0f, 1f, 0.5f),
+        EffectParam("strength", "Strength", 0f, 1f, 0.35f),
+        EffectParam("stretch", "Spacing", 0.25f, 4f, 1f),
+        EffectParam("speed", "Speed", -5f, 5f, 1f),
+    )
+
+    override fun toMediaEffect(values: Map<String, Float>): Effect = SpatialWarpEffect(
+        mode = 3,
+        centerX = values["position_x"] ?: 0.5f,
+        centerY = values["position_y"] ?: 0.5f,
+        first = values["strength"] ?: 0.35f,
+        second = values["stretch"] ?: 1f,
+        third = values["speed"] ?: 1f,
     )
 }
 
@@ -102,9 +131,11 @@ private data class SpatialWarpEffect(
     val centerY: Float,
     val first: Float,
     val second: Float,
+    val third: Float = 0f,
+    val fourth: Float = 0f,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        SpatialWarpShaderProgram(useHdr, mode, centerX, centerY, first, second)
+        SpatialWarpShaderProgram(useHdr, mode, centerX, centerY, first, second, third, fourth)
 }
 
 @OptIn(UnstableApi::class)
@@ -115,6 +146,8 @@ private class SpatialWarpShaderProgram(
     private val centerY: Float,
     private val first: Float,
     private val second: Float,
+    private val third: Float,
+    private val fourth: Float,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val program = try {
         GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -134,7 +167,9 @@ private class SpatialWarpShaderProgram(
             program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             program.setIntUniform("uMode", mode)
             program.setFloatsUniform("uCenter", floatArrayOf(centerX, centerY))
-            program.setFloatsUniform("uParams", floatArrayOf(first, second, aspectRatio, 0f))
+            program.setFloatsUniform("uParams", floatArrayOf(first, second, third, fourth))
+            program.setFloatUniform("uAspect", aspectRatio)
+            program.setFloatUniform("uTime", presentationTimeUs / 1_000_000f)
             program.setBufferAttribute("aFramePosition", FRAME_VERTICES, 4)
             program.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, 4)
@@ -176,12 +211,14 @@ private class SpatialWarpShaderProgram(
             uniform int uMode;
             uniform vec2 uCenter;
             uniform vec4 uParams;
+            uniform float uAspect;
+            uniform float uTime;
             varying vec2 vTexSamplingCoord;
 
             void main() {
               vec2 uv = vTexSamplingCoord;
               vec2 delta = uv - uCenter;
-              vec2 corrected = vec2(delta.x * uParams.z, delta.y);
+              vec2 corrected = vec2(delta.x * uAspect, delta.y);
               float distanceFromCenter = length(corrected);
 
               if (uMode == 0) {
@@ -191,18 +228,32 @@ private class SpatialWarpShaderProgram(
                 float sine = sin(angle);
                 float cosine = cos(angle);
                 corrected = mat2(cosine, -sine, sine, cosine) * corrected;
-                uv = uCenter + vec2(corrected.x / uParams.z, corrected.y);
+                uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
               } else if (uMode == 1) {
                 float stretch = max(uParams.y, 0.01);
                 float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);
-                float phase = (uv.y - uCenter.y) * 12.56637 * stretch;
-                uv.x += sin(phase) * uParams.x * 0.12 * falloff;
-              } else {
+                float animation = uTime * uParams.z * 6.2831853;
+                if (uParams.w == 1.0 || uParams.w >= 3.0) {
+                  float xPhase = (uv.y - uCenter.y) * 12.56637 * stretch + animation;
+                  uv.x += sin(xPhase) * uParams.x * 0.12 * falloff;
+                }
+                if (uParams.w >= 2.0) {
+                  float yPhase = (uv.x - uCenter.x) * 12.56637 * stretch + animation;
+                  uv.y += sin(yPhase) * uParams.x * 0.12 * falloff;
+                }
+              } else if (uMode == 2) {
                 float radius = max(uParams.y, 0.001);
                 float influence = 1.0 - smoothstep(0.0, radius, distanceFromCenter);
                 float scale = max(0.05, 1.0 + uParams.x * influence);
                 corrected *= scale;
-                uv = uCenter + vec2(corrected.x / uParams.z, corrected.y);
+                uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
+              } else {
+                float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);
+                float phase = distanceFromCenter * 31.4159 * max(uParams.y, 0.01) -
+                    uTime * uParams.z * 6.2831853;
+                vec2 direction = distanceFromCenter > 0.0001 ? corrected / distanceFromCenter : vec2(0.0);
+                corrected += direction * sin(phase) * uParams.x * 0.06 * falloff;
+                uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
               }
 
               if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {

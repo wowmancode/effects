@@ -5,6 +5,7 @@ import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.EffectPreset
 import dev.lec.effectapp.model.ProjectJson
 import dev.lec.effectapp.model.TimelineSegment
 import dev.lec.effectapp.model.TransformSettings
@@ -110,6 +111,55 @@ class EditorViewModel : ViewModel() {
     }
 
     fun updateTransform(clipId: String, value: TransformSettings) = updateClip(clipId) { copy(transform = value) }
+
+    fun savePreset(name: String, clipId: String, thumbnailPath: String?) {
+        val clip = _project.value.clips.find { it.id == clipId } ?: return
+        val preset = EffectPreset(
+            id = UUID.randomUUID().toString(),
+            name = name.trim().ifEmpty { "Untitled preset" },
+            thumbnailPath = thumbnailPath,
+            effectSegments = clip.effectSegments.map { it.copy(id = "") },
+            audioSegments = clip.audioSegments.map { it.copy(id = "") },
+        )
+        _project.value = _project.value.copy(presets = _project.value.presets + preset)
+    }
+
+    fun applyPreset(presetId: String, clipId: String) {
+        val preset = _project.value.presets.find { it.id == presetId } ?: return
+        val clip = _project.value.clips.find { it.id == clipId } ?: return
+        val visual = preset.effectSegments.map {
+            it.copy(
+                id = UUID.randomUUID().toString(),
+                startMs = 0,
+                endMs = clip.durationMs,
+            )
+        }
+        val audio = preset.audioSegments.map {
+            it.copy(
+                id = UUID.randomUUID().toString(),
+                startMs = 0,
+                endMs = clip.durationMs,
+            )
+        }
+        updateClip(clipId) {
+            copy(
+                effectSegments = effectSegments + visual,
+                audioSegments = audioSegments + audio,
+            )
+        }
+        val selected = visual.lastOrNull() ?: audio.lastOrNull()
+        if (selected != null) {
+            _selection.value = Selection(
+                clipId = clipId,
+                segmentId = selected.id,
+                category = if (selected in visual) EffectCategory.EFFECTS else EffectCategory.AUDIO,
+            )
+        }
+    }
+
+    fun removePreset(id: String) {
+        _project.value = _project.value.copy(presets = _project.value.presets.filterNot { it.id == id })
+    }
 
     fun encode(): String = ProjectJson.encode(_project.value)
 

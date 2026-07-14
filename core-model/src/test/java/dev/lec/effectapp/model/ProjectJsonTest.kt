@@ -36,4 +36,18 @@ class ProjectJsonTest {
         val segment = TimelineSegment("id", "effect", 250, 500)
         assertEquals(TimelineSegment("id", "effect", 0, 4_000), segment.forWholeClip(4_000))
     }
+    @Test
+    fun roundTripPreservesPresets() {
+        val preset = EffectPreset(
+            id = "preset",
+            name = "My look",
+            thumbnailPath = "/files/preview.jpg",
+            effectSegments = listOf(TimelineSegment("", "rgb_to_bgr", 0, 2_000)),
+            audioSegments = listOf(TimelineSegment("", "reverse_audio", 0, 2_000)),
+        )
+        val project = EditProject(presets = listOf(preset))
+
+        assertEquals(project, ProjectJson.decode(ProjectJson.encode(project)))
+    }
+
 }

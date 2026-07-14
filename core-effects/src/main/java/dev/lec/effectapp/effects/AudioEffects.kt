@@ -31,3 +31,13 @@ class ChorusEffect : LecEffect {
     @OptIn(UnstableApi::class)
     override fun toMediaEffect(values: Map<String, Float>): Effect? = null
 }
+
+class ReverseAudioEffect : LecEffect {
+    override val id = "reverse_audio"
+    override val displayName = "Reverse audio"
+    override val category = EffectCategory.AUDIO
+    override val params = emptyList<EffectParam>()
+
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}

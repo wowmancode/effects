@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.effects.ParamKind
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 
@@ -33,19 +34,34 @@ fun EditPanel(
     project: EditProject,
     selection: Selection?,
     modifier: Modifier = Modifier,
+    currentClipId: String?,
+    onSavePreset: (String, String) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
 ) {
     var activeCategory by remember(selection) { mutableStateOf(selection?.category ?: EffectCategory.EFFECTS) }
+    var presetsActive by remember { mutableStateOf(false) }
     Column(modifier.fillMaxSize().padding(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CategoryButton("Effects", EffectCategory.EFFECTS, activeCategory) { activeCategory = it }
-            CategoryButton("Transform", EffectCategory.TRANSFORM, activeCategory) { activeCategory = it }
-            CategoryButton("Audio", EffectCategory.AUDIO, activeCategory) { activeCategory = it }
+            CategoryButton("Effects", EffectCategory.EFFECTS, activeCategory) { activeCategory = it; presetsActive = false }
+            CategoryButton("Transform", EffectCategory.TRANSFORM, activeCategory) { activeCategory = it; presetsActive = false }
+            CategoryButton("Audio", EffectCategory.AUDIO, activeCategory) { activeCategory = it; presetsActive = false }
+            if (presetsActive) {
+                Button(onClick = { presetsActive = true }, modifier = Modifier.weight(1f)) { Text("Presets") }
+            } else {
+                OutlinedButton(onClick = { presetsActive = true }, modifier = Modifier.weight(1f)) { Text("Presets") }
+            }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
             val selectedClip = selection?.let { selected -> project.clips.find { it.id == selected.clipId } }
             when {
+                presetsActive -> PresetPanel(
+                    project = project,
+                    targetClipId = selection?.clipId ?: currentClipId,
+                    onSave = onSavePreset,
+                    onApply = viewModel::applyPreset,
+                    onRemove = viewModel::removePreset,
+                )
                 selection == null -> Text("Select a clip to edit its effect stack.")
                 activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> TransformEditor(viewModel, selectedClip)
                 activeCategory == EffectCategory.EFFECTS && selectedClip != null && selection.segmentId == null -> {
@@ -97,13 +113,22 @@ fun EditPanel(
                                     }
                                 }
                                 effect.params.forEach { parameter ->
-                                    ParameterSlider(
-                                        parameter.displayName,
-                                        segment.params[parameter.id] ?: parameter.default,
-                                        parameter.min..parameter.max,
-                                    ) { value ->
-                                        viewModel.updateSegment(selectedClip.id, segment.id) {
-                                            it.copy(params = it.params + (parameter.id to value))
+                                    val value = segment.params[parameter.id] ?: parameter.default
+                                    if (parameter.kind == ParamKind.BOOLEAN) {
+                                        BooleanParameterButton(parameter.displayName, value >= 0.5f) { enabled ->
+                                            viewModel.updateSegment(selectedClip.id, segment.id) {
+                                                it.copy(params = it.params + (parameter.id to if (enabled) 1f else 0f))
+                                            }
+                                        }
+                                    } else {
+                                        ParameterSlider(
+                                            parameter.displayName,
+                                            value,
+                                            parameter.min..parameter.max,
+                                        ) { updated ->
+                                            viewModel.updateSegment(selectedClip.id, segment.id) {
+                                                it.copy(params = it.params + (parameter.id to updated))
+                                            }
                                         }
                                     }
                                 }
@@ -192,5 +217,14 @@ private fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPo
         onValueChange = { sliderValue = it },
         onValueChangeFinished = { onChange(sliderValue) },
         valueRange = range,
+
+@Composable
+private fun BooleanParameterButton(label: String, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    if (enabled) {
+        Button(onClick = { onChange(false) }, modifier = Modifier.fillMaxWidth()) { Text("✓ $label") }
+    } else {
+        OutlinedButton(onClick = { onChange(true) }, modifier = Modifier.fillMaxWidth()) { Text(label) }
+    }
+}
     )
 }

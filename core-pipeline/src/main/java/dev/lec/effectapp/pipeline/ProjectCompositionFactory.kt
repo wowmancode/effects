@@ -16,12 +16,39 @@ import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.audioProcessorFor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import kotlin.math.ceil
+import kotlin.math.max
 
 @OptIn(UnstableApi::class)
 object ProjectCompositionFactory {
+    private const val MIN_REVERSE_SLICE_MS = 80L
+    private const val MAX_REVERSE_SLICES = 600L
+
     fun create(project: EditProject): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
-        return Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map(::editedItem)))).build()
+        val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
+        if (!hasReverse) {
+            return Composition.Builder(
+                listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map(::editedItem))),
+            ).build()
+        }
+
+        val videoItems = project.clips.flatMap { clip ->
+            sourceSlices(clip, clip.reversesVideo()).map { slice ->
+                editedItem(clip, slice, includeVideo = true, includeAudio = false)
+            }
+        }
+        val audioItems = project.clips.flatMap { clip ->
+            sourceSlices(clip, clip.reversesAudio()).map { slice ->
+                editedItem(clip, slice, includeVideo = false, includeAudio = true)
+            }
+        }
+        return Composition.Builder(
+            listOf(
+                EditedMediaItemSequence.withVideoFrom(videoItems),
+                EditedMediaItemSequence.withAudioFrom(audioItems),
+            ),
+        ).build()
     }
 
     fun videoEffects(clip: Clip): List<Effect> {
@@ -48,19 +75,63 @@ object ProjectCompositionFactory {
         addAll(videoEffects(clip))
     }
 
-    private fun editedItem(clip: Clip): EditedMediaItem {
+    private fun editedItem(clip: Clip): EditedMediaItem =
+        editedItem(
+            clip = clip,
+            slice = SourceSlice(0, clip.durationMs),
+            includeVideo = true,
+            includeAudio = true,
+        )
+
+    private fun editedItem(
+        clip: Clip,
+        slice: SourceSlice,
+        includeVideo: Boolean,
+        includeAudio: Boolean,
+    ): EditedMediaItem {
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(clip.sourceUri))
             .setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(clip.trimStartMs)
-                    .setEndPositionMs(clip.trimEndMs)
+                    .setStartPositionMs(clip.trimStartMs + slice.startMs)
+                    .setEndPositionMs(clip.trimStartMs + slice.endMs)
                     .build(),
             )
             .build()
-        val audioProcessors = clip.audioSegments.filter { it.enabled }.mapNotNull(::audioProcessorFor)
+        val audioProcessors = if (includeAudio) {
+            clip.audioSegments
+                .filter { it.enabled && it.effectId != "reverse_audio" }
+                .mapNotNull(::audioProcessorFor)
+        } else {
+            emptyList()
+        }
+        val effects = Effects(audioProcessors, if (includeVideo) videoEffects(clip) else emptyList())
         return EditedMediaItem.Builder(mediaItem)
-            .setEffects(Effects(audioProcessors, videoEffects(clip)))
+            .setRemoveAudio(!includeAudio)
+            .setRemoveVideo(!includeVideo)
+            .setEffects(effects)
             .build()
     }
+
+    private fun sourceSlices(clip: Clip, reversed: Boolean): List<SourceSlice> {
+        if (!reversed) return listOf(SourceSlice(0, clip.durationMs))
+        val sliceMs = max(MIN_REVERSE_SLICE_MS, ceil(clip.durationMs / MAX_REVERSE_SLICES.toDouble()).toLong())
+        val slices = buildList {
+            var start = 0L
+            while (start < clip.durationMs) {
+                val end = (start + sliceMs).coerceAtMost(clip.durationMs)
+                add(SourceSlice(start, end))
+                start = end
+            }
+        }
+        return slices.asReversed()
+    }
+
+    private fun Clip.reversesVideo(): Boolean =
+        effectSegments.any { it.enabled && it.effectId == "reverse_video" }
+
+    private fun Clip.reversesAudio(): Boolean =
+        audioSegments.any { it.enabled && it.effectId == "reverse_audio" }
+
+    private data class SourceSlice(val startMs: Long, val endMs: Long)
 }

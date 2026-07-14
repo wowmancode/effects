@@ -22,7 +22,19 @@ class EffectRegistryTest {
         assertEquals(setOf("degrees", "radius", "position_x", "position_y"), swirl.params.map { it.id }.toSet())
 
         val wave = requireNotNull(EffectRegistry.byId("wave"))
-        assertEquals(setOf("position_x", "position_y", "strength", "stretch"), wave.params.map { it.id }.toSet())
+        assertEquals(
+            setOf("position_x", "position_y", "strength", "stretch", "speed", "wave_x", "wave_y"),
+            wave.params.map { it.id }.toSet(),
+        )
+
+        val ripple = requireNotNull(EffectRegistry.byId("ripple"))
+        assertEquals(setOf("position_x", "position_y", "strength", "stretch", "speed"), ripple.params.map { it.id }.toSet())
+
+        val invert = requireNotNull(EffectRegistry.byId("color_invert"))
+        assertEquals(setOf("invert_red", "invert_green", "invert_blue"), invert.params.map { it.id }.toSet())
+        assertNotNull(EffectRegistry.byId("rgb_to_bgr"))
+        assertNotNull(EffectRegistry.byId("reverse_video"))
+        assertNotNull(EffectRegistry.byId("reverse_audio"))
 
         val pinch = requireNotNull(EffectRegistry.byId("pinch_bulge"))
         assertTrue(pinch.params.any { it.id == "radius" })

@@ -7,9 +7,19 @@ data class EditProject(
     val name: String = "Untitled edit",
     val createdAt: Long = System.currentTimeMillis(),
     val clips: List<Clip> = emptyList(),
+    val presets: List<EffectPreset> = emptyList(),
 ) {
     val durationMs: Long get() = clips.sumOf(Clip::durationMs)
 }
+
+@Serializable
+data class EffectPreset(
+    val id: String,
+    val name: String,
+    val thumbnailPath: String? = null,
+    val effectSegments: List<TimelineSegment> = emptyList(),
+    val audioSegments: List<TimelineSegment> = emptyList(),
+)
 
 @Serializable
 data class Clip(

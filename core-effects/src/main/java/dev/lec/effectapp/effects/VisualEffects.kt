@@ -10,7 +10,6 @@ import androidx.media3.effect.GaussianBlurWithFrameOverlaid
 import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.RgbAdjustment
-import androidx.media3.effect.RgbFilter
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -29,8 +28,12 @@ class ColorInvertEffect : LecEffect {
     override val id = "color_invert"
     override val displayName = "Color invert"
     override val category = EffectCategory.EFFECTS
-    override val params = emptyList<EffectParam>()
-    override fun toMediaEffect(values: Map<String, Float>): Effect = RgbFilter.createInvertedFilter()
+    override val params = listOf(
+        EffectParam("invert_red", "Invert red", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("invert_green", "Invert green", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("invert_blue", "Invert blue", 0f, 1f, 1f, ParamKind.BOOLEAN),
+    )
+    override fun toMediaEffect(values: Map<String, Float>): Effect = ChannelColorEffect.invert(values)
 }
 
 @OptIn(UnstableApi::class)

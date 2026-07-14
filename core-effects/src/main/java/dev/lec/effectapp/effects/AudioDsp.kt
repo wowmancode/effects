@@ -18,6 +18,7 @@ import kotlin.math.tanh
 private val DSP_EFFECT_IDS = setOf(
     "audio_echo",
     "chorus",
+    "reverse_audio",
     "pitch_change",
     "split_pitch",
     "vocoder_square",
@@ -44,6 +45,7 @@ internal fun createAudioDspState(
 ): AudioDspState? = when (segment.effectId) {
     "audio_echo" -> DelayDspState(segment, sampleRate, channels, chorus = false)
     "chorus" -> DelayDspState(segment, sampleRate, channels, chorus = true)
+    "reverse_audio" -> GrainReverseDspState(segment, sampleRate, channels)
     "pitch_change" -> PitchDspState.single(segment, sampleRate, channels)
     "split_pitch" -> PitchDspState.split(segment, sampleRate, channels)
     "vocoder_square", "vocoder_saw", "vocoder_sine", "vocoder_triangle", "vocoder_custom" ->
@@ -257,6 +259,35 @@ private class VocoderDspState(
 
     private fun onePoleAlpha(frequency: Float): Float =
         (1.0 - exp(-2.0 * PI * frequency / sampleRate)).toFloat()
+}
+
+private class GrainReverseDspState(
+    private val segment: TimelineSegment,
+    sampleRate: Int,
+    private val channels: Int,
+) : AudioDspState {
+    private val blockFrames = (sampleRate * 0.08f).toInt().coerceAtLeast(64)
+    private var current = Array(channels) { IntArray(blockFrames) }
+    private var previous = Array(channels) { IntArray(blockFrames) }
+    private var frame = 0
+    private var primed = false
+
+    override fun process(input: Int, timeMs: Long, channel: Int): Int {
+        val active = timeMs in segment.startMs until segment.endMs
+        current[channel][frame] = input
+        val rendered = if (active && primed) previous[channel][blockFrames - 1 - frame] else if (active) 0 else input
+        if (channel == channels - 1) {
+            frame++
+            if (frame == blockFrames) {
+                val swap = previous
+                previous = current
+                current = swap
+                frame = 0
+                primed = true
+            }
+        }
+        return rendered
+    }
 }
 
 private fun hann(phase: Float): Float = (0.5 - 0.5 * cos(2.0 * PI * phase)).toFloat()

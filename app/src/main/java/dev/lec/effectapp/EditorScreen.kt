@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +78,8 @@ import dev.lec.effectapp.pipeline.ProjectCompositionFactory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlin.coroutines.resume
 
 private const val PIXELS_PER_SECOND = 48f
 
@@ -90,6 +93,10 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     var playerPositionMs by remember { mutableLongStateOf(0) }
     var currentClipIndex by remember { mutableIntStateOf(0) }
     var pendingSegment by remember { mutableStateOf<PendingSegment?>(null) }
+
+    val scope = rememberCoroutineScope()
+    var previewEntries by remember { mutableStateOf<List<PreviewEntry>>(emptyList()) }
+    var playerView by remember { mutableStateOf<androidx.media3.ui.PlayerView?>(null) }
 
     val addClip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -152,30 +159,36 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             player.release()
         }
     }
-    LaunchedEffect(project.clips.map { it.sourceUri to (it.trimStartMs to it.trimEndMs) }) {
-        val previousIndex = player.currentMediaItemIndex.coerceAtLeast(0)
-        val previousPosition = player.currentPosition.coerceAtLeast(0)
+    val playlistKey = project.clips.map { clip ->
+        listOf(
+            clip.sourceUri,
+            clip.trimStartMs,
+            clip.trimEndMs,
+            clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" },
+        )
+    }
+    LaunchedEffect(playlistKey) {
+        val previousGlobalPosition = playerPositionMs
         val resumePlayback = player.playWhenReady
-        val items = project.clips.map { clip ->
-            MediaItem.Builder().setUri(clip.sourceUri).setClippingConfiguration(
-                MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(clip.trimStartMs)
-                    .setEndPositionMs(clip.trimEndMs)
-                    .build(),
-            ).build()
-        }
-        if (items.isEmpty()) {
+        val entries = buildPreviewEntries(project)
+        previewEntries = entries
+        if (entries.isEmpty()) {
             player.clearMediaItems()
         } else {
-            player.setMediaItems(items, previousIndex.coerceIn(items.indices), previousPosition)
+            player.setMediaItems(entries.map { it.mediaItem })
+            seekPreview(player, project, entries, previousGlobalPosition)
             player.prepare()
             player.playWhenReady = resumePlayback
         }
     }
-    LaunchedEffect(player, project.clips.map { it.id to it.durationMs }) {
+    LaunchedEffect(player, previewEntries, project.clips.map { it.id to it.durationMs }) {
         while (true) {
-            currentClipIndex = player.currentMediaItemIndex.coerceAtLeast(0)
-            playerPositionMs = project.clips.take(currentClipIndex).sumOf { it.durationMs } + player.currentPosition
+            val entry = previewEntries.getOrNull(player.currentMediaItemIndex.coerceAtLeast(0))
+            if (entry != null) {
+                currentClipIndex = entry.clipIndex
+                playerPositionMs = project.clips.take(entry.clipIndex).sumOf { it.durationMs } +
+                    entry.outputStartMs + player.currentPosition.coerceIn(0, entry.durationMs)
+            }
             delay(200)
         }
     }
@@ -221,9 +234,17 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             playerPositionMs = playerPositionMs,
             onAddClip = { addClip.launch(arrayOf("video/*")) },
             onEmptyLane = { clipId, startMs, category -> pendingSegment = PendingSegment(clipId, startMs, category) },
+            onSeek = { seekPreview(player, project, previewEntries, it) },
             onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
             onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
             modifier = Modifier.fillMaxSize().padding(padding),
+            onSavePreset = { name, clipId ->
+                scope.launch {
+                    val thumbnail = playerView?.let { capturePresetThumbnail(context, it) }
+                    viewModel.savePreset(name, clipId, thumbnail)
+                }
+            },
+            onPlayerView = { playerView = it },
         )
     }
 
@@ -434,6 +455,68 @@ private fun EffectPicker(category: EffectCategory, onDismiss: () -> Unit, onPick
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+private data class PreviewEntry(
+    val mediaItem: MediaItem,
+    val clipIndex: Int,
+    val outputStartMs: Long,
+    val durationMs: Long,
+)
+
+private fun buildPreviewEntries(project: EditProject): List<PreviewEntry> = buildList {
+    project.clips.forEachIndexed { clipIndex, clip ->
+        val reversed = clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" }
+        val sliceMs = maxOf(100L, (clip.durationMs + 299L) / 300L)
+        val sourceSlices = if (reversed) {
+            buildList {
+                var start = 0L
+                while (start < clip.durationMs) {
+                    val end = (start + sliceMs).coerceAtMost(clip.durationMs)
+                    add(start until end)
+                    start = end
+                }
+            }.asReversed()
+        } else {
+            listOf(0L until clip.durationMs)
+        }
+        var outputStart = 0L
+        sourceSlices.forEach { slice ->
+            val duration = slice.last - slice.first + 1
+            val item = MediaItem.Builder()
+                .setUri(clip.sourceUri)
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(clip.trimStartMs + slice.first)
+                        .setEndPositionMs(clip.trimStartMs + slice.last + 1)
+                        .build(),
+                )
+                .build()
+            add(PreviewEntry(item, clipIndex, outputStart, duration))
+            outputStart += duration
+        }
+    }
+}
+
+private fun seekPreview(
+    player: ExoPlayer,
+    project: EditProject,
+    entries: List<PreviewEntry>,
+    globalMs: Long,
+) {
+    var clipStart = 0L
+    val clipIndex = project.clips.indexOfFirst { clip ->
+        val found = globalMs < clipStart + clip.durationMs
+        if (!found) clipStart += clip.durationMs
+        found
+    }.let { if (it == -1) project.clips.lastIndex else it }
+    if (clipIndex < 0) return
+    val clip = project.clips[clipIndex]
+    val localMs = (globalMs - clipStart).coerceIn(0, clip.durationMs)
+    val indexedEntry = entries.withIndex().firstOrNull { (_, entry) ->
+        entry.clipIndex == clipIndex && localMs < entry.outputStartMs + entry.durationMs
+    } ?: entries.withIndex().lastOrNull { it.value.clipIndex == clipIndex } ?: return
+    player.seekTo(indexedEntry.index, (localMs - indexedEntry.value.outputStartMs).coerceAtLeast(0))
+}
+
 
 private data class PendingSegment(val clipId: String, val startMs: Long, val category: EffectCategory)
 
@@ -448,4 +531,42 @@ private fun editorMetadata(context: Context, uri: Uri): Pair<String, Long> {
         }
     }.getOrNull() ?: 1L
     return name to duration
+}
+
+private suspend fun capturePresetThumbnail(context: Context, playerView: androidx.media3.ui.PlayerView): String? {
+    val surface = playerView.videoSurfaceView ?: return null
+    if (surface.width <= 0 || surface.height <= 0) return null
+    val bitmap = when (surface) {
+        is android.view.TextureView -> surface.bitmap
+        is android.view.SurfaceView -> {
+            val target = android.graphics.Bitmap.createBitmap(
+                surface.width,
+                surface.height,
+                android.graphics.Bitmap.Config.ARGB_8888,
+            )
+            kotlin.coroutines.suspendCoroutine { continuation ->
+                android.view.PixelCopy.request(
+                    surface,
+                    target,
+                    { result ->
+                        continuation.resume(
+                            if (result == android.view.PixelCopy.SUCCESS) target else null,
+                        )
+                    },
+                    android.os.Handler(android.os.Looper.getMainLooper()),
+                )
+            }
+        }
+        else -> null
+    } ?: return null
+
+    return withContext(Dispatchers.IO) {
+        val directory = java.io.File(context.filesDir, "preset-thumbnails").apply { mkdirs() }
+        val file = java.io.File(directory, "${java.util.UUID.randomUUID()}.jpg")
+        java.io.FileOutputStream(file).use { output ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 88, output)
+        }
+        bitmap.recycle()
+        file.absolutePath
+    }
 }
