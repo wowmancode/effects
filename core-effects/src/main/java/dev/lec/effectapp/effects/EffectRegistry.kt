@@ -4,6 +4,8 @@ object EffectRegistry {
     private val registered = listOf<LecEffect>(
         HueRotateEffect(),
         HslAdjustEffect(),
+        SharpenEffect(),
+        GradientMapEffect(),
         GlowEffect(),
         GodRaysEffect(),
         SwirlEffect(),

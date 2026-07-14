@@ -75,7 +75,11 @@ fun EditPanel(
                                 modifier = Modifier.weight(1f),
                             ) { Text("Move later") }
                         }
-                        effect.params.forEach { parameter ->
+                        if (effect.id == "gradient_map") {
+                            GradientMapEditor(segment.params) { params ->
+                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            }
+                        } else effect.params.forEach { parameter ->
                             ParameterSlider(parameter.displayName, segment.params[parameter.id] ?: parameter.default, parameter.min..parameter.max) { value ->
                                 viewModel.updateSegment(selectedClip.id, segment.id) {
                                     it.copy(params = it.params + (parameter.id to value))
