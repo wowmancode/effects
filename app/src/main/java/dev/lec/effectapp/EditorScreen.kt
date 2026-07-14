@@ -98,7 +98,10 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.load(reader.readText()) } }
     }
 
-    val player = remember { ExoPlayer.Builder(context.applicationContext).build() }
+    val player = remember {
+        // Media3 requires the effect pipeline to be enabled before the first prepare().
+        ExoPlayer.Builder(context.applicationContext).build().apply { setVideoEffects(emptyList()) }
+    }
     DisposableEffect(player, lifecycleOwner) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
@@ -160,8 +163,11 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         val clip = previewClip ?: return@LaunchedEffect
         // Avoid rebuilding the GL chain dozens of times per second while a slider is dragged.
         delay(160)
+        val itemIndex = player.currentMediaItemIndex.coerceAtLeast(0)
+        val position = player.currentPosition.coerceAtLeast(0)
         val resumePlayback = player.playWhenReady
         player.setVideoEffects(ProjectCompositionFactory.videoEffects(clip))
+        player.seekTo(itemIndex, position) // Redraw the current frame when editing while paused.
         player.playWhenReady = resumePlayback
     }
 
