@@ -217,6 +217,8 @@ private fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPo
         onValueChange = { sliderValue = it },
         onValueChangeFinished = { onChange(sliderValue) },
         valueRange = range,
+    )
+}
 
 @Composable
 private fun BooleanParameterButton(label: String, enabled: Boolean, onChange: (Boolean) -> Unit) {
@@ -225,6 +227,4 @@ private fun BooleanParameterButton(label: String, enabled: Boolean, onChange: (B
     } else {
         OutlinedButton(onClick = { onChange(true) }, modifier = Modifier.fillMaxWidth()) { Text(label) }
     }
-}
-    )
 }
