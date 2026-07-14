@@ -43,15 +43,15 @@ internal fun EditorWorkspace(
         val landscape = maxWidth > maxHeight
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
-                PreviewPane(
-                    player = player,
-                    project = project,
-                    currentClipIndex = currentClipIndex,
-                    onAddClip = onAddClip,
-                    modifier = Modifier.weight(0.46f).fillMaxHeight(),
-                )
-                Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                Column(Modifier.weight(0.54f).fillMaxHeight()) {
+                Column(Modifier.weight(0.46f).fillMaxHeight()) {
+                    PreviewPane(
+                        player = player,
+                        project = project,
+                        currentClipIndex = currentClipIndex,
+                        onAddClip = onAddClip,
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                    )
+                    HorizontalDivider()
                     EditorTimeline(
                         viewModel = viewModel,
                         player = player,
@@ -62,16 +62,16 @@ internal fun EditorWorkspace(
                         onEmptyLane = onEmptyLane,
                         modifier = Modifier.fillMaxWidth().height(180.dp),
                     )
-                    HorizontalDivider()
-                    EditPanel(
-                        viewModel = viewModel,
-                        project = project,
-                        selection = selection,
-                        modifier = Modifier.fillMaxWidth().weight(1f),
-                        onAddVisualEffect = onAddVisualEffect,
-                        onAddAudioEffect = onAddAudioEffect,
-                    )
                 }
+                Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                EditPanel(
+                    viewModel = viewModel,
+                    project = project,
+                    selection = selection,
+                    modifier = Modifier.weight(0.54f).fillMaxHeight(),
+                    onAddVisualEffect = onAddVisualEffect,
+                    onAddAudioEffect = onAddAudioEffect,
+                )
             }
         } else {
             Column(Modifier.fillMaxSize()) {
@@ -80,7 +80,7 @@ internal fun EditorWorkspace(
                     project = project,
                     currentClipIndex = currentClipIndex,
                     onAddClip = onAddClip,
-                    modifier = Modifier.fillMaxWidth().weight(0.40f),
+                    modifier = Modifier.fillMaxWidth().weight(0.30f),
                 )
                 EditorTimeline(
                     viewModel = viewModel,
@@ -97,7 +97,7 @@ internal fun EditorWorkspace(
                     viewModel = viewModel,
                     project = project,
                     selection = selection,
-                    modifier = Modifier.fillMaxWidth().weight(0.60f),
+                    modifier = Modifier.fillMaxWidth().weight(0.70f),
                     onAddVisualEffect = onAddVisualEffect,
                     onAddAudioEffect = onAddAudioEffect,
                 )
