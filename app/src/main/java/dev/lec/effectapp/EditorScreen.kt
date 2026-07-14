@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -56,7 +55,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -65,7 +63,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
-import androidx.media3.ui.PlayerView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -215,38 +212,19 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            AndroidView(
-                factory = { PlayerView(it).apply { this.player = player; useController = true } },
-                modifier = Modifier.fillMaxWidth().weight(0.42f),
-                update = { it.player = player },
-            )
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Clip ${if (project.clips.isEmpty()) 0 else currentClipIndex + 1}/${project.clips.size}", Modifier.weight(1f))
-                OutlinedButton(onClick = { addClip.launch(arrayOf("video/*")) }) { Text("+ Clip") }
-            }
-            Timeline(
-                project = project,
-                playheadMs = playerPositionMs,
-                selection = selection,
-                onSeek = { globalMs -> seekGlobal(player, project, globalMs) },
-                onClip = viewModel::selectClip,
-                onSegment = viewModel::selectSegment,
-                onEmptyLane = { clipId, startMs, category -> pendingSegment = PendingSegment(clipId, startMs, category) },
-                onResize = { clipId, segmentId, start, end ->
-                    viewModel.updateSegment(clipId, segmentId) { it.copy(startMs = start, endMs = end) }
-                },
-            )
-            HorizontalDivider()
-            EditPanel(
-                viewModel = viewModel,
-                project = project,
-                selection = selection,
-                modifier = Modifier.weight(0.36f),
-                onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
-                onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
-            )
-        }
+        EditorWorkspace(
+            viewModel = viewModel,
+            player = player,
+            project = project,
+            selection = selection,
+            currentClipIndex = currentClipIndex,
+            playerPositionMs = playerPositionMs,
+            onAddClip = { addClip.launch(arrayOf("video/*")) },
+            onEmptyLane = { clipId, startMs, category -> pendingSegment = PendingSegment(clipId, startMs, category) },
+            onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
+            onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
+            modifier = Modifier.fillMaxSize().padding(padding),
+        )
     }
 
     pendingSegment?.let { pending ->
@@ -281,10 +259,12 @@ private fun rebuildPreviewPipeline(player: ExoPlayer, effects: List<androidx.med
 }
 
 @Composable
-private fun Timeline(
+internal fun Timeline(
     project: EditProject,
     playheadMs: Long,
     selection: Selection?,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
     onSeek: (Long) -> Unit,
     onClip: (String) -> Unit,
     onSegment: (String, String, EffectCategory) -> Unit,
@@ -293,9 +273,11 @@ private fun Timeline(
 ) {
     val totalWidth = ((project.durationMs / 1_000f) * PIXELS_PER_SECOND).coerceAtLeast(360f).dp
     val scroll = rememberScrollState()
-    Column(Modifier.fillMaxWidth().height(210.dp).horizontalScroll(scroll)) {
+    val videoTrackHeight = if (compact) 32.dp else 46.dp
+    val clipHeight = if (compact) 28.dp else 42.dp
+    Column(modifier.horizontalScroll(scroll)) {
         Text("Video", Modifier.padding(start = 4.dp))
-        Box(Modifier.requiredWidth(totalWidth).height(46.dp).pointerInput(project.durationMs) {
+        Box(Modifier.requiredWidth(totalWidth).height(videoTrackHeight).pointerInput(project.durationMs) {
             detectTapGestures { offset -> onSeek((offset.x / density * 1_000 / PIXELS_PER_SECOND).toLong()) }
         }) {
             var startMs = 0L
@@ -303,7 +285,7 @@ private fun Timeline(
                 val startDp = msToDp(startMs)
                 val widthDp = msToDp(clip.durationMs).coerceAtLeast(2.dp)
                 Box(
-                    Modifier.offset(x = startDp).width(widthDp).height(42.dp)
+                    Modifier.offset(x = startDp).width(widthDp).height(clipHeight)
                         .background(if (index % 2 == 0) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.tertiaryContainer)
                         .clickable { onClip(clip.id) }.padding(4.dp),
                 ) { Text(clip.displayName, maxLines = 1) }
@@ -311,8 +293,8 @@ private fun Timeline(
             }
             Playhead(playheadMs)
         }
-        Lane("Effects", project, EffectCategory.EFFECTS, selection, onSegment, onEmptyLane, onResize)
-        Lane("Audio", project, EffectCategory.AUDIO, selection, onSegment, onEmptyLane, onResize)
+        Lane("Effects", project, EffectCategory.EFFECTS, selection, compact, onSegment, onEmptyLane, onResize)
+        Lane("Audio", project, EffectCategory.AUDIO, selection, compact, onSegment, onEmptyLane, onResize)
     }
 }
 
@@ -322,6 +304,7 @@ private fun Lane(
     project: EditProject,
     category: EffectCategory,
     selection: Selection?,
+    compact: Boolean,
     onSegment: (String, String, EffectCategory) -> Unit,
     onEmpty: (String, Long, EffectCategory) -> Unit,
     onResize: (String, String, Long, Long) -> Unit,
@@ -329,7 +312,7 @@ private fun Lane(
     Text(title, Modifier.padding(start = 4.dp))
     val totalWidth = ((project.durationMs / 1_000f) * PIXELS_PER_SECOND).coerceAtLeast(360f).dp
     Box(
-        Modifier.requiredWidth(totalWidth).height(58.dp).background(MaterialTheme.colorScheme.surfaceVariant)
+        Modifier.requiredWidth(totalWidth).height(if (compact) 44.dp else 58.dp).background(MaterialTheme.colorScheme.surfaceVariant)
             .pointerInput(project.clips, category) {
                 detectTapGestures { point ->
                     val global = (point.x / density * 1_000 / PIXELS_PER_SECOND).toLong()
@@ -353,6 +336,7 @@ private fun Lane(
                     selected = selection?.segmentId == segment.id,
                     row = index % 2,
                     category = category,
+                    compact = compact,
                     resizable = false,
                     onSegment = onSegment,
                     onResize = onResize,
@@ -372,6 +356,7 @@ private fun SegmentBlock(
     selected: Boolean,
     row: Int,
     category: EffectCategory,
+    compact: Boolean,
     resizable: Boolean,
     onSegment: (String, String, EffectCategory) -> Unit,
     onResize: (String, String, Long, Long) -> Unit,
@@ -379,8 +364,8 @@ private fun SegmentBlock(
     val density = LocalDensity.current
     val color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primaryContainer
     Box(
-        Modifier.offset(x = msToDp(globalStartMs), y = (row * 25).dp)
-            .width(msToDp(segment.durationMs).coerceAtLeast(24.dp)).height(24.dp)
+        Modifier.offset(x = msToDp(globalStartMs), y = (row * (if (compact) 20 else 25)).dp)
+            .width(msToDp(segment.durationMs).coerceAtLeast(24.dp)).height(if (compact) 19.dp else 24.dp)
             .background(color).clickable { onSegment(clipId, segment.id, category) },
     ) {
         if (resizable) ResizeHandle(Modifier.align(Alignment.CenterStart), segment, true, density, clipId, onResize)
@@ -423,7 +408,7 @@ private fun Playhead(playheadMs: Long, visible: Boolean = true) {
 
 private fun msToDp(ms: Long): Dp = (ms / 1_000f * PIXELS_PER_SECOND).dp
 
-private fun seekGlobal(player: ExoPlayer, project: EditProject, globalMs: Long) {
+internal fun seekGlobal(player: ExoPlayer, project: EditProject, globalMs: Long) {
     var cursor = 0L
     project.clips.forEachIndexed { index, clip ->
         if (globalMs < cursor + clip.durationMs || index == project.clips.lastIndex) {
