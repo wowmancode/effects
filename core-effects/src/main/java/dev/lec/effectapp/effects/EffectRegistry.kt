@@ -3,6 +3,10 @@ package dev.lec.effectapp.effects
 object EffectRegistry {
     private val registered = listOf<LecEffect>(
         HueRotateEffect(),
+        HslAdjustEffect(),
+        SwirlEffect(),
+        WaveEffect(),
+        PinchBulgeEffect(),
         GhostTrailEffect(),
         ColorInvertEffect(),
         ZoomEffect(),

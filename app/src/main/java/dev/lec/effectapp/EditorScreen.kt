@@ -56,9 +56,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.model.Clip
@@ -73,6 +78,7 @@ private const val PIXELS_PER_SECOND = 48f
 @Composable
 fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () -> Unit) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val project by viewModel.project.collectAsState()
     val selection by viewModel.selection.collectAsState()
     var playerPositionMs by remember { mutableLongStateOf(0) }
@@ -92,9 +98,39 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.load(reader.readText()) } }
     }
 
-    val player = remember { ExoPlayer.Builder(context).build() }
-    DisposableEffect(player) { onDispose { player.release() } }
+    val player = remember { ExoPlayer.Builder(context.applicationContext).build() }
+    DisposableEffect(player, lifecycleOwner) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                if (player.mediaItemCount > 0) {
+                    val item = player.currentMediaItemIndex.coerceAtLeast(0)
+                    val position = player.currentPosition.coerceAtLeast(0)
+                    player.prepare()
+                    player.seekTo(item, position)
+                }
+            }
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    if (player.mediaItemCount > 0 && player.playbackState == Player.STATE_IDLE) player.prepare()
+                }
+                Lifecycle.Event.ON_STOP -> player.pause()
+                else -> Unit
+            }
+        }
+        player.addListener(listener)
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            player.removeListener(listener)
+            player.release()
+        }
+    }
     LaunchedEffect(project.clips.map { it.sourceUri to (it.trimStartMs to it.trimEndMs) }) {
+        val previousIndex = player.currentMediaItemIndex.coerceAtLeast(0)
+        val previousPosition = player.currentPosition.coerceAtLeast(0)
+        val resumePlayback = player.playWhenReady
         val items = project.clips.map { clip ->
             MediaItem.Builder().setUri(clip.sourceUri).setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
@@ -103,20 +139,30 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                     .build(),
             ).build()
         }
-        player.setMediaItems(items)
-        if (items.isNotEmpty()) player.prepare()
+        if (items.isEmpty()) {
+            player.clearMediaItems()
+        } else {
+            player.setMediaItems(items, previousIndex.coerceIn(items.indices), previousPosition)
+            player.prepare()
+            player.playWhenReady = resumePlayback
+        }
     }
-    LaunchedEffect(player, project) {
-        var effectClip = -1
+    LaunchedEffect(player, project.clips.map { it.id to it.durationMs }) {
         while (true) {
             currentClipIndex = player.currentMediaItemIndex.coerceAtLeast(0)
             playerPositionMs = project.clips.take(currentClipIndex).sumOf { it.durationMs } + player.currentPosition
-            if (effectClip != currentClipIndex) {
-                project.clips.getOrNull(currentClipIndex)?.let { player.setVideoEffects(ProjectCompositionFactory.videoEffects(it)) }
-                effectClip = currentClipIndex
-            }
             delay(50)
         }
+    }
+    val previewClip = project.clips.getOrNull(currentClipIndex)
+    val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
+    LaunchedEffect(player, currentClipIndex, previewEffectKey) {
+        val clip = previewClip ?: return@LaunchedEffect
+        // Avoid rebuilding the GL chain dozens of times per second while a slider is dragged.
+        delay(160)
+        val resumePlayback = player.playWhenReady
+        player.setVideoEffects(ProjectCompositionFactory.videoEffects(clip))
+        player.playWhenReady = resumePlayback
     }
 
     Scaffold(

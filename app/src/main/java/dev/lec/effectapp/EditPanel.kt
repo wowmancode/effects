@@ -59,8 +59,24 @@ fun EditPanel(viewModel: EditorViewModel, project: EditProject, selection: Selec
                     if (segment == null || effect == null || effect.category != activeCategory) {
                         Text("Select a ${activeCategory.name.lowercase()} segment in its timeline lane.")
                     } else {
+                        val stack = if (activeCategory == EffectCategory.AUDIO) selectedClip.audioSegments else selectedClip.effectSegments
+                        val stackIndex = stack.indexOfFirst { it.id == segment.id }
                         Text(effect.displayName, style = MaterialTheme.typography.titleMedium)
+                        Text("Clip: ${selectedClip.displayName}")
                         Text("${formatTime(segment.startMs)} – ${formatTime(segment.endMs)}")
+                        Text("Stack position ${stackIndex + 1} of ${stack.size} · later effects render on top")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.moveSelectedSegment(-1) },
+                                enabled = stackIndex > 0,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Move earlier") }
+                            OutlinedButton(
+                                onClick = { viewModel.moveSelectedSegment(1) },
+                                enabled = stackIndex in 0 until stack.lastIndex,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Move later") }
+                        }
                         effect.params.forEach { parameter ->
                             ParameterSlider(parameter.displayName, segment.params[parameter.id] ?: parameter.default, parameter.min..parameter.max) { value ->
                                 viewModel.updateSegment(selectedClip.id, segment.id) {
@@ -69,6 +85,7 @@ fun EditPanel(viewModel: EditorViewModel, project: EditProject, selection: Selec
                             }
                         }
                         OutlinedButton(onClick = viewModel::removeSelectedSegment) { Text("Remove segment") }
+                        Text("This effect belongs only to this clip. Overlapping effects are stacked in the order above.")
                     }
                 }
                 else -> Text("Select an item in the ${activeCategory.name.lowercase()} lane.")

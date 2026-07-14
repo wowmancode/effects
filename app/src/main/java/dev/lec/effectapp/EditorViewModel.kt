@@ -82,6 +82,18 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun moveSelectedSegment(delta: Int) {
+        val selected = _selection.value ?: return
+        val segmentId = selected.segmentId ?: return
+        updateClip(selected.clipId) {
+            if (selected.category == EffectCategory.AUDIO) {
+                copy(audioSegments = audioSegments.moved(segmentId, delta))
+            } else {
+                copy(effectSegments = effectSegments.moved(segmentId, delta))
+            }
+        }
+    }
+
     fun removeSelectedSegment() {
         val selected = _selection.value ?: return
         val segmentId = selected.segmentId ?: return
@@ -106,6 +118,14 @@ class EditorViewModel : ViewModel() {
     private fun updateClip(id: String, transform: Clip.() -> Clip) {
         _project.value = _project.value.copy(clips = _project.value.clips.map { if (it.id == id) it.transform() else it })
     }
+}
+
+private fun List<TimelineSegment>.moved(segmentId: String, delta: Int): List<TimelineSegment> {
+    val source = indexOfFirst { it.id == segmentId }
+    if (source == -1) return this
+    val destination = (source + delta).coerceIn(indices)
+    if (source == destination) return this
+    return toMutableList().apply { add(destination, removeAt(source)) }
 }
 
 data class Selection(
