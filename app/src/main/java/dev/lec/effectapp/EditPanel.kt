@@ -2,6 +2,7 @@ package dev.lec.effectapp
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,7 +50,7 @@ fun EditPanel(
     onExportPreset: (String) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
-    onAddImageOverlay: (String) -> Unit,
+    onAddOverlay: (String, Boolean) -> Unit,
 ) {
     var activeCategory by remember(selection) { mutableStateOf(selection?.category ?: EffectCategory.EFFECTS) }
     var presetsActive by remember { mutableStateOf(false) }
@@ -59,9 +60,9 @@ fun EditPanel(
             CategoryButton("Transform", EffectCategory.TRANSFORM, activeCategory) { activeCategory = it; presetsActive = false }
             CategoryButton("Audio", EffectCategory.AUDIO, activeCategory) { activeCategory = it; presetsActive = false }
             if (presetsActive) {
-                Button(onClick = { presetsActive = true }, modifier = Modifier.weight(1f)) { Text("Presets") }
+                Button(onClick = { presetsActive = true }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel("Presets") }
             } else {
-                OutlinedButton(onClick = { presetsActive = true }, modifier = Modifier.weight(1f)) { Text("Presets") }
+                OutlinedButton(onClick = { presetsActive = true }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel("Presets") }
             }
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
@@ -82,7 +83,7 @@ fun EditPanel(
                 selection == null -> Text("Select a clip to edit its effect stack.")
                 activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> {
                     TransformEditor(viewModel, selectedClip)
-                    OverlaySection(viewModel, selectedClip, onAddImageOverlay)
+                    OverlaySection(viewModel, selectedClip, onAddOverlay)
                 }
                 activeCategory == EffectCategory.EFFECTS && selectedClip != null && selection.segmentId == null -> {
                     VisualEffectStack(viewModel, selectedClip, onAddVisualEffect)
@@ -291,12 +292,17 @@ private fun TransformEditor(viewModel: EditorViewModel, clip: Clip) {
 }
 
 @Composable
-private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddImageOverlay: (String) -> Unit) {
+private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddOverlay: (String, Boolean) -> Unit) {
     HorizontalDivider(Modifier.padding(vertical = 12.dp))
-    Text("Image overlays", style = MaterialTheme.typography.titleMedium)
-    Text("Composite a PNG or JPG on this clip. Adjust position, opacity, and when it appears.")
-    OutlinedButton(onClick = { onAddImageOverlay(clip.id) }, modifier = Modifier.fillMaxWidth()) {
-        Text("+ Add image overlay")
+    Text("Overlays", style = MaterialTheme.typography.titleMedium)
+    Text("Composite an image or video on this clip. Adjust position, opacity, and when it appears.")
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { onAddOverlay(clip.id, false) }, modifier = Modifier.weight(1f)) {
+            Text("+ Image")
+        }
+        OutlinedButton(onClick = { onAddOverlay(clip.id, true) }, modifier = Modifier.weight(1f)) {
+            Text("+ Video")
+        }
     }
     if (clip.overlays.isEmpty()) {
         Text("No overlays on this clip yet.")
@@ -305,8 +311,18 @@ private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddImageOve
     clip.overlays.forEach { overlay ->
         Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(overlay.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "${if (overlay.isVideo) "🎬" else "🖼"} ${overlay.displayName}",
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleSmall,
+                )
                 TextButton(onClick = { viewModel.removeOverlay(clip.id, overlay.id) }) { Text("Delete") }
+            }
+            if (overlay.isVideo) {
+                Text(
+                    "Video overlay: currently shown as a still frame. Moving playback on export is coming next.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             ParameterSlider("Opacity", overlay.alpha, 0f..1f) { newValue ->
                 viewModel.updateOverlay(clip.id, overlay.id) { it.copy(alpha = newValue) }
@@ -330,6 +346,13 @@ private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddImageOve
     }
 }
 
+private val TabButtonPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+
+@Composable
+private fun tabLabel(label: String) {
+    Text(label, maxLines = 1, style = MaterialTheme.typography.labelMedium)
+}
+
 @Composable
 private fun RowScope.CategoryButton(
     label: String,
@@ -337,8 +360,11 @@ private fun RowScope.CategoryButton(
     active: EffectCategory,
     onClick: (EffectCategory) -> Unit,
 ) {
-    if (category == active) Button(onClick = { onClick(category) }, modifier = Modifier.weight(1f)) { Text(label) }
-    else OutlinedButton(onClick = { onClick(category) }, modifier = Modifier.weight(1f)) { Text(label) }
+    if (category == active) {
+        Button(onClick = { onClick(category) }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel(label) }
+    } else {
+        OutlinedButton(onClick = { onClick(category) }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel(label) }
+    }
 }
 
 @Composable

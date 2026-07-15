@@ -3,6 +3,7 @@ package dev.lec.effectapp.pipeline
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 
 /**
@@ -29,12 +30,29 @@ object OverlayBitmapCache {
 
     private fun decode(context: Context, uri: String): Bitmap? {
         val parsed = Uri.parse(uri)
+        return decodeImage(context, parsed) ?: decodeVideoFrame(context, parsed)
+    }
+
+    private fun decodeImage(context: Context, uri: Uri): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(parsed)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0) return null
         var sampleSize = 1
         val largest = maxOf(bounds.outWidth, bounds.outHeight)
         while (largest / sampleSize > MAX_DIMENSION) sampleSize *= 2
         val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-        return context.contentResolver.openInputStream(parsed)?.use { BitmapFactory.decodeStream(it, null, options) }
+        return context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
     }
+
+    /** Grabs a representative frame so a video overlay shows as a still poster in the preview. */
+    private fun decodeVideoFrame(context: Context, uri: Uri): Bitmap? = runCatching {
+        MediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource(context, uri)
+            val frame = retriever.getFrameAtTime(0) ?: return null
+            val largest = maxOf(frame.width, frame.height)
+            if (largest <= MAX_DIMENSION) return frame
+            val scale = MAX_DIMENSION.toFloat() / largest
+            Bitmap.createScaledBitmap(frame, (frame.width * scale).toInt(), (frame.height * scale).toInt(), true)
+        }
+    }.getOrNull()
 }

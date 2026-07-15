@@ -95,14 +95,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _selection.value = null
     }
 
-    fun addImageOverlay(clipId: String, uri: String, displayName: String) {
+    fun addOverlay(clipId: String, uri: String, displayName: String, isVideo: Boolean) {
         updateClip(clipId) {
             copy(
                 overlays = overlays + Overlay(
                     id = UUID.randomUUID().toString(),
                     sourceUri = uri,
                     displayName = displayName,
-                    isVideo = false,
+                    isVideo = isVideo,
                     startMs = 0,
                     endMs = durationMs,
                 ),

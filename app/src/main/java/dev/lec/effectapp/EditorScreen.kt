@@ -193,7 +193,20 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            viewModel.addImageOverlay(clipId, uri.toString(), editorDisplayName(context, uri))
+            viewModel.addOverlay(clipId, uri.toString(), editorDisplayName(context, uri), isVideo = false)
+        }
+    }
+    val addVideoOverlay = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val clipId = pendingOverlayClipId
+        pendingOverlayClipId = null
+        if (uri != null && clipId != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            viewModel.addOverlay(clipId, uri.toString(), editorDisplayName(context, uri), isVideo = true)
         }
     }
 
@@ -397,9 +410,9 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 pendingReplaceClipId = clipId
                 replaceMedia.launch(arrayOf("video/*"))
             },
-            onAddImageOverlay = { clipId ->
+            onAddOverlay = { clipId, isVideo ->
                 pendingOverlayClipId = clipId
-                addImageOverlay.launch(arrayOf("image/*"))
+                if (isVideo) addVideoOverlay.launch(arrayOf("video/*")) else addImageOverlay.launch(arrayOf("image/*"))
             },
             onSplitClip = {
                 project.clips.getOrNull(currentClipIndex)?.let { viewModel.splitClip(it.id, previewLocalMs) }

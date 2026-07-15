@@ -64,6 +64,9 @@ class WaveEffect : LecEffect {
         EffectParam("strength", "Strength", 0f, 1f, 0.35f),
         EffectParam("stretch", "Stretch", 0.25f, 4f, 1f),
         EffectParam("speed", "Speed", -5f, 5f, 1f),
+        EffectParam("phase", "Phase", 0f, 1f, 0f),
+        EffectParam("radius_x", "Radius X", 0.05f, 2f, 0.9f),
+        EffectParam("radius_y", "Radius Y", 0.05f, 2f, 0.9f),
         EffectParam("wave_x", "X wave", 0f, 1f, 1f, ParamKind.BOOLEAN),
         EffectParam("wave_y", "Y wave", 0f, 1f, 0f, ParamKind.BOOLEAN),
     )
@@ -77,6 +80,9 @@ class WaveEffect : LecEffect {
         third = values["speed"] ?: 1f,
         fourth = (if ((values["wave_x"] ?: 1f) >= 0.5f) 1f else 0f) +
             (if ((values["wave_y"] ?: 0f) >= 0.5f) 2f else 0f),
+        fifth = values["phase"] ?: 0f,
+        sixth = values["radius_x"] ?: 0.9f,
+        seventh = values["radius_y"] ?: 0.9f,
     )
 }
 
@@ -133,9 +139,12 @@ private data class SpatialWarpEffect(
     val second: Float,
     val third: Float = 0f,
     val fourth: Float = 0f,
+    val fifth: Float = 0f,
+    val sixth: Float = 0f,
+    val seventh: Float = 0f,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        SpatialWarpShaderProgram(useHdr, mode, centerX, centerY, first, second, third, fourth)
+        SpatialWarpShaderProgram(useHdr, mode, centerX, centerY, first, second, third, fourth, fifth, sixth, seventh)
 }
 
 @OptIn(UnstableApi::class)
@@ -148,6 +157,9 @@ private class SpatialWarpShaderProgram(
     private val second: Float,
     private val third: Float,
     private val fourth: Float,
+    private val fifth: Float,
+    private val sixth: Float,
+    private val seventh: Float,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val program = try {
         GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -168,6 +180,7 @@ private class SpatialWarpShaderProgram(
             program.setIntUniform("uMode", mode)
             program.setFloatsUniform("uCenter", floatArrayOf(centerX, centerY))
             program.setFloatsUniform("uParams", floatArrayOf(first, second, third, fourth))
+            program.setFloatsUniform("uExtra", floatArrayOf(fifth, sixth, seventh))
             program.setFloatUniform("uAspect", aspectRatio)
             program.setFloatUniform("uTime", presentationTimeUs / 1_000_000f)
             program.setBufferAttribute("aFramePosition", FRAME_VERTICES, 4)
@@ -211,6 +224,7 @@ private class SpatialWarpShaderProgram(
             uniform int uMode;
             uniform vec2 uCenter;
             uniform vec4 uParams;
+            uniform vec3 uExtra;
             uniform float uAspect;
             uniform float uTime;
             varying vec2 vTexSamplingCoord;
@@ -231,8 +245,11 @@ private class SpatialWarpShaderProgram(
                 uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
               } else if (uMode == 1) {
                 float stretch = max(uParams.y, 0.01);
-                float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);
-                float animation = uTime * uParams.z * 6.2831853;
+                float radiusX = max(uExtra.y, 0.01);
+                float radiusY = max(uExtra.z, 0.01);
+                float ellipse = length(vec2(corrected.x / radiusX, corrected.y / radiusY));
+                float falloff = 1.0 - smoothstep(0.0, 1.0, ellipse);
+                float animation = uTime * uParams.z * 6.2831853 + uExtra.x * 6.2831853;
                 if (uParams.w == 1.0 || uParams.w >= 3.0) {
                   float xPhase = (uv.y - uCenter.y) * 12.56637 * stretch + animation;
                   uv.x += sin(xPhase) * uParams.x * 0.12 * falloff;
