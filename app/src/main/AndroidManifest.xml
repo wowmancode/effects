@@ -4,6 +4,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="effect-app"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.EffectApp">
         <activity android:name=".MainActivity" android:exported="true">
