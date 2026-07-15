@@ -1,6 +1,8 @@
 package dev.lec.effectapp
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -9,8 +11,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -73,10 +77,10 @@ internal fun EditorWorkspace(
                     onReplaceMedia = onReplaceMedia,
                     onSplitClip = onSplitClip,
                     onPlayerView = onPlayerView,
-                    modifier = Modifier.weight(0.46f).fillMaxHeight(),
+                    modifier = Modifier.weight(0.6f).fillMaxHeight(),
                 )
                 Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                Column(Modifier.weight(0.54f).fillMaxHeight()) {
+                Column(Modifier.weight(0.4f).fillMaxHeight()) {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
                         if (landscapeTab == 0) {
                             Button(onClick = { landscapeTab = 0 }, modifier = Modifier.weight(1f)) { Text("Controls") }
@@ -132,7 +136,7 @@ internal fun EditorWorkspace(
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
                     onSplitClip = onSplitClip,
-                    modifier = Modifier.fillMaxWidth().weight(0.35f),
+                    modifier = Modifier.fillMaxWidth().weight(0.5f),
                     onPlayerView = onPlayerView,
                 )
                 EditorTimeline(
@@ -143,7 +147,7 @@ internal fun EditorWorkspace(
                     compact = false,
                     onEmptyLane = onEmptyLane,
                     onSeek = onSeek,
-                    modifier = Modifier.fillMaxWidth().height(210.dp),
+                    modifier = Modifier.fillMaxWidth().height(150.dp),
                 )
                 HorizontalDivider()
                 EditPanel(
@@ -151,7 +155,7 @@ internal fun EditorWorkspace(
                     project = project,
                     selection = selection,
                     playerPositionMs = playerPositionMs,
-                    modifier = Modifier.fillMaxWidth().weight(0.65f),
+                    modifier = Modifier.fillMaxWidth().weight(0.5f),
                     onAddVisualEffect = onAddVisualEffect,
                     currentClipId = project.clips.getOrNull(currentClipIndex)?.id,
                     onSavePreset = onSavePreset,
@@ -238,38 +242,42 @@ private fun PreviewPane(
             )
         }
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             OutlinedButton(
                 onClick = onPreviousClip,
                 enabled = currentClipIndex > 0,
+                contentPadding = CompactButtonPadding,
             ) {
                 Text("‹")
             }
-            Text(
-                "Clip ${if (project.clips.isEmpty()) 0 else currentClipIndex + 1}/${project.clips.size}",
-                Modifier.weight(1f),
-            )
+            Text("Clip ${if (project.clips.isEmpty()) 0 else currentClipIndex + 1}/${project.clips.size}")
             OutlinedButton(
                 onClick = onNextClip,
                 enabled = currentClipIndex < project.clips.lastIndex,
+                contentPadding = CompactButtonPadding,
             ) {
                 Text("›")
             }
             OutlinedButton(
                 onClick = { currentClip?.let { onReplaceMedia(it.id) } },
                 enabled = currentClip != null,
+                contentPadding = CompactButtonPadding,
             ) {
                 Text("Replace")
             }
             OutlinedButton(
                 onClick = onSplitClip,
                 enabled = currentClip != null,
+                contentPadding = CompactButtonPadding,
             ) {
                 Text("Split")
             }
-            OutlinedButton(onClick = onAddClip) { Text("+ Clip") }
+            OutlinedButton(onClick = onAddClip, contentPadding = CompactButtonPadding) { Text("+ Clip") }
         }
     }
 }
+
+private val CompactButtonPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
