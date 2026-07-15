@@ -26,6 +26,7 @@ class VideoPluginEffect : LecEffect {
     override val displayName = "Plug-In · video (C-style)"
     override val category = EffectCategory.EFFECTS
     override val params = emptyList<EffectParam>()
+    @OptIn(UnstableApi::class)
     override fun toMediaEffect(values: Map<String, Float>): Effect = videoPluginEffect(DEFAULT_VIDEO_PLUGIN_SOURCE)
 }
 
