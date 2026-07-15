@@ -35,6 +35,7 @@ class AudioPluginEffect : LecEffect {
     override val displayName = "Plug-In · audio (C-style)"
     override val category = EffectCategory.AUDIO
     override val params = emptyList<EffectParam>()
+    @OptIn(UnstableApi::class)
     override fun toMediaEffect(values: Map<String, Float>): Effect? = null
 }
 
