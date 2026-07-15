@@ -103,17 +103,20 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun addKeyframe(clipId: String, segmentId: String, timeMs: Long) {
-        updateSegment(clipId, segmentId) {
-            val time = timeMs.coerceIn(0, durationMs)
-            val keyframe = EffectKeyframe(time, paramsAt(time).toMap())
-            copy(keyframes = (keyframes.filterNot { it.timeMs == time } + keyframe).sortedBy { it.timeMs })
+        updateSegment(clipId, segmentId) { segment ->
+            val time = timeMs.coerceIn(0, segment.durationMs)
+            val keyframe = EffectKeyframe(time, segment.paramsAt(time).toMap())
+            segment.copy(
+                keyframes = (segment.keyframes.filterNot { it.timeMs == time } + keyframe)
+                    .sortedBy { it.timeMs },
+            )
         }
     }
 
     fun updateKeyframe(clipId: String, segmentId: String, timeMs: Long, params: Map<String, Float>) {
-        updateSegment(clipId, segmentId) {
-            copy(
-                keyframes = keyframes.map {
+        updateSegment(clipId, segmentId) { segment ->
+            segment.copy(
+                keyframes = segment.keyframes.map {
                     if (it.timeMs == timeMs) it.copy(params = params) else it
                 },
             )
@@ -121,8 +124,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun removeKeyframe(clipId: String, segmentId: String, timeMs: Long) {
-        updateSegment(clipId, segmentId) {
-            copy(keyframes = keyframes.filterNot { it.timeMs == timeMs })
+        updateSegment(clipId, segmentId) { segment ->
+            segment.copy(keyframes = segment.keyframes.filterNot { it.timeMs == timeMs })
         }
     }
 
