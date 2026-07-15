@@ -161,7 +161,10 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     val player = remember(renderersFactory) {
         // Media3 requires the effect pipeline to be enabled before the first prepare().
-        ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply { setVideoEffects(emptyList()) }
+        ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply {
+            setVideoEffects(emptyList())
+            setPauseAtEndOfMediaItems(false)
+        }
     }
     DisposableEffect(player, lifecycleOwner) {
         val listener = object : Player.Listener {
@@ -270,6 +273,20 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             runCatching { player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs)) }
         }
     }
+    val seekToClip: (Int) -> Unit = { requestedIndex ->
+        if (project.clips.isNotEmpty()) {
+            val targetIndex = requestedIndex.coerceIn(project.clips.indices)
+            val position = project.clips.take(targetIndex).sumOf { it.durationMs }
+            currentClipIndex = targetIndex
+            playerPositionMs = position
+            if (project.clips[targetIndex].mediaMissing) {
+                player.pause()
+            } else {
+                seekPreview(player, project, previewEntries, position)
+                player.play()
+            }
+        }
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -320,6 +337,8 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 pendingReplaceClipId = clipId
                 replaceMedia.launch(arrayOf("video/*"))
             },
+            onPreviousClip = { seekToClip(currentClipIndex - 1) },
+            onNextClip = { seekToClip(currentClipIndex + 1) },
             modifier = Modifier.fillMaxSize().padding(padding),
             onSavePreset = { name, clipId ->
                 scope.launch {

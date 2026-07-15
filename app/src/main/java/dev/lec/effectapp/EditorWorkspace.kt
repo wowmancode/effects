@@ -42,6 +42,8 @@ internal fun EditorWorkspace(
     onAddClip: () -> Unit,
     onEmptyLane: (String, Long, EffectCategory) -> Unit,
     onAddVisualEffect: (String) -> Unit,
+    onPreviousClip: () -> Unit,
+    onNextClip: () -> Unit,
     onAddAudioEffect: (String) -> Unit,
     onSavePreset: (String, String) -> Unit,
     onImportPreset: () -> Unit,
@@ -60,6 +62,8 @@ internal fun EditorWorkspace(
                     player = player,
                     project = project,
                     currentClipIndex = currentClipIndex,
+                    onPreviousClip = onPreviousClip,
+                    onNextClip = onNextClip,
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
                     onPlayerView = onPlayerView,
@@ -113,6 +117,8 @@ internal fun EditorWorkspace(
                     player = player,
                     project = project,
                     currentClipIndex = currentClipIndex,
+                    onPreviousClip = onPreviousClip,
+                    onNextClip = onNextClip,
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
                     modifier = Modifier.fillMaxWidth().weight(0.35f),
@@ -178,6 +184,8 @@ private fun EditorTimeline(
 private fun PreviewPane(
     player: ExoPlayer,
     project: EditProject,
+    onPreviousClip: () -> Unit,
+    onNextClip: () -> Unit,
     currentClipIndex: Int,
     onAddClip: () -> Unit,
     onReplaceMedia: (String) -> Unit,
@@ -217,10 +225,22 @@ private fun PreviewPane(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            OutlinedButton(
+                onClick = onPreviousClip,
+                enabled = currentClipIndex > 0,
+            ) {
+                Text("‹")
+            }
             Text(
                 "Clip ${if (project.clips.isEmpty()) 0 else currentClipIndex + 1}/${project.clips.size}",
                 Modifier.weight(1f),
             )
+            OutlinedButton(
+                onClick = onNextClip,
+                enabled = currentClipIndex < project.clips.lastIndex,
+            ) {
+                Text("›")
+            }
             OutlinedButton(
                 onClick = { currentClip?.let { onReplaceMedia(it.id) } },
                 enabled = currentClip != null,
