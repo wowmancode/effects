@@ -34,7 +34,10 @@ class EffectRegistryTest {
 
         val wave = requireNotNull(EffectRegistry.byId("wave"))
         assertEquals(
-            setOf("position_x", "position_y", "strength", "stretch", "speed", "wave_x", "wave_y"),
+            setOf(
+                "position_x", "position_y", "strength", "stretch", "speed",
+                "phase", "radius_x", "radius_y", "wave_x", "wave_y",
+            ),
             wave.params.map { it.id }.toSet(),
         )
 
