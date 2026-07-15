@@ -19,6 +19,11 @@ data class GradientColorStop(
     val green: Float,
     val blue: Float,
 )
+data class ColorCurvePoint(
+    val input: Float,
+    val output: Float,
+)
+
 
 @OptIn(UnstableApi::class)
 class SharpenEffect : LecEffect {
@@ -41,34 +46,63 @@ class ColorCurvesEffect : LecEffect {
     override val id = "color_curves"
     override val displayName = "Color curves"
     override val category = EffectCategory.EFFECTS
-    override val params = listOf(
-        EffectParam("master_shadows", "Master shadows", -1f, 1f, 0f),
-        EffectParam("master_midtones", "Master midtones", -1f, 1f, 0f),
-        EffectParam("master_highlights", "Master highlights", -1f, 1f, 0f),
-        EffectParam("red_shadows", "Red shadows", -1f, 1f, 0f),
-        EffectParam("red_midtones", "Red midtones", -1f, 1f, 0f),
-        EffectParam("red_highlights", "Red highlights", -1f, 1f, 0f),
-        EffectParam("green_shadows", "Green shadows", -1f, 1f, 0f),
-        EffectParam("green_midtones", "Green midtones", -1f, 1f, 0f),
-        EffectParam("green_highlights", "Green highlights", -1f, 1f, 0f),
-        EffectParam("blue_shadows", "Blue shadows", -1f, 1f, 0f),
-        EffectParam("blue_midtones", "Blue midtones", -1f, 1f, 0f),
-        EffectParam("blue_highlights", "Blue highlights", -1f, 1f, 0f),
-    )
+    override val params = emptyList<EffectParam>()
 
     override fun toMediaEffect(values: Map<String, Float>): Effect = ColorCurvesGlEffect(
-        master = values.curveValues("master"),
-        red = values.curveValues("red"),
-        green = values.curveValues("green"),
-        blue = values.curveValues("blue"),
+        master = decodePoints(values, "master"),
+        red = decodePoints(values, "red"),
+        green = decodePoints(values, "green"),
+        blue = decodePoints(values, "blue"),
     )
-}
 
-private fun Map<String, Float>.curveValues(prefix: String): FloatArray = floatArrayOf(
-    get("${prefix}_shadows") ?: 0f,
-    get("${prefix}_midtones") ?: 0f,
-    get("${prefix}_highlights") ?: 0f,
-)
+    companion object {
+        const val MAX_POINTS = 8
+        val channels = listOf("master", "red", "green", "blue")
+        val defaultPoints = listOf(ColorCurvePoint(0f, 0f), ColorCurvePoint(1f, 1f))
+
+        fun decodePoints(values: Map<String, Float>, prefix: String): List<ColorCurvePoint> {
+            val count = values["${prefix}_point_count"]?.toInt()?.coerceIn(2, MAX_POINTS)
+            if (count != null) {
+                return normalizePoints(List(count) { index ->
+                    val fallback = defaultPoints.getOrElse(index) { defaultPoints.last() }
+                    ColorCurvePoint(
+                        values["${prefix}_point_${index}_x"] ?: fallback.input,
+                        values["${prefix}_point_${index}_y"] ?: fallback.output,
+                    )
+                })
+            }
+            val legacy = listOf("shadows", "midtones", "highlights").map { values["${prefix}_$it"] ?: 0f }
+            if (legacy.any { it != 0f }) {
+                return normalizePoints(
+                    listOf(
+                        ColorCurvePoint(0f, legacy[0] * 0.25f),
+                        ColorCurvePoint(0.5f, 0.5f + legacy[1] * 0.25f),
+                        ColorCurvePoint(1f, 1f + legacy[2] * 0.25f),
+                    ),
+                )
+            }
+            return defaultPoints
+        }
+
+        fun encodePoints(prefix: String, points: List<ColorCurvePoint>): Map<String, Float> {
+            val normalized = normalizePoints(points)
+            return buildMap {
+                put("${prefix}_point_count", normalized.size.toFloat())
+                normalized.forEachIndexed { index, point ->
+                    put("${prefix}_point_${index}_x", point.input)
+                    put("${prefix}_point_${index}_y", point.output)
+                }
+            }
+        }
+
+        private fun normalizePoints(points: List<ColorCurvePoint>): List<ColorCurvePoint> =
+            points.take(MAX_POINTS).map {
+                ColorCurvePoint(it.input.coerceIn(0f, 1f), it.output.coerceIn(0f, 1f))
+            }.sortedBy(ColorCurvePoint::input).let { normalized ->
+                if (normalized.size >= 2) normalized else defaultPoints
+            }
+    }
+}
 
 @OptIn(UnstableApi::class)
 class GradientMapEffect : LecEffect {
@@ -161,10 +195,10 @@ private class SharpenShaderProgram(
 
 @OptIn(UnstableApi::class)
 private class ColorCurvesGlEffect(
-    private val master: FloatArray,
-    private val red: FloatArray,
-    private val green: FloatArray,
-    private val blue: FloatArray,
+    private val master: List<ColorCurvePoint>,
+    private val red: List<ColorCurvePoint>,
+    private val green: List<ColorCurvePoint>,
+    private val blue: List<ColorCurvePoint>,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
         ColorCurvesShaderProgram(useHdr, master, red, green, blue)
@@ -173,10 +207,10 @@ private class ColorCurvesGlEffect(
 @OptIn(UnstableApi::class)
 private class ColorCurvesShaderProgram(
     useHdr: Boolean,
-    private val master: FloatArray,
-    private val red: FloatArray,
-    private val green: FloatArray,
-    private val blue: FloatArray,
+    private val master: List<ColorCurvePoint>,
+    private val red: List<ColorCurvePoint>,
+    private val green: List<ColorCurvePoint>,
+    private val blue: List<ColorCurvePoint>,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val program = createColorProgram(COLOR_CURVES_FRAGMENT_SHADER)
 
@@ -184,10 +218,28 @@ private class ColorCurvesShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         drawColorFrame(program, inputTexId, presentationTimeUs) {
-            program.setFloatsUniform("uMaster", master)
-            program.setFloatsUniform("uRed", red)
-            program.setFloatsUniform("uGreen", green)
-            program.setFloatsUniform("uBlue", blue)
+            program.setFloatsUniform(
+                "uCounts",
+                floatArrayOf(master.size.toFloat(), red.size.toFloat(), green.size.toFloat(), blue.size.toFloat()),
+            )
+            setCurveUniforms("uMaster", master)
+            setCurveUniforms("uRed", red)
+            setCurveUniforms("uGreen", green)
+            setCurveUniforms("uBlue", blue)
+        }
+    }
+
+    private fun setCurveUniforms(name: String, points: List<ColorCurvePoint>) {
+        val safe = points.ifEmpty { ColorCurvesEffect.defaultPoints }.take(ColorCurvesEffect.MAX_POINTS)
+        val padded = List(ColorCurvesEffect.MAX_POINTS) { safe.getOrElse(it) { safe.last() } }
+        val suffixes = listOf("01", "23", "45", "67")
+        suffixes.forEachIndexed { pairIndex, suffix ->
+            val first = padded[pairIndex * 2]
+            val second = padded[pairIndex * 2 + 1]
+            program.setFloatsUniform(
+                "$name$suffix",
+                floatArrayOf(first.input, first.output, second.input, second.output),
+            )
         }
     }
 
@@ -306,31 +358,66 @@ private const val SHARPEN_FRAGMENT_SHADER = """
 private const val COLOR_CURVES_FRAGMENT_SHADER = """
     precision mediump float;
     uniform sampler2D uTexSampler;
-    uniform vec3 uMaster;
-    uniform vec3 uRed;
-    uniform vec3 uGreen;
-    uniform vec3 uBlue;
+    uniform vec4 uCounts;
+    uniform vec4 uMaster01;
+    uniform vec4 uMaster23;
+    uniform vec4 uMaster45;
+    uniform vec4 uMaster67;
+    uniform vec4 uRed01;
+    uniform vec4 uRed23;
+    uniform vec4 uRed45;
+    uniform vec4 uRed67;
+    uniform vec4 uGreen01;
+    uniform vec4 uGreen23;
+    uniform vec4 uGreen45;
+    uniform vec4 uGreen67;
+    uniform vec4 uBlue01;
+    uniform vec4 uBlue23;
+    uniform vec4 uBlue45;
+    uniform vec4 uBlue67;
     varying vec2 vTexSamplingCoord;
 
-    float applyCurve(float value, vec3 curve) {
-      float shadows = (1.0 - value) * (1.0 - value);
-      float midtones = 4.0 * value * (1.0 - value);
-      float highlights = value * value;
-      float adjustment = dot(vec3(shadows, midtones, highlights), curve) * 0.25;
-      return clamp(value + adjustment, 0.0, 1.0);
+    vec2 curvePoint(float index, vec4 p01, vec4 p23, vec4 p45, vec4 p67) {
+      if (index < 0.5) return p01.xy;
+      if (index < 1.5) return p01.zw;
+      if (index < 2.5) return p23.xy;
+      if (index < 3.5) return p23.zw;
+      if (index < 4.5) return p45.xy;
+      if (index < 5.5) return p45.zw;
+      if (index < 6.5) return p67.xy;
+      return p67.zw;
+    }
+
+    float applyCurve(float value, float count, vec4 p01, vec4 p23, vec4 p45, vec4 p67) {
+      vec2 previous = curvePoint(0.0, p01, p23, p45, p67);
+      vec2 lastPoint = previous;
+      float mapped = previous.y;
+      for (int i = 1; i < 8; i++) {
+        float index = float(i);
+        float enabled = step(index + 0.5, count);
+        vec2 current = curvePoint(index, p01, p23, p45, p67);
+        float span = max(current.x - previous.x, 0.0001);
+        float blend = clamp((value - previous.x) / span, 0.0, 1.0);
+        float inside = enabled * step(previous.x, value) * step(value, current.x);
+        mapped = mix(mapped, mix(previous.y, current.y, blend), inside);
+        previous = mix(previous, current, enabled);
+        lastPoint = mix(lastPoint, current, enabled);
+      }
+      mapped = mix(mapped, lastPoint.y, step(lastPoint.x, value));
+      return clamp(mapped, 0.0, 1.0);
     }
 
     void main() {
       vec4 source = texture2D(uTexSampler, vTexSamplingCoord);
       vec3 masterColor = vec3(
-        applyCurve(source.r, uMaster),
-        applyCurve(source.g, uMaster),
-        applyCurve(source.b, uMaster)
+        applyCurve(source.r, uCounts.x, uMaster01, uMaster23, uMaster45, uMaster67),
+        applyCurve(source.g, uCounts.x, uMaster01, uMaster23, uMaster45, uMaster67),
+        applyCurve(source.b, uCounts.x, uMaster01, uMaster23, uMaster45, uMaster67)
       );
       vec3 curved = vec3(
-        applyCurve(masterColor.r, uRed),
-        applyCurve(masterColor.g, uGreen),
-        applyCurve(masterColor.b, uBlue)
+        applyCurve(masterColor.r, uCounts.y, uRed01, uRed23, uRed45, uRed67),
+        applyCurve(masterColor.g, uCounts.z, uGreen01, uGreen23, uGreen45, uGreen67),
+        applyCurve(masterColor.b, uCounts.w, uBlue01, uBlue23, uBlue45, uBlue67)
       );
       gl_FragColor = vec4(curved, source.a);
     }

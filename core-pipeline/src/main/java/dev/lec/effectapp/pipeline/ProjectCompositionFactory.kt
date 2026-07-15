@@ -115,14 +115,23 @@ object ProjectCompositionFactory {
     }
 
     private fun sourceSlices(clip: Clip, reversed: Boolean): List<SourceSlice> {
-        val keyframeTimes = (clip.effectSegments + clip.audioSegments)
+        val keyframedSegments = (clip.effectSegments + clip.audioSegments).filter { it.keyframes.isNotEmpty() }
+        val keyframeTimes = keyframedSegments
             .flatMap { it.keyframes }
             .map { it.timeMs.coerceIn(0, clip.durationMs) }
             .filter { it in 1 until clip.durationMs }
             .distinct()
             .sorted()
+        val interpolationTimes = if (keyframedSegments.isEmpty()) {
+            emptyList()
+        } else {
+            val stepMs = max(50L, ceil(clip.durationMs / 600.0).toLong())
+            generateSequence(stepMs) { previous -> (previous + stepMs).takeIf { it < clip.durationMs } }.toList()
+        }
+        val animatedTimes = (keyframeTimes + interpolationTimes).distinct().sorted()
+
         if (!reversed) {
-            val boundaries = listOf(0L) + keyframeTimes + clip.durationMs
+            val boundaries = listOf(0L) + animatedTimes + clip.durationMs
             return boundaries.zipWithNext(::SourceSlice)
         }
         val sliceMs = max(MIN_REVERSE_SLICE_MS, ceil(clip.durationMs / MAX_REVERSE_SLICES.toDouble()).toLong())
@@ -130,7 +139,7 @@ object ProjectCompositionFactory {
             var start = 0L
             while (start < clip.durationMs) {
                 val end = (start + sliceMs).coerceAtMost(clip.durationMs)
-                val boundaries = listOf(start) + keyframeTimes.filter { it in (start + 1) until end } + end
+                val boundaries = listOf(start) + animatedTimes.filter { it in (start + 1) until end } + end
                 addAll(boundaries.zipWithNext(::SourceSlice))
                 start = end
             }

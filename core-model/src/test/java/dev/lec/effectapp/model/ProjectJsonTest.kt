@@ -88,7 +88,7 @@ class ProjectJsonTest {
     }
 
     @Test
-    fun keyframesUseHeldValuesAndRoundTrip() {
+    fun keyframesInterpolateSmoothlyAndRoundTrip() {
         val segment = TimelineSegment(
             id = "effect",
             effectId = "glow",
@@ -104,8 +104,8 @@ class ProjectJsonTest {
             clips = listOf(Clip("clip", "content://video", "video", trimEndMs = 3_000, effectSegments = listOf(segment))),
         )
 
-        assertEquals(0.2f, segment.paramsAt(999)["strength"])
-        assertEquals(0.8f, segment.paramsAt(1_500)["strength"])
+        assertEquals(0.5f, segment.paramsAt(500)["strength"]!!, 0.0001f)
+        assertEquals(1.1f, segment.paramsAt(1_500)["strength"]!!, 0.0001f)
         assertEquals(1.4f, segment.paramsAt(2_500)["strength"])
         assertEquals(project, ProjectJson.decode(ProjectJson.encode(project)))
     }

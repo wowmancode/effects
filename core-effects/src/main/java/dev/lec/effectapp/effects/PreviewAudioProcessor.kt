@@ -49,9 +49,10 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
     override fun queueInput(inputBuffer: ByteBuffer) {
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
         val currentTimeMs = (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
-        val currentParamSets = requestedSegments.map { it.paramsAt(currentTimeMs) }
+        val parameterTimeMs = currentTimeMs / 50L * 50L
+        val currentParamSets = requestedSegments.map { it.paramsAt(parameterTimeMs) }
         if (requestedRevision != appliedRevision || currentParamSets != appliedParamSets) {
-            rebuildStates(currentTimeMs)
+            rebuildStates(parameterTimeMs)
         }
         val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         while (inputBuffer.remaining() >= 2) {

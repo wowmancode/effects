@@ -19,10 +19,15 @@ class EffectRegistryTest {
         assertTrue(hsl.params.all { it.min == 0f && it.max == 1f })
 
         val curves = requireNotNull(EffectRegistry.byId("color_curves"))
-        assertEquals(12, curves.params.size)
-        assertTrue(curves.params.any { it.id == "master_midtones" })
-        assertTrue(curves.params.any { it.id == "red_shadows" })
-        assertTrue(curves.params.any { it.id == "blue_highlights" })
+        assertTrue(curves.params.isEmpty())
+        val curvePoints = listOf(
+            ColorCurvePoint(0f, 0.1f),
+            ColorCurvePoint(0.45f, 0.7f),
+            ColorCurvePoint(1f, 0.9f),
+        )
+        val encodedCurve = ColorCurvesEffect.encodePoints("red", curvePoints)
+        assertEquals(3f, encodedCurve["red_point_count"])
+        assertEquals(curvePoints, ColorCurvesEffect.decodePoints(encodedCurve, "red"))
 
         val swirl = requireNotNull(EffectRegistry.byId("swirl"))
         assertEquals(setOf("degrees", "radius", "position_x", "position_y"), swirl.params.map { it.id }.toSet())

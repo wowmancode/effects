@@ -115,7 +115,7 @@ fun EditPanel(
                                 modifier = Modifier.weight(1f),
                             ) { Text("Move later") }
                         }
-                        Text("Keyframes · values hold until the next keyframe")
+                        Text("Keyframes · values animate smoothly to the next keyframe")
                         OutlinedButton(
                             onClick = {
                                 viewModel.addKeyframe(selectedClip.id, segment.id, localPlayheadMs)
@@ -155,6 +155,9 @@ fun EditPanel(
                             }
                         }
                         when (effect.id) {
+                            "color_curves" -> ColorCurvesEditor(editorParams) { params ->
+                                updateEditorParams(params)
+                            }
                             "gradient_map" -> GradientMapEditor(editorParams) { params ->
                                 updateEditorParams(params)
                             }

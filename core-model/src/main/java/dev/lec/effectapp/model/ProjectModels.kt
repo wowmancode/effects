@@ -90,7 +90,21 @@ data class TimelineSegment(
                 .sortedBy { it.timeMs },
         )
 
-    /** Keyframes use hold interpolation to avoid rebuilding an effect stack on every rendered frame. */
-    fun paramsAt(timeMs: Long): Map<String, Float> =
-        keyframes.lastOrNull { it.timeMs <= timeMs }?.params ?: params
+    /** Linearly interpolates every numeric parameter between the surrounding keyframes. */
+    fun paramsAt(timeMs: Long): Map<String, Float> {
+        if (keyframes.isEmpty()) return params
+        val ordered = keyframes.sortedBy { it.timeMs }
+        val previous = ordered.lastOrNull { it.timeMs <= timeMs }
+        val next = ordered.firstOrNull { it.timeMs > timeMs } ?: return previous?.params ?: params
+        val fromTime = previous?.timeMs ?: 0L
+        val fromParams = previous?.params ?: params
+        val duration = next.timeMs - fromTime
+        if (duration <= 0L) return next.params
+        val progress = ((timeMs - fromTime).toFloat() / duration).coerceIn(0f, 1f)
+        return (fromParams.keys + next.params.keys).associateWith { key ->
+            val from = fromParams[key] ?: next.params[key] ?: 0f
+            val to = next.params[key] ?: from
+            from + (to - from) * progress
+        }
+    }
 }

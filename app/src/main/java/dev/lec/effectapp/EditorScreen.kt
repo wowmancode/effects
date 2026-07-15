@@ -223,7 +223,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 playerPositionMs = project.clips.take(entry.clipIndex).sumOf { it.durationMs } +
                     entry.outputStartMs + player.currentPosition.coerceIn(0, entry.durationMs)
             }
-            delay(200)
+            delay(80)
         }
     }
     val previewClip = project.clips.getOrNull(currentClipIndex)
@@ -240,10 +240,8 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     val previewClipStartMs = project.clips.take(currentClipIndex).sumOf { it.durationMs }
     val previewLocalMs = (playerPositionMs - previewClipStartMs).coerceAtLeast(0)
-    val activeVideoKeyframes = previewClip?.effectSegments.orEmpty().map { segment ->
-        segment.keyframes.lastOrNull { it.timeMs <= previewLocalMs }?.timeMs ?: -1L
-    }
-    val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments, activeVideoKeyframes) }
+    val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
+    val animationFrame = if (previewClip?.effectSegments.orEmpty().any { it.keyframes.isNotEmpty() }) previewLocalMs / 80 else -1L
     LaunchedEffect(player, currentClipIndex, previewEffectKey) {
         val clip = previewClip ?: return@LaunchedEffect
         // Avoid rebuilding the GL chain dozens of times per second while a slider is dragged.
@@ -251,6 +249,12 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs))
     }
 
+    LaunchedEffect(player, currentClipIndex, previewEffectKey, animationFrame) {
+        if (animationFrame < 0) return@LaunchedEffect
+        val clip = previewClip ?: return@LaunchedEffect
+        // Parameter-only animation updates keep the existing player and decoder alive.
+        player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs))
+    }
     Scaffold(
         topBar = {
             TopAppBar(
