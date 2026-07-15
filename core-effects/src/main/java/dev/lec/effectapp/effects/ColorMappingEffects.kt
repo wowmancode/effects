@@ -18,6 +18,7 @@ data class GradientColorStop(
     val red: Float,
     val green: Float,
     val blue: Float,
+    val alpha: Float = 1f,
 )
 data class ColorCurvePoint(
     val input: Float,
@@ -132,6 +133,7 @@ class GradientMapEffect : LecEffect {
                     red = values["stop_${index}_red"] ?: fallback.red,
                     green = values["stop_${index}_green"] ?: fallback.green,
                     blue = values["stop_${index}_blue"] ?: fallback.blue,
+                    alpha = values["stop_${index}_alpha"] ?: fallback.alpha,
                 )
             }.map { stop ->
                 stop.copy(
@@ -139,6 +141,7 @@ class GradientMapEffect : LecEffect {
                     red = stop.red.coerceIn(0f, 1f),
                     green = stop.green.coerceIn(0f, 1f),
                     blue = stop.blue.coerceIn(0f, 1f),
+                    alpha = stop.alpha.coerceIn(0f, 1f),
                 )
             }.sortedBy(GradientColorStop::position)
         }
@@ -152,6 +155,7 @@ class GradientMapEffect : LecEffect {
                     put("stop_${index}_red", stop.red.coerceIn(0f, 1f))
                     put("stop_${index}_green", stop.green.coerceIn(0f, 1f))
                     put("stop_${index}_blue", stop.blue.coerceIn(0f, 1f))
+                    put("stop_${index}_alpha", stop.alpha.coerceIn(0f, 1f))
                 }
             }
         }
@@ -268,6 +272,16 @@ private class GradientMapShaderProgram(
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         drawColorFrame(program, inputTexId, presentationTimeUs) {
             program.setFloatsUniform("uMeta", floatArrayOf(stops.size.toFloat(), 0f, 0f, 0f))
+            program.setFloatsUniform(
+                "uAlpha03",
+                FloatArray(4) { index -> stops.getOrElse(index) { stops.last() }.alpha },
+            )
+            program.setFloatsUniform(
+                "uAlpha47",
+                FloatArray(4) { offset ->
+                    stops.getOrElse(offset + 4) { stops.last() }.alpha
+                },
+            )
             repeat(GradientMapEffect.MAX_STOPS) { index ->
                 val stop = stops.getOrElse(index) { stops.last() }
                 program.setFloatsUniform(
@@ -427,6 +441,8 @@ private const val GRADIENT_MAP_FRAGMENT_SHADER = """
     precision mediump float;
     uniform sampler2D uTexSampler;
     uniform vec4 uMeta;
+    uniform vec4 uAlpha03;
+    uniform vec4 uAlpha47;
     uniform vec4 uStop0;
     uniform vec4 uStop1;
     uniform vec4 uStop2;
@@ -437,24 +453,32 @@ private const val GRADIENT_MAP_FRAGMENT_SHADER = """
     uniform vec4 uStop7;
     varying vec2 vTexSamplingCoord;
 
-    vec3 applyInterval(vec3 mapped, float luminance, vec4 left, vec4 right, float enabled) {
+    vec4 applyInterval(
+      vec4 mapped,
+      float luminance,
+      vec4 left,
+      vec4 right,
+      float leftAlpha,
+      float rightAlpha,
+      float enabled
+    ) {
       float span = max(right.x - left.x, 0.0001);
       float blend = clamp((luminance - left.x) / span, 0.0, 1.0);
-      vec3 intervalColor = mix(left.yzw, right.yzw, blend);
+      vec4 intervalColor = mix(vec4(left.yzw, leftAlpha), vec4(right.yzw, rightAlpha), blend);
       return mix(mapped, intervalColor, enabled * step(left.x, luminance));
     }
 
     void main() {
       vec4 source = texture2D(uTexSampler, vTexSamplingCoord);
       float luminance = dot(source.rgb, vec3(0.299, 0.587, 0.114));
-      vec3 mapped = uStop0.yzw;
-      mapped = applyInterval(mapped, luminance, uStop0, uStop1, step(1.5, uMeta.x));
-      mapped = applyInterval(mapped, luminance, uStop1, uStop2, step(2.5, uMeta.x));
-      mapped = applyInterval(mapped, luminance, uStop2, uStop3, step(3.5, uMeta.x));
-      mapped = applyInterval(mapped, luminance, uStop3, uStop4, step(4.5, uMeta.x));
-      mapped = applyInterval(mapped, luminance, uStop4, uStop5, step(5.5, uMeta.x));
-      mapped = applyInterval(mapped, luminance, uStop5, uStop6, step(6.5, uMeta.x));
-      mapped = applyInterval(mapped, luminance, uStop6, uStop7, step(7.5, uMeta.x));
-      gl_FragColor = vec4(clamp(mapped, 0.0, 1.0), source.a);
+      vec4 mapped = vec4(uStop0.yzw, uAlpha03.x);
+      mapped = applyInterval(mapped, luminance, uStop0, uStop1, uAlpha03.x, uAlpha03.y, step(1.5, uMeta.x));
+      mapped = applyInterval(mapped, luminance, uStop1, uStop2, uAlpha03.y, uAlpha03.z, step(2.5, uMeta.x));
+      mapped = applyInterval(mapped, luminance, uStop2, uStop3, uAlpha03.z, uAlpha03.w, step(3.5, uMeta.x));
+      mapped = applyInterval(mapped, luminance, uStop3, uStop4, uAlpha03.w, uAlpha47.x, step(4.5, uMeta.x));
+      mapped = applyInterval(mapped, luminance, uStop4, uStop5, uAlpha47.x, uAlpha47.y, step(5.5, uMeta.x));
+      mapped = applyInterval(mapped, luminance, uStop5, uStop6, uAlpha47.y, uAlpha47.z, step(6.5, uMeta.x));
+      mapped = applyInterval(mapped, luminance, uStop6, uStop7, uAlpha47.z, uAlpha47.w, step(7.5, uMeta.x));
+      gl_FragColor = vec4(clamp(mapped.rgb, 0.0, 1.0), source.a * clamp(mapped.a, 0.0, 1.0));
     }
 """

@@ -34,7 +34,7 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
     val stops = GradientMapEffect.decodeStops(values)
     var expandedPoint by remember { mutableIntStateOf(-1) }
     val gradientColors = stops.map { stop ->
-        stop.position to Color(stop.red, stop.green, stop.blue)
+        stop.position to Color(stop.red, stop.green, stop.blue, stop.alpha)
     }.toTypedArray()
 
     Text("Color points", style = MaterialTheme.typography.titleSmall)
@@ -52,7 +52,7 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(32.dp).background(Color(stop.red, stop.green, stop.blue)).clickable {
+                    Modifier.size(32.dp).background(Color(stop.red, stop.green, stop.blue, stop.alpha)).clickable {
                         expandedPoint = if (expandedPoint == index) -1 else index
                     },
                 )
@@ -85,6 +85,9 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
             }
             GradientStopSlider("Blue", stop.blue) { value ->
                 onChange(GradientMapEffect.encodeStops(stops.replaced(index, stop.copy(blue = value))))
+            }
+            GradientStopSlider("Alpha", stop.alpha) { value ->
+                onChange(GradientMapEffect.encodeStops(stops.replaced(index, stop.copy(alpha = value))))
             }
         }
     }
@@ -122,5 +125,6 @@ private fun addGradientStop(stops: List<GradientColorStop>): List<GradientColorS
         red = (left.red + right.red) / 2f,
         green = (left.green + right.green) / 2f,
         blue = (left.blue + right.blue) / 2f,
+        alpha = (left.alpha + right.alpha) / 2f,
     )
 }
