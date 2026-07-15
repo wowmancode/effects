@@ -37,4 +37,15 @@ object PresetLibraryJson {
     fun encode(presets: List<EffectPreset>): String = json.encodeToString(presets)
 
     fun decode(value: String): List<EffectPreset> = json.decodeFromString(value)
+
+    /**
+     * Decodes a JSON payload that may hold either a single exported preset or a whole library,
+     * returning the presets it contains. Used when bulk-importing files unpacked from a zip.
+     */
+    fun decodeFlexible(value: String): List<EffectPreset> =
+        if (value.trimStart().startsWith("[")) {
+            json.decodeFromString<List<EffectPreset>>(value)
+        } else {
+            listOf(json.decodeFromString<EffectPreset>(value))
+        }
 }

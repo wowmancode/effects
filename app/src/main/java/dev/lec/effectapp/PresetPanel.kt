@@ -36,6 +36,7 @@ internal fun PresetPanel(
     onApply: (String, String) -> Unit,
     onRemove: (String) -> Unit,
     onImport: () -> Unit,
+    onImportZip: () -> Unit,
     onExport: (String) -> Unit,
     onBackupLibrary: () -> Unit,
     onRestoreLibrary: () -> Unit,
@@ -62,6 +63,9 @@ internal fun PresetPanel(
     }
     OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
         Text("Import preset")
+    }
+    OutlinedButton(onClick = onImportZip, modifier = Modifier.fillMaxWidth()) {
+        Text("Import preset zip")
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(

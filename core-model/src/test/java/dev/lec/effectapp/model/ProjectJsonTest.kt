@@ -121,4 +121,13 @@ class ProjectJsonTest {
         assertEquals(presets, PresetLibraryJson.decode(PresetLibraryJson.encode(presets)))
     }
 
+    @Test
+    fun decodeFlexibleReadsBothSinglePresetsAndLibraries() {
+        val single = EffectPreset("solo", "Solo look", effectSegments = listOf(TimelineSegment("", "glow", 0, 1_000)))
+        val library = listOf(EffectPreset("one", "First"), EffectPreset("two", "Second"))
+
+        assertEquals(listOf(single), PresetLibraryJson.decodeFlexible(PresetJson.encode(single)))
+        assertEquals(library, PresetLibraryJson.decodeFlexible(PresetLibraryJson.encode(library)))
+    }
+
 }

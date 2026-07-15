@@ -222,6 +222,29 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         persistPresets()
     }
 
+    /**
+     * Imports every preset found across a set of archive entries (e.g. the JSON files inside an
+     * imported zip). Each entry may be a single exported preset or a whole library. Malformed
+     * entries are skipped. Returns how many presets were added.
+     */
+    fun importPresetArchive(entries: List<String>): Int {
+        val decoded = entries.flatMap { raw ->
+            runCatching { PresetLibraryJson.decodeFlexible(raw) }.getOrDefault(emptyList())
+        }
+        if (decoded.isEmpty()) return 0
+        val imported = decoded.map { preset ->
+            preset.copy(
+                id = UUID.randomUUID().toString(),
+                thumbnailPath = null,
+                effectSegments = preset.effectSegments.map { it.copy(id = "") },
+                audioSegments = preset.audioSegments.map { it.copy(id = "") },
+            )
+        }
+        _project.value = _project.value.copy(presets = _project.value.presets + imported)
+        persistPresets()
+        return imported.size
+    }
+
     fun importPreset(json: String) {
         val decoded = PresetJson.decode(json)
         val imported = decoded.copy(

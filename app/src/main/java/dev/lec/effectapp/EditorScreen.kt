@@ -119,6 +119,26 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             }
         }
     }
+    val importPresetZip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            runCatching {
+                val entries = mutableListOf<String>()
+                context.contentResolver.openInputStream(it)?.use { input ->
+                    java.util.zip.ZipInputStream(input.buffered()).use { zip ->
+                        var entry = zip.nextEntry
+                        while (entry != null) {
+                            if (!entry.isDirectory && entry.name.endsWith(".json", ignoreCase = true)) {
+                                entries += zip.readBytes().decodeToString()
+                            }
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                        }
+                    }
+                }
+                viewModel.importPresetArchive(entries)
+            }
+        }
+    }
     val restorePresetLibrary = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
@@ -338,6 +358,11 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
             onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
             onImportPreset = { importPreset.launch(arrayOf("application/json", "text/json", "text/plain")) },
+            onImportPresetZip = {
+                importPresetZip.launch(
+                    arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"),
+                )
+            },
             onBackupPresetLibrary = { backupPresetLibrary.launch("effect-presets-backup.json") },
             onRestorePresetLibrary = { restorePresetLibrary.launch(arrayOf("application/json", "text/json", "text/plain")) },
             onExportPreset = { presetId ->
