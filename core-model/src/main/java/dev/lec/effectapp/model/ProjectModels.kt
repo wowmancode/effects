@@ -31,6 +31,7 @@ data class Clip(
     val transform: TransformSettings = TransformSettings(),
     val effectSegments: List<TimelineSegment> = emptyList(),
     val audioSegments: List<TimelineSegment> = emptyList(),
+    val mediaMissing: Boolean = false,
 ) {
     val durationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0)
 
@@ -41,6 +42,7 @@ data class Clip(
             displayName = displayName,
             trimStartMs = 0,
             trimEndMs = replacementDuration,
+            mediaMissing = false,
             effectSegments = effectSegments.map { it.forWholeClip(replacementDuration) },
             audioSegments = audioSegments.map { it.forWholeClip(replacementDuration) },
         )

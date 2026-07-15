@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
@@ -184,17 +185,34 @@ private fun PreviewPane(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier) {
-        AndroidView(
-            factory = {
-                PlayerView(it).apply {
-                    this.player = player
-                    useController = true
-                    onPlayerView(this)
-                }
-            },
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            update = { it.player = player },
-        )
+        val currentClip = project.clips.getOrNull(currentClipIndex)
+        if (currentClip?.mediaMissing == true) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(Color.Red),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Media not found.",
+                    color = Color.Black,
+                    style = MaterialTheme.typography.headlineMedium,
+                )
+            }
+        } else {
+            AndroidView(
+                factory = {
+                    PlayerView(it).apply {
+                        this.player = player
+                        useController = true
+                        onPlayerView(this)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                update = { it.player = player },
+            )
+        }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -203,7 +221,6 @@ private fun PreviewPane(
                 "Clip ${if (project.clips.isEmpty()) 0 else currentClipIndex + 1}/${project.clips.size}",
                 Modifier.weight(1f),
             )
-            val currentClip = project.clips.getOrNull(currentClipIndex)
             OutlinedButton(
                 onClick = { currentClip?.let { onReplaceMedia(it.id) } },
                 enabled = currentClip != null,

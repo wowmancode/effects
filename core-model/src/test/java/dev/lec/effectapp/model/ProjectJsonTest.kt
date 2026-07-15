@@ -81,6 +81,7 @@ class ProjectJsonTest {
         assertEquals("content://new", replaced.sourceUri)
         assertEquals("new.mp4", replaced.displayName)
         assertEquals(clip.transform, replaced.transform)
+        assertEquals(false, replaced.mediaMissing)
         assertEquals(0, replaced.trimStartMs)
         assertEquals(6_000, replaced.trimEndMs)
         assertEquals(clip.effectSegments.map { it.forWholeClip(6_000) }, replaced.effectSegments)

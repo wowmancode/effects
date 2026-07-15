@@ -155,6 +155,14 @@ fun EditPanel(
                             }
                         }
                         when (effect.id) {
+                            "plugin_video", "plugin_audio" -> PluginSourceEditor(
+                                source = segment.stringParams["source"].orEmpty(),
+                                audio = effect.id == "plugin_audio",
+                            ) { source ->
+                                viewModel.updateSegment(selectedClip.id, segment.id) {
+                                    it.copy(stringParams = it.stringParams + ("source" to source))
+                                }
+                            }
                             "color_curves" -> ColorCurvesEditor(editorParams) { params ->
                                 updateEditorParams(params)
                             }

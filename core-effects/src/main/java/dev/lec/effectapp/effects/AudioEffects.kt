@@ -46,6 +46,20 @@ class TremoloEffect : LecEffect {
     override fun toMediaEffect(values: Map<String, Float>): Effect? = null
 }
 
+class VibratoEffect : LecEffect {
+    override val id = "vibrato"
+    override val displayName = "Vibrato"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("rate_hz", "Rate (Hz)", 0.1f, 12f, 5f),
+        EffectParam("depth_ms", "Depth (ms)", 0f, 20f, 6f),
+        EffectParam("mix", "Wet mix", 0f, 1f, 1f),
+    )
+
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
+
 class BitcrushEffect : LecEffect {
     override val id = "bitcrush"
     override val displayName = "Bitcrush"

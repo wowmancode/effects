@@ -58,11 +58,12 @@ class AudioDspTest {
     }
 
     @Test
-    fun tremoloAndBitcrushAreRegistered() {
+    fun modulationAndBitcrushEffectsAreRegistered() {
         val ids = EffectRegistry.byCategory(EffectCategory.AUDIO).map { it.id }.toSet()
 
         assertTrue("tremolo" in ids)
         assertTrue("bitcrush" in ids)
+        assertTrue("vibrato" in ids)
     }
 
     @Test
@@ -80,6 +81,21 @@ class AudioDspTest {
         val atTrough = state.process(20_000, 50, 0)
 
         assertTrue(atStart > atTrough)
+    }
+
+    @Test
+    fun vibratoUsesAModulatedDelayLine() {
+        val segment = TimelineSegment(
+            id = "vibrato",
+            effectId = "vibrato",
+            startMs = 0,
+            endMs = 1_000,
+            params = mapOf("rate_hz" to 5f, "depth_ms" to 6f, "mix" to 1f),
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+
+        assertEquals(0, state.process(20_000, 0, 0))
+        assertTrue(requireNotNull(EffectRegistry.byId("vibrato")).params.any { it.id == "depth_ms" })
     }
 
     @Test

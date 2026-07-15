@@ -12,8 +12,10 @@ import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
+import dev.lec.effectapp.effects.DEFAULT_VIDEO_PLUGIN_SOURCE
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.audioProcessorFor
+import dev.lec.effectapp.effects.videoPluginEffect
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import kotlin.math.ceil
@@ -66,7 +68,12 @@ object ProjectCompositionFactory {
         }
         // Visual effects are deliberately clip-wide. List order is stack order and is unbounded.
         clip.effectSegments.filter { it.enabled }.forEach { segment ->
-            EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))?.let(result::add)
+            val mediaEffect = if (segment.effectId == "plugin_video") {
+                videoPluginEffect(segment.stringParams["source"] ?: DEFAULT_VIDEO_PLUGIN_SOURCE)
+            } else {
+                EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))
+            }
+            mediaEffect?.let(result::add)
         }
         return result
     }

@@ -218,7 +218,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     LaunchedEffect(player, previewEntries, project.clips.map { it.id to it.durationMs }) {
         while (true) {
             val entry = previewEntries.getOrNull(player.currentMediaItemIndex.coerceAtLeast(0))
-            if (entry != null) {
+            if (entry != null && project.clips.getOrNull(currentClipIndex)?.mediaMissing != true) {
                 currentClipIndex = entry.clipIndex
                 playerPositionMs = project.clips.take(entry.clipIndex).sumOf { it.durationMs } +
                     entry.outputStartMs + player.currentPosition.coerceIn(0, entry.durationMs)
@@ -240,20 +240,35 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     val previewClipStartMs = project.clips.take(currentClipIndex).sumOf { it.durationMs }
     val previewLocalMs = (playerPositionMs - previewClipStartMs).coerceAtLeast(0)
-    val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
-    val animationFrame = if (previewClip?.effectSegments.orEmpty().any { it.keyframes.isNotEmpty() }) previewLocalMs / 80 else -1L
-    LaunchedEffect(player, currentClipIndex, previewEffectKey) {
+    val previewStructureKey = previewClip?.let { clip ->
+        val transformEnabled = clip.transform.run {
+            scale != 1f || rotationDegrees != 0f || offsetX != 0f || offsetY != 0f
+        }
+        listOf<Any?>(
+            clip.id,
+            transformEnabled,
+            clip.effectSegments.filter { it.enabled }.map { it.effectId },
+        )
+    }
+    val animationFrame = if (previewClip?.effectSegments.orEmpty().any { it.keyframes.isNotEmpty() }) previewLocalMs / 160 else -1L
+    val previewParameterKey = previewClip?.let { listOf(it.transform, it.effectSegments, animationFrame) }
+    var appliedPreviewStructure by remember(player) { mutableStateOf<List<Any?>?>(null) }
+    LaunchedEffect(player, currentClipIndex, previewStructureKey) {
         val clip = previewClip ?: return@LaunchedEffect
-        // Avoid rebuilding the GL chain dozens of times per second while a slider is dragged.
+        // Only stack shape changes tear down the decoder/GL pipeline.
         delay(160)
         rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs))
+        appliedPreviewStructure = previewStructureKey
     }
 
-    LaunchedEffect(player, currentClipIndex, previewEffectKey, animationFrame) {
-        if (animationFrame < 0) return@LaunchedEffect
+    LaunchedEffect(player, currentClipIndex, previewStructureKey, previewParameterKey) {
         val clip = previewClip ?: return@LaunchedEffect
-        // Parameter-only animation updates keep the existing player and decoder alive.
-        player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs))
+        if (appliedPreviewStructure != previewStructureKey) return@LaunchedEffect
+        // Coalesce slider drags and keyframe ticks, and never overlap a structural rebuild.
+        delay(if (animationFrame >= 0) 24 else 100)
+        if (appliedPreviewStructure == previewStructureKey && player.playbackState != Player.STATE_IDLE) {
+            runCatching { player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs)) }
+        }
     }
     Scaffold(
         topBar = {
@@ -277,7 +292,16 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             playerPositionMs = playerPositionMs,
             onAddClip = { addClip.launch(arrayOf("video/*")) },
             onEmptyLane = { clipId, startMs, category -> pendingSegment = PendingSegment(clipId, startMs, category) },
-            onSeek = { seekPreview(player, project, previewEntries, it) },
+            onSeek = { position ->
+                val targetIndex = clipIndexAt(project, position)
+                currentClipIndex = targetIndex
+                playerPositionMs = position
+                if (project.clips.getOrNull(targetIndex)?.mediaMissing == true) {
+                    player.pause()
+                } else {
+                    seekPreview(player, project, previewEntries, position)
+                }
+            },
             onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
             onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
             onImportPreset = { importPreset.launch(arrayOf("application/json", "text/json", "text/plain")) },
@@ -523,6 +547,7 @@ private data class PreviewEntry(
 
 private fun buildPreviewEntries(project: EditProject): List<PreviewEntry> = buildList {
     project.clips.forEachIndexed { clipIndex, clip ->
+        if (clip.mediaMissing) return@forEachIndexed
         val reversed = clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" }
         val sliceMs = maxOf(100L, (clip.durationMs + 299L) / 300L)
         val sourceSlices = if (reversed) {
@@ -554,6 +579,15 @@ private fun buildPreviewEntries(project: EditProject): List<PreviewEntry> = buil
         }
     }
 }
+private fun clipIndexAt(project: EditProject, globalMs: Long): Int {
+    var elapsed = 0L
+    project.clips.forEachIndexed { index, clip ->
+        if (globalMs < elapsed + clip.durationMs) return index
+        elapsed += clip.durationMs
+    }
+    return project.clips.lastIndex
+}
+
 
 private fun seekPreview(
     player: ExoPlayer,

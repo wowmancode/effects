@@ -1,8 +1,11 @@
 package dev.lec.effectapp
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import dev.lec.effectapp.effects.EffectCategory
+import dev.lec.effectapp.effects.DEFAULT_AUDIO_PLUGIN_SOURCE
+import dev.lec.effectapp.effects.DEFAULT_VIDEO_PLUGIN_SOURCE
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
@@ -83,6 +86,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             startMs = 0,
             endMs = clip.durationMs,
             params = effect.params.associate { it.id to it.default },
+            stringParams = when (effectId) {
+                "plugin_video" -> mapOf("source" to DEFAULT_VIDEO_PLUGIN_SOURCE)
+                "plugin_audio" -> mapOf("source" to DEFAULT_AUDIO_PLUGIN_SOURCE)
+                else -> emptyMap()
+            },
         )
         updateClip(clipId) {
             if (isAudio) copy(audioSegments = audioSegments + segment)
@@ -223,7 +231,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             .toList()
         _project.value = loaded.copy(
             presets = mergedPresets,
-            clips = loaded.clips.map { clip ->
+            clips = loaded.clips.map { importedClip ->
+                val clip = importedClip.copy(mediaMissing = !canReadMedia(importedClip.sourceUri))
                 clip.copy(
                     effectSegments = clip.effectSegments.map { it.forWholeClip(clip.durationMs) },
                     audioSegments = clip.audioSegments.map { it.forWholeClip(clip.durationMs) },
@@ -237,6 +246,21 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun updateClip(id: String, transform: Clip.() -> Clip) {
         _project.value = _project.value.copy(clips = _project.value.clips.map { if (it.id == id) it.transform() else it })
     }
+
+    private fun canReadMedia(source: String): Boolean = runCatching {
+        val uri = Uri.parse(source)
+        when (uri.scheme?.lowercase()) {
+            "http", "https" -> true
+            "content", "file", "android.resource" -> {
+                getApplication<Application>().contentResolver
+                    .openAssetFileDescriptor(uri, "r")
+                    ?.use { true }
+                    ?: false
+            }
+            null -> java.io.File(source).isFile
+            else -> false
+        }
+    }.getOrDefault(false)
 
     private fun persistPresets() {
         runCatching { presetFile.writeText(PresetLibraryJson.encode(_project.value.presets)) }
