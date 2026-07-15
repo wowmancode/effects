@@ -10,7 +10,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - Gradient maps now support an alpha channel for every color point. Alpha is
-  interpolated with the RGB channels and multiplied by the source alpha.
+  interpolated with the RGB channels and controls the mapped color's opacity over
+  the original frame.
 - Eight keyframeable controls for every video and audio plug-in.
 - Video plug-in helpers for neighboring-pixel sampling, coordinate warping,
   mirroring, pixelation, and difference, multiply, screen, overlay, add, subtract,
@@ -25,6 +26,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Older RGB-only gradient-map projects and presets load as fully opaque RGBA maps.
 - The next Android package version is 0.7.0 with version code 7.
+
+### Fixed
+
+- Gradient-map alpha could expose a purple preview surface or freeze playback by
+  emitting partially transparent video frames.
 
 ## [0.6.0] - 2026-07-15
 

@@ -479,6 +479,9 @@ private const val GRADIENT_MAP_FRAGMENT_SHADER = """
       mapped = applyInterval(mapped, luminance, uStop4, uStop5, uAlpha47.x, uAlpha47.y, step(5.5, uMeta.x));
       mapped = applyInterval(mapped, luminance, uStop5, uStop6, uAlpha47.y, uAlpha47.z, step(6.5, uMeta.x));
       mapped = applyInterval(mapped, luminance, uStop6, uStop7, uAlpha47.z, uAlpha47.w, step(7.5, uMeta.x));
-      gl_FragColor = vec4(clamp(mapped.rgb, 0.0, 1.0), source.a * clamp(mapped.a, 0.0, 1.0));
+      // Video output surfaces are not reliable transparency compositors. Treat the
+      // mapped alpha as effect opacity and retain the source frame's alpha.
+      vec3 color = mix(source.rgb, clamp(mapped.rgb, 0.0, 1.0), clamp(mapped.a, 0.0, 1.0));
+      gl_FragColor = vec4(color, source.a);
     }
 """

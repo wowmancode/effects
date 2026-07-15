@@ -43,6 +43,7 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
             .background(Brush.horizontalGradient(*gradientColors)),
     )
     Text("Maps the darkest pixels on the left to the brightest pixels on the right.")
+    Text("Alpha controls the mapped color's opacity without making the video frame transparent.")
 
     stops.forEachIndexed { index, stop ->
         Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
