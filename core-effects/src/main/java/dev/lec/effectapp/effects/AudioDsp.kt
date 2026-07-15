@@ -147,6 +147,7 @@ private class TremoloDspState(private val segment: TimelineSegment) : AudioDspSt
 private class VibratoDspState(
     private val segment: TimelineSegment,
     private val sampleRate: Int,
+    private val channels: Int,
 ) : AudioDspState {
     private val buffer = ShortArray((sampleRate * 0.05f * channels).toInt().coerceAtLeast(channels * 2))
     private var writeIndex = 0
