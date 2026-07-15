@@ -209,6 +209,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun encodePreset(id: String): String? =
         _project.value.presets.find { it.id == id }?.let(PresetJson::encode)
 
+    fun encodePresetLibrary(): String =
+        PresetLibraryJson.encode(_project.value.presets.map { it.copy(thumbnailPath = null) })
+
+    fun importPresetLibrary(json: String) {
+        val restored = PresetLibraryJson.decode(json).map { it.copy(thumbnailPath = null) }
+        val merged = (_project.value.presets + restored)
+            .associateBy { it.id }
+            .values
+            .toList()
+        _project.value = _project.value.copy(presets = merged)
+        persistPresets()
+    }
+
     fun importPreset(json: String) {
         val decoded = PresetJson.decode(json)
         val imported = decoded.copy(

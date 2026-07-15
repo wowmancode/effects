@@ -37,12 +37,15 @@ internal fun PresetPanel(
     onRemove: (String) -> Unit,
     onImport: () -> Unit,
     onExport: (String) -> Unit,
+    onBackupLibrary: () -> Unit,
+    onRestoreLibrary: () -> Unit,
 ) {
     var search by remember { mutableStateOf("") }
     var namingPreset by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }
     Text("Presets", style = MaterialTheme.typography.titleMedium)
     Text("Presets save the current clip's complete video and audio effect stacks.")
+    Text("Android may clear local data when the app is deleted. Keep an external backup to guarantee recovery.")
     OutlinedTextField(
         value = search,
         onValueChange = { search = it },
@@ -59,6 +62,16 @@ internal fun PresetPanel(
     }
     OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
         Text("Import preset")
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = onBackupLibrary,
+            modifier = Modifier.weight(1f),
+        ) { Text("Backup all") }
+        OutlinedButton(
+            onClick = onRestoreLibrary,
+            modifier = Modifier.weight(1f),
+        ) { Text("Restore backup") }
     }
     if (targetClipId == null) {
         Text("Select or preview a clip before saving or applying a preset.")

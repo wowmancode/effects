@@ -10,6 +10,7 @@ import java.nio.ByteBuffer
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.round
@@ -53,7 +54,7 @@ internal fun createAudioDspState(
     "tremolo" -> TremoloDspState(segment)
     "vibrato" -> VibratoDspState(segment, sampleRate, channels)
     "bitcrush" -> BitcrushDspState(segment, sampleRate, channels)
-    "plugin_audio" -> AudioPluginDspState(segment, sampleRate)
+    "plugin_audio" -> AudioPluginDspState(segment, sampleRate, channels)
     "reverse_audio" -> GrainReverseDspState(segment, sampleRate, channels)
     "pitch_change" -> PitchDspState.single(segment, sampleRate, channels)
     "split_pitch" -> PitchDspState.split(segment, sampleRate, channels)
@@ -195,29 +196,85 @@ private class BitcrushDspState(
 private class AudioPluginDspState(
     private val segment: TimelineSegment,
     private val sampleRate: Int,
-
+    private val channels: Int,
 ) : AudioDspState {
-    private val program = compileAudioPlugin(
-        segment.stringParams["source"] ?: DEFAULT_AUDIO_PLUGIN_SOURCE,
-    )
+    private val program = compileAudioPlugin(segment.stringParams["source"] ?: DEFAULT_AUDIO_PLUGIN_SOURCE)
+    private val history = FloatArray((sampleRate * 2 * channels).coerceAtLeast(channels * 2))
+    private val pitchWindowFrames = (sampleRate * 0.05f).toInt().coerceIn(1024, 4096)
+    private var writeIndex = 0
+    private var currentTimeMs = 0L
 
     private val variables = mutableMapOf(
         "sample" to 0f,
         "channel" to 0f,
         "time" to 0f,
         "sample_rate" to sampleRate.toFloat(),
-    )
+    ).apply {
+        (1..8).forEach { index ->
+            this["control$index"] = segment.params["control$index"] ?: if (index == 1) 1f else 0f
+        }
+    }
+
+    private val runtime = PluginRuntime { name, arguments ->
+        when (name) {
+            "delay" -> readDelayMs(arguments[0])
+            "pitch" -> readPitch(arguments[0])
+            "sine" -> sin(oscillatorPhase(arguments[0]) * 2f * PI.toFloat())
+            "square" -> if (oscillatorPhase(arguments[0]) < 0.5f) 1f else -1f
+            "saw" -> oscillatorPhase(arguments[0]) * 2f - 1f
+            "triangle" -> 1f - 4f * abs(oscillatorPhase(arguments[0]) - 0.5f)
+            else -> null
+        }
+    }
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
-        if (timeMs !in segment.startMs until segment.endMs) return input
         val normalized = input / 32768f
+        currentTimeMs = timeMs
         variables["sample"] = normalized
         variables["channel"] = channel.toFloat()
         variables["time"] = timeMs / 1_000f
-        program.evaluateInPlace(variables)
+        (1..8).forEach { index ->
+            variables["control$index"] = segment.params["control$index"] ?: if (index == 1) 1f else 0f
+        }
+        if (timeMs in segment.startMs until segment.endMs) {
+            program.evaluateInPlace(variables, runtime)
+        }
         val output = variables["sample"] ?: normalized
         val safe = if (output.isFinite()) output.coerceIn(-1f, 1f) else 0f
+        history[writeIndex] = safe
+        writeIndex = (writeIndex + 1) % history.size
         return (safe * 32767f).toInt()
+    }
+
+    private fun oscillatorPhase(frequency: Float): Float {
+        val cycles = currentTimeMs / 1_000f * frequency.coerceIn(-20_000f, 20_000f)
+        return cycles - floor(cycles)
+    }
+
+    private fun readDelayMs(delayMs: Float): Float {
+        val frames = sampleRate * delayMs.coerceIn(0f, 2_000f) / 1_000f
+        return readHistory(frames)
+    }
+
+    private fun readPitch(semitones: Float): Float {
+        val ratio = 2.0.pow(semitones.coerceIn(-24f, 24f).toDouble() / 12.0).toFloat()
+        if (abs(ratio - 1f) < 0.0001f) return readHistory(1f)
+        val elapsedFrames = currentTimeMs * sampleRate / 1_000f
+        val firstPhase = wrapUnit(elapsedFrames * (1f - ratio) / pitchWindowFrames)
+        val secondPhase = wrapUnit(firstPhase + 0.5f)
+        val first = readHistory(firstPhase * (pitchWindowFrames - 2)) * hann(firstPhase)
+        val second = readHistory(secondPhase * (pitchWindowFrames - 2)) * hann(secondPhase)
+        return first + second
+    }
+
+    private fun readHistory(delayFrames: Float): Float {
+        val delaySamples = delayFrames.coerceIn(1f, (history.size / channels - 1).toFloat()) * channels
+        var read = writeIndex - delaySamples
+        while (read < 0f) read += history.size
+        val first = read.toInt() % history.size
+        val second = (first + channels) % history.size
+        val fraction = read - read.toInt()
+        return history[first] * (1f - fraction) + history[second] * fraction
     }
 }
 

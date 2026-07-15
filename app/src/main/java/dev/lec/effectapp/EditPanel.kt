@@ -39,6 +39,8 @@ fun EditPanel(
     currentClipId: String?,
     onSavePreset: (String, String) -> Unit,
     onImportPreset: () -> Unit,
+    onBackupPresetLibrary: () -> Unit,
+    onRestorePresetLibrary: () -> Unit,
     onExportPreset: (String) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
@@ -67,6 +69,8 @@ fun EditPanel(
                     onRemove = viewModel::removePreset,
                     onImport = onImportPreset,
                     onExport = onExportPreset,
+                    onBackupLibrary = onBackupPresetLibrary,
+                    onRestoreLibrary = onRestorePresetLibrary,
                 )
                 selection == null -> Text("Select a clip to edit its effect stack.")
                 activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> TransformEditor(viewModel, selectedClip)
@@ -155,12 +159,24 @@ fun EditPanel(
                             }
                         }
                         when (effect.id) {
-                            "plugin_video", "plugin_audio" -> PluginSourceEditor(
-                                source = segment.stringParams["source"].orEmpty(),
-                                audio = effect.id == "plugin_audio",
-                            ) { source ->
-                                viewModel.updateSegment(selectedClip.id, segment.id) {
-                                    it.copy(stringParams = it.stringParams + ("source" to source))
+                            "plugin_video", "plugin_audio" -> {
+                                PluginSourceEditor(
+                                    source = segment.stringParams["source"].orEmpty(),
+                                    audio = effect.id == "plugin_audio",
+                                ) { source ->
+                                    viewModel.updateSegment(selectedClip.id, segment.id) {
+                                        it.copy(stringParams = it.stringParams + ("source" to source))
+                                    }
+                                }
+                                effect.params.forEach { parameter ->
+                                    val value = editorParams[parameter.id] ?: parameter.default
+                                    ParameterSlider(
+                                        parameter.displayName,
+                                        value,
+                                        parameter.min..parameter.max,
+                                    ) { updated ->
+                                        updateEditorParams(editorParams + (parameter.id to updated))
+                                    }
                                 }
                             }
                             "color_curves" -> ColorCurvesEditor(editorParams) { params ->

@@ -69,7 +69,10 @@ object ProjectCompositionFactory {
         // Visual effects are deliberately clip-wide. List order is stack order and is unbounded.
         clip.effectSegments.filter { it.enabled }.forEach { segment ->
             val mediaEffect = if (segment.effectId == "plugin_video") {
-                videoPluginEffect(segment.stringParams["source"] ?: DEFAULT_VIDEO_PLUGIN_SOURCE)
+                videoPluginEffect(
+                    segment.stringParams["source"] ?: DEFAULT_VIDEO_PLUGIN_SOURCE,
+                    segment.paramsAt(timeMs),
+                )
             } else {
                 EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))
             }

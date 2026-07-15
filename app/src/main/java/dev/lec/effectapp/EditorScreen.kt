@@ -119,6 +119,22 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             }
         }
     }
+    val restorePresetLibrary = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
+                runCatching { viewModel.importPresetLibrary(reader.readText()) }
+            }
+        }
+    }
+    val backupPresetLibrary = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        uri?.let {
+            context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer ->
+                writer.write(viewModel.encodePresetLibrary())
+            }
+        }
+    }
     val exportPreset = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
@@ -322,6 +338,8 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             onAddVisualEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.EFFECTS) },
             onAddAudioEffect = { clipId -> pendingSegment = PendingSegment(clipId, 0, EffectCategory.AUDIO) },
             onImportPreset = { importPreset.launch(arrayOf("application/json", "text/json", "text/plain")) },
+            onBackupPresetLibrary = { backupPresetLibrary.launch("effect-presets-backup.json") },
+            onRestorePresetLibrary = { restorePresetLibrary.launch(arrayOf("application/json", "text/json", "text/plain")) },
             onExportPreset = { presetId ->
                 val preset = project.presets.find { it.id == presetId }
                 if (preset != null) {
