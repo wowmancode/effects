@@ -45,14 +45,24 @@ object OverlayBitmapCache {
     }
 
     /** Grabs a representative frame so a video overlay shows as a still poster in the preview. */
-    private fun decodeVideoFrame(context: Context, uri: Uri): Bitmap? = runCatching {
-        MediaMetadataRetriever().use { retriever ->
+    private fun decodeVideoFrame(context: Context, uri: Uri): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
             retriever.setDataSource(context, uri)
-            val frame = retriever.getFrameAtTime(0) ?: return null
-            val largest = maxOf(frame.width, frame.height)
-            if (largest <= MAX_DIMENSION) return frame
-            val scale = MAX_DIMENSION.toFloat() / largest
-            Bitmap.createScaledBitmap(frame, (frame.width * scale).toInt(), (frame.height * scale).toInt(), true)
+            val frame = retriever.getFrameAtTime(0)
+            val largest = if (frame == null) 0 else maxOf(frame.width, frame.height)
+            when {
+                frame == null -> null
+                largest <= MAX_DIMENSION -> frame
+                else -> {
+                    val scale = MAX_DIMENSION.toFloat() / largest
+                    Bitmap.createScaledBitmap(frame, (frame.width * scale).toInt(), (frame.height * scale).toInt(), true)
+                }
+            }
+        } catch (exception: Exception) {
+            null
+        } finally {
+            retriever.release()
         }
-    }.getOrNull()
+    }
 }
