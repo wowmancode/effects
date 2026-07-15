@@ -7,11 +7,14 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -21,6 +24,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.lec.effectapp.effects.EffectCategory
@@ -45,6 +49,7 @@ fun EditPanel(
     onExportPreset: (String) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
+    onAddImageOverlay: (String) -> Unit,
 ) {
     var activeCategory by remember(selection) { mutableStateOf(selection?.category ?: EffectCategory.EFFECTS) }
     var presetsActive by remember { mutableStateOf(false) }
@@ -75,7 +80,10 @@ fun EditPanel(
                     onRestoreLibrary = onRestorePresetLibrary,
                 )
                 selection == null -> Text("Select a clip to edit its effect stack.")
-                activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> TransformEditor(viewModel, selectedClip)
+                activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> {
+                    TransformEditor(viewModel, selectedClip)
+                    OverlaySection(viewModel, selectedClip, onAddImageOverlay)
+                }
                 activeCategory == EffectCategory.EFFECTS && selectedClip != null && selection.segmentId == null -> {
                     VisualEffectStack(viewModel, selectedClip, onAddVisualEffect)
                 }
@@ -283,6 +291,46 @@ private fun TransformEditor(viewModel: EditorViewModel, clip: Clip) {
 }
 
 @Composable
+private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddImageOverlay: (String) -> Unit) {
+    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+    Text("Image overlays", style = MaterialTheme.typography.titleMedium)
+    Text("Composite a PNG or JPG on this clip. Adjust position, opacity, and when it appears.")
+    OutlinedButton(onClick = { onAddImageOverlay(clip.id) }, modifier = Modifier.fillMaxWidth()) {
+        Text("+ Add image overlay")
+    }
+    if (clip.overlays.isEmpty()) {
+        Text("No overlays on this clip yet.")
+    }
+    val maxSeconds = (clip.durationMs / 1000f).coerceAtLeast(0.1f)
+    clip.overlays.forEach { overlay ->
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(overlay.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = { viewModel.removeOverlay(clip.id, overlay.id) }) { Text("Delete") }
+            }
+            ParameterSlider("Opacity", overlay.alpha, 0f..1f) { newValue ->
+                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(alpha = newValue) }
+            }
+            ParameterSlider("Size", overlay.scale, 0.1f..3f) { newValue ->
+                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(scale = newValue) }
+            }
+            ParameterSlider("Horizontal position", overlay.offsetX, -1f..1f) { newValue ->
+                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(offsetX = newValue) }
+            }
+            ParameterSlider("Vertical position", overlay.offsetY, -1f..1f) { newValue ->
+                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(offsetY = newValue) }
+            }
+            ParameterSlider("Start (seconds)", overlay.startMs / 1000f, 0f..maxSeconds) { newValue ->
+                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(startMs = (newValue * 1000).toLong()) }
+            }
+            ParameterSlider("End (seconds)", overlay.endMs / 1000f, 0f..maxSeconds) { newValue ->
+                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(endMs = (newValue * 1000).toLong()) }
+            }
+        }
+    }
+}
+
+@Composable
 private fun RowScope.CategoryButton(
     label: String,
     category: EffectCategory,
@@ -296,14 +344,42 @@ private fun RowScope.CategoryButton(
 @Composable
 private fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
     var sliderValue by remember(value, range.start, range.endInclusive) { mutableFloatStateOf(value) }
-    Text("$label: ${"%.2f".format(sliderValue)}")
+    var text by remember(value) { mutableStateOf(formatParam(value)) }
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, Modifier.weight(1f))
+        OutlinedTextField(
+            value = text,
+            onValueChange = { entry ->
+                text = entry
+                entry.toFloatOrNull()?.let { typed ->
+                    val clamped = typed.coerceIn(range.start, range.endInclusive)
+                    sliderValue = clamped
+                    onChange(clamped)
+                }
+            },
+            singleLine = true,
+            modifier = Modifier.width(104.dp),
+        )
+    }
     Slider(
         value = sliderValue.coerceIn(range.start, range.endInclusive),
-        onValueChange = { sliderValue = it },
+        onValueChange = { sliderValue = it; text = formatParam(it) },
         onValueChangeFinished = { onChange(sliderValue) },
         valueRange = range,
     )
 }
+
+/** Formats a slider value for the type-in field: whole numbers stay clean, decimals keep 3 places. */
+internal fun formatParam(value: Float): String =
+    if (value % 1f == 0f) {
+        value.toInt().toString()
+    } else {
+        String.format(java.util.Locale.US, "%.3f", value).trimEnd('0').trimEnd('.')
+    }
 
 @Composable
 private fun BooleanParameterButton(label: String, enabled: Boolean, onChange: (Boolean) -> Unit) {

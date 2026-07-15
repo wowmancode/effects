@@ -130,4 +130,33 @@ class ProjectJsonTest {
         assertEquals(library, PresetLibraryJson.decodeFlexible(PresetLibraryJson.encode(library)))
     }
 
+    @Test
+    fun roundTripPreservesOverlays() {
+        val project = EditProject(
+            clips = listOf(
+                Clip(
+                    id = "clip",
+                    sourceUri = "content://video",
+                    displayName = "video",
+                    trimEndMs = 4_000,
+                    overlays = listOf(
+                        Overlay(
+                            id = "overlay",
+                            sourceUri = "content://logo.png",
+                            displayName = "logo.png",
+                            startMs = 500,
+                            endMs = 3_000,
+                            alpha = 0.6f,
+                            scale = 1.5f,
+                            offsetX = -0.25f,
+                            offsetY = 0.4f,
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(project, ProjectJson.decode(ProjectJson.encode(project)))
+    }
+
 }

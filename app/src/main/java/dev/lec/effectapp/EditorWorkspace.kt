@@ -42,6 +42,8 @@ internal fun EditorWorkspace(
     onAddClip: () -> Unit,
     onEmptyLane: (String, Long, EffectCategory) -> Unit,
     onAddVisualEffect: (String) -> Unit,
+    onAddImageOverlay: (String) -> Unit,
+    onSplitClip: () -> Unit,
     onPreviousClip: () -> Unit,
     onNextClip: () -> Unit,
     onAddAudioEffect: (String) -> Unit,
@@ -69,6 +71,7 @@ internal fun EditorWorkspace(
                     onNextClip = onNextClip,
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
+                    onSplitClip = onSplitClip,
                     onPlayerView = onPlayerView,
                     modifier = Modifier.weight(0.46f).fillMaxHeight(),
                 )
@@ -102,6 +105,7 @@ internal fun EditorWorkspace(
                             onExportPreset = onExportPreset,
                             onAddVisualEffect = onAddVisualEffect,
                             onAddAudioEffect = onAddAudioEffect,
+                            onAddImageOverlay = onAddImageOverlay,
                         )
                     } else {
                         EditorTimeline(
@@ -127,6 +131,7 @@ internal fun EditorWorkspace(
                     onNextClip = onNextClip,
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
+                    onSplitClip = onSplitClip,
                     modifier = Modifier.fillMaxWidth().weight(0.35f),
                     onPlayerView = onPlayerView,
                 )
@@ -156,6 +161,7 @@ internal fun EditorWorkspace(
                     onRestorePresetLibrary = onRestorePresetLibrary,
                     onExportPreset = onExportPreset,
                     onAddAudioEffect = onAddAudioEffect,
+                    onAddImageOverlay = onAddImageOverlay,
                 )
             }
         }
@@ -198,6 +204,7 @@ private fun PreviewPane(
     currentClipIndex: Int,
     onAddClip: () -> Unit,
     onReplaceMedia: (String) -> Unit,
+    onSplitClip: () -> Unit,
     onPlayerView: (PlayerView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -255,6 +262,12 @@ private fun PreviewPane(
                 enabled = currentClip != null,
             ) {
                 Text("Replace")
+            }
+            OutlinedButton(
+                onClick = onSplitClip,
+                enabled = currentClip != null,
+            ) {
+                Text("Split")
             }
             OutlinedButton(onClick = onAddClip) { Text("+ Clip") }
         }

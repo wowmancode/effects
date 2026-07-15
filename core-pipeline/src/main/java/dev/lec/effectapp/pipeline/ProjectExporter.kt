@@ -13,6 +13,7 @@ import dev.lec.effectapp.model.EditProject
 @OptIn(UnstableApi::class)
 class ProjectExporter(context: Context) {
     private var callback: Callback? = null
+    private val resolveBitmap = OverlayBitmapCache.resolver(context)
     private val transformer = Transformer.Builder(context)
         .addListener(
             object : Transformer.Listener {
@@ -36,7 +37,7 @@ class ProjectExporter(context: Context) {
     fun start(project: EditProject, outputPath: String, callback: Callback) {
         check(this.callback == null) { "An export is already running" }
         this.callback = callback
-        transformer.start(ProjectCompositionFactory.create(project), outputPath)
+        transformer.start(ProjectCompositionFactory.create(project, resolveBitmap), outputPath)
     }
 
     fun progress(): Int? {

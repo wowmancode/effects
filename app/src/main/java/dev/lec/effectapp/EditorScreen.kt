@@ -74,6 +74,7 @@ import dev.lec.effectapp.effects.PreviewAudioProcessor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.TimelineSegment
+import dev.lec.effectapp.pipeline.OverlayBitmapCache
 import dev.lec.effectapp.pipeline.ProjectCompositionFactory
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +96,8 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     var pendingSegment by remember { mutableStateOf<PendingSegment?>(null) }
     var pendingPresetExportId by remember { mutableStateOf<String?>(null) }
     var pendingReplaceClipId by remember { mutableStateOf<String?>(null) }
+    var pendingOverlayClipId by remember { mutableStateOf<String?>(null) }
+    val overlayResolver = remember { OverlayBitmapCache.resolver(context.applicationContext) }
 
     val scope = rememberCoroutineScope()
     var previewEntries by remember { mutableStateOf<List<PreviewEntry>>(emptyList()) }
@@ -178,6 +181,19 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             }
             val metadata = editorMetadata(context, uri)
             viewModel.replaceClipMedia(clipId, uri.toString(), metadata.first, metadata.second)
+        }
+    }
+    val addImageOverlay = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val clipId = pendingOverlayClipId
+        pendingOverlayClipId = null
+        if (uri != null && clipId != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            viewModel.addImageOverlay(clipId, uri.toString(), editorDisplayName(context, uri))
         }
     }
 
@@ -287,16 +303,17 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             clip.id,
             transformEnabled,
             clip.effectSegments.filter { it.enabled }.map { it.effectId },
+            clip.overlays.map { it.id to it.sourceUri },
         )
     }
     val animationFrame = if (previewClip?.effectSegments.orEmpty().any { it.keyframes.isNotEmpty() }) previewLocalMs / 160 else -1L
-    val previewParameterKey = previewClip?.let { listOf(it.transform, it.effectSegments, animationFrame) }
+    val previewParameterKey = previewClip?.let { listOf(it.transform, it.effectSegments, it.overlays, animationFrame) }
     var appliedPreviewStructure by remember(player) { mutableStateOf<List<Any?>?>(null) }
     LaunchedEffect(player, currentClipIndex, previewStructureKey) {
         val clip = previewClip ?: return@LaunchedEffect
         // Only stack shape changes tear down the decoder/GL pipeline.
         delay(160)
-        rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs))
+        rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs, overlayResolver))
         appliedPreviewStructure = previewStructureKey
     }
 
@@ -306,7 +323,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         // Coalesce slider drags and keyframe ticks, and never overlap a structural rebuild.
         delay(if (animationFrame >= 0) 24 else 100)
         if (appliedPreviewStructure == previewStructureKey && player.playbackState != Player.STATE_IDLE) {
-            runCatching { player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs)) }
+            runCatching { player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs, overlayResolver)) }
         }
     }
     val seekToClip: (Int) -> Unit = { requestedIndex ->
@@ -379,6 +396,13 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             onReplaceMedia = { clipId ->
                 pendingReplaceClipId = clipId
                 replaceMedia.launch(arrayOf("video/*"))
+            },
+            onAddImageOverlay = { clipId ->
+                pendingOverlayClipId = clipId
+                addImageOverlay.launch(arrayOf("image/*"))
+            },
+            onSplitClip = {
+                project.clips.getOrNull(currentClipIndex)?.let { viewModel.splitClip(it.id, previewLocalMs) }
             },
             onPreviousClip = { seekToClip(currentClipIndex - 1) },
             onNextClip = { seekToClip(currentClipIndex + 1) },
@@ -674,6 +698,11 @@ private fun seekPreview(
 
 
 private data class PendingSegment(val clipId: String, val startMs: Long, val category: EffectCategory)
+
+private fun editorDisplayName(context: Context, uri: Uri): String =
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    } ?: uri.lastPathSegment ?: "Overlay"
 
 private fun editorMetadata(context: Context, uri: Uri): Pair<String, Long> {
     val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->

@@ -31,6 +31,7 @@ data class Clip(
     val transform: TransformSettings = TransformSettings(),
     val effectSegments: List<TimelineSegment> = emptyList(),
     val audioSegments: List<TimelineSegment> = emptyList(),
+    val overlays: List<Overlay> = emptyList(),
     val mediaMissing: Boolean = false,
 ) {
     val durationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0)
@@ -48,6 +49,24 @@ data class Clip(
         )
     }
 }
+
+/**
+ * An image composited on top of a clip. Times are local to the clip. Position anchors and scale
+ * follow Media3 overlay conventions: offsets in [-1, 1] (0 = centered), alpha in [0, 1].
+ */
+@Serializable
+data class Overlay(
+    val id: String,
+    val sourceUri: String,
+    val displayName: String,
+    val isVideo: Boolean = false,
+    val startMs: Long = 0,
+    val endMs: Long = 0,
+    val alpha: Float = 1f,
+    val scale: Float = 1f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+)
 
 @Serializable
 data class TransformSettings(

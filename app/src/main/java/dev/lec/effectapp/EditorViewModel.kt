@@ -11,6 +11,7 @@ import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.EffectKeyframe
 import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.PresetLibraryJson
 import dev.lec.effectapp.model.ProjectJson
 import dev.lec.effectapp.model.PresetJson
@@ -62,6 +63,59 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun replaceClipMedia(id: String, uri: String, displayName: String, durationMs: Long) {
         updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
+    }
+
+    /** Snips [clipId] at [atLocalMs] (local to the clip) into two independent clips. */
+    fun splitClip(clipId: String, atLocalMs: Long) {
+        val clips = _project.value.clips
+        val index = clips.indexOfFirst { it.id == clipId }
+        if (index == -1) return
+        val clip = clips[index]
+        if (clip.durationMs <= 1) return
+        val split = atLocalMs.coerceIn(1, clip.durationMs - 1)
+        val boundary = clip.trimStartMs + split
+        val tailDuration = clip.durationMs - split
+        val first = clip.copy(
+            id = UUID.randomUUID().toString(),
+            trimEndMs = boundary,
+            effectSegments = clip.effectSegments.map { it.forWholeClip(split) },
+            audioSegments = clip.audioSegments.map { it.forWholeClip(split) },
+            overlays = clip.overlays.mapNotNull { it.clampedToRange(0, split, clip.durationMs) },
+        )
+        val second = clip.copy(
+            id = UUID.randomUUID().toString(),
+            trimStartMs = boundary,
+            effectSegments = clip.effectSegments.map { it.forWholeClip(tailDuration) },
+            audioSegments = clip.audioSegments.map { it.forWholeClip(tailDuration) },
+            overlays = clip.overlays.mapNotNull { it.shiftedInto(split, tailDuration, clip.durationMs) },
+        )
+        _project.value = _project.value.copy(
+            clips = clips.toMutableList().apply { set(index, first); add(index + 1, second) },
+        )
+        _selection.value = null
+    }
+
+    fun addImageOverlay(clipId: String, uri: String, displayName: String) {
+        updateClip(clipId) {
+            copy(
+                overlays = overlays + Overlay(
+                    id = UUID.randomUUID().toString(),
+                    sourceUri = uri,
+                    displayName = displayName,
+                    isVideo = false,
+                    startMs = 0,
+                    endMs = durationMs,
+                ),
+            )
+        }
+    }
+
+    fun updateOverlay(clipId: String, overlayId: String, transform: (Overlay) -> Overlay) {
+        updateClip(clipId) { copy(overlays = overlays.map { if (it.id == overlayId) transform(it) else it }) }
+    }
+
+    fun removeOverlay(clipId: String, overlayId: String) {
+        updateClip(clipId) { copy(overlays = overlays.filterNot { it.id == overlayId }) }
     }
 
     fun selectClip(id: String) {
@@ -301,6 +355,25 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun persistPresets() {
         runCatching { presetFile.writeText(PresetLibraryJson.encode(_project.value.presets)) }
     }
+}
+
+/** Keeps the part of an overlay that falls inside [start, end] of the first split half. */
+private fun Overlay.clampedToRange(start: Long, end: Long, clipDurationMs: Long): Overlay? {
+    val effectiveEnd = if (endMs <= startMs) clipDurationMs else endMs
+    val newStart = startMs.coerceIn(start, end)
+    val newEnd = effectiveEnd.coerceIn(start, end)
+    if (newEnd <= newStart) return null
+    return copy(startMs = newStart, endMs = newEnd)
+}
+
+/** Shifts an overlay into the second split half, dropping it if it ended before the cut. */
+private fun Overlay.shiftedInto(split: Long, tailDurationMs: Long, clipDurationMs: Long): Overlay? {
+    val effectiveEnd = if (endMs <= startMs) clipDurationMs else endMs
+    if (effectiveEnd <= split) return null
+    val newStart = (startMs - split).coerceIn(0, tailDurationMs)
+    val newEnd = (effectiveEnd - split).coerceIn(0, tailDurationMs)
+    if (newEnd <= newStart) return null
+    return copy(startMs = newStart, endMs = newEnd)
 }
 
 private fun List<TimelineSegment>.moved(segmentId: String, delta: Int): List<TimelineSegment> {
