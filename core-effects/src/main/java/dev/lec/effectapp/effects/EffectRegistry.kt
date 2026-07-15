@@ -4,6 +4,7 @@ object EffectRegistry {
     private val registered = listOf<LecEffect>(
         HueRotateEffect(),
         HslAdjustEffect(),
+        ColorCurvesEffect(),
         SharpenEffect(),
         GradientMapEffect(),
         GlowEffect(),
@@ -24,6 +25,8 @@ object EffectRegistry {
         MirrorEffect(),
         AudioEchoEffect(),
         ChorusEffect(),
+        TremoloEffect(),
+        BitcrushEffect(),
         PitchChangeEffect(),
         SplitPitchEffect(),
         VocoderEffect("vocoder_square", "Vocoder · square"),

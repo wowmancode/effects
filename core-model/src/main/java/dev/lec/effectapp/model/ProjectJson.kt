@@ -26,3 +26,15 @@ object PresetJson {
 
     fun decode(value: String): EffectPreset = json.decodeFromString<EffectPreset>(value).copy(thumbnailPath = null)
 }
+
+object PresetLibraryJson {
+    private val json = Json {
+        prettyPrint = true
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+
+    fun encode(presets: List<EffectPreset>): String = json.encodeToString(presets)
+
+    fun decode(value: String): List<EffectPreset> = json.decodeFromString(value)
+}

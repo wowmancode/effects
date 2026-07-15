@@ -18,6 +18,12 @@ class EffectRegistryTest {
         assertEquals(setOf("hue", "saturation", "lightness"), hsl.params.map { it.id }.toSet())
         assertTrue(hsl.params.all { it.min == 0f && it.max == 1f })
 
+        val curves = requireNotNull(EffectRegistry.byId("color_curves"))
+        assertEquals(12, curves.params.size)
+        assertTrue(curves.params.any { it.id == "master_midtones" })
+        assertTrue(curves.params.any { it.id == "red_shadows" })
+        assertTrue(curves.params.any { it.id == "blue_highlights" })
+
         val swirl = requireNotNull(EffectRegistry.byId("swirl"))
         assertEquals(setOf("degrees", "radius", "position_x", "position_y"), swirl.params.map { it.id }.toSet())
 

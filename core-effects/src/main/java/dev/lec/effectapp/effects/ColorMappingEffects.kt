@@ -37,6 +37,40 @@ class SharpenEffect : LecEffect {
 }
 
 @OptIn(UnstableApi::class)
+class ColorCurvesEffect : LecEffect {
+    override val id = "color_curves"
+    override val displayName = "Color curves"
+    override val category = EffectCategory.EFFECTS
+    override val params = listOf(
+        EffectParam("master_shadows", "Master shadows", -1f, 1f, 0f),
+        EffectParam("master_midtones", "Master midtones", -1f, 1f, 0f),
+        EffectParam("master_highlights", "Master highlights", -1f, 1f, 0f),
+        EffectParam("red_shadows", "Red shadows", -1f, 1f, 0f),
+        EffectParam("red_midtones", "Red midtones", -1f, 1f, 0f),
+        EffectParam("red_highlights", "Red highlights", -1f, 1f, 0f),
+        EffectParam("green_shadows", "Green shadows", -1f, 1f, 0f),
+        EffectParam("green_midtones", "Green midtones", -1f, 1f, 0f),
+        EffectParam("green_highlights", "Green highlights", -1f, 1f, 0f),
+        EffectParam("blue_shadows", "Blue shadows", -1f, 1f, 0f),
+        EffectParam("blue_midtones", "Blue midtones", -1f, 1f, 0f),
+        EffectParam("blue_highlights", "Blue highlights", -1f, 1f, 0f),
+    )
+
+    override fun toMediaEffect(values: Map<String, Float>): Effect = ColorCurvesGlEffect(
+        master = values.curveValues("master"),
+        red = values.curveValues("red"),
+        green = values.curveValues("green"),
+        blue = values.curveValues("blue"),
+    )
+}
+
+private fun Map<String, Float>.curveValues(prefix: String): FloatArray = floatArrayOf(
+    get("${prefix}_shadows") ?: 0f,
+    get("${prefix}_midtones") ?: 0f,
+    get("${prefix}_highlights") ?: 0f,
+)
+
+@OptIn(UnstableApi::class)
 class GradientMapEffect : LecEffect {
     override val id = "gradient_map"
     override val displayName = "Gradient map"
@@ -116,6 +150,44 @@ private class SharpenShaderProgram(
         drawColorFrame(program, inputTexId, presentationTimeUs) {
             program.setFloatsUniform("uTexel", floatArrayOf(texelX, texelY))
             program.setFloatsUniform("uParams", floatArrayOf(amount, radius, 0f, 0f))
+        }
+    }
+
+    override fun release() {
+        super.release()
+        deleteColorProgram(program)
+    }
+}
+
+@OptIn(UnstableApi::class)
+private class ColorCurvesGlEffect(
+    private val master: FloatArray,
+    private val red: FloatArray,
+    private val green: FloatArray,
+    private val blue: FloatArray,
+) : GlEffect {
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
+        ColorCurvesShaderProgram(useHdr, master, red, green, blue)
+}
+
+@OptIn(UnstableApi::class)
+private class ColorCurvesShaderProgram(
+    useHdr: Boolean,
+    private val master: FloatArray,
+    private val red: FloatArray,
+    private val green: FloatArray,
+    private val blue: FloatArray,
+) : BaseGlShaderProgram(useHdr, 1) {
+    private val program = createColorProgram(COLOR_CURVES_FRAGMENT_SHADER)
+
+    override fun configure(inputWidth: Int, inputHeight: Int): Size = Size(inputWidth, inputHeight)
+
+    override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
+        drawColorFrame(program, inputTexId, presentationTimeUs) {
+            program.setFloatsUniform("uMaster", master)
+            program.setFloatsUniform("uRed", red)
+            program.setFloatsUniform("uGreen", green)
+            program.setFloatsUniform("uBlue", blue)
         }
     }
 
@@ -228,6 +300,39 @@ private const val SHARPEN_FRAGMENT_SHADER = """
       neighbors += texture2D(uTexSampler, vTexSamplingCoord - vec2(0.0, offset.y)).rgb;
       vec3 sharpened = center.rgb * (1.0 + 4.0 * uParams.x) - neighbors * uParams.x;
       gl_FragColor = vec4(clamp(sharpened, 0.0, 1.0), center.a);
+    }
+"""
+
+private const val COLOR_CURVES_FRAGMENT_SHADER = """
+    precision mediump float;
+    uniform sampler2D uTexSampler;
+    uniform vec3 uMaster;
+    uniform vec3 uRed;
+    uniform vec3 uGreen;
+    uniform vec3 uBlue;
+    varying vec2 vTexSamplingCoord;
+
+    float applyCurve(float value, vec3 curve) {
+      float shadows = (1.0 - value) * (1.0 - value);
+      float midtones = 4.0 * value * (1.0 - value);
+      float highlights = value * value;
+      float adjustment = dot(vec3(shadows, midtones, highlights), curve) * 0.25;
+      return clamp(value + adjustment, 0.0, 1.0);
+    }
+
+    void main() {
+      vec4 source = texture2D(uTexSampler, vTexSamplingCoord);
+      vec3 masterColor = vec3(
+        applyCurve(source.r, uMaster),
+        applyCurve(source.g, uMaster),
+        applyCurve(source.b, uMaster)
+      );
+      vec3 curved = vec3(
+        applyCurve(masterColor.r, uRed),
+        applyCurve(masterColor.g, uGreen),
+        applyCurve(masterColor.b, uBlue)
+      );
+      gl_FragColor = vec4(curved, source.a);
     }
 """
 

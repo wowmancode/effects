@@ -56,4 +56,47 @@ class AudioDspTest {
         val custom = requireNotNull(EffectRegistry.byId("vocoder_custom"))
         assertFalse(custom.params.any { it.id == "frequency_hz" })
     }
+
+    @Test
+    fun tremoloAndBitcrushAreRegistered() {
+        val ids = EffectRegistry.byCategory(EffectCategory.AUDIO).map { it.id }.toSet()
+
+        assertTrue("tremolo" in ids)
+        assertTrue("bitcrush" in ids)
+    }
+
+    @Test
+    fun tremoloModulatesAmplitude() {
+        val segment = TimelineSegment(
+            id = "tremolo",
+            effectId = "tremolo",
+            startMs = 0,
+            endMs = 1_000,
+            params = mapOf("rate_hz" to 5f, "depth" to 1f, "mix" to 1f),
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+
+        val atStart = state.process(20_000, 0, 0)
+        val atTrough = state.process(20_000, 50, 0)
+
+        assertTrue(atStart > atTrough)
+    }
+
+    @Test
+    fun bitcrushHoldsAndQuantizesSamples() {
+        val segment = TimelineSegment(
+            id = "bitcrush",
+            effectId = "bitcrush",
+            startMs = 0,
+            endMs = 1_000,
+            params = mapOf("bit_depth" to 4f, "sample_rate" to 1_000f, "mix" to 1f),
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+
+        val first = state.process(12_345, 0, 0)
+        val held = state.process(-12_345, 1, 0)
+
+        assertEquals(first, held)
+        assertEquals(0, first % 4_096)
+    }
 }

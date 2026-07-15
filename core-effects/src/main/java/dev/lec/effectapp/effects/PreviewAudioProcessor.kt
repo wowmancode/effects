@@ -18,6 +18,7 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
     private var requestedRevision = 0
     private var appliedRevision = -1
     private var states: List<AudioDspState> = emptyList()
+    private var appliedParamSets: List<Map<String, Float>> = emptyList()
     private var sampleIndex = 0L
 
     fun setSegments(segments: List<TimelineSegment>) {
@@ -42,12 +43,17 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
         appliedSegments = emptyList()
         appliedRevision = -1
         states = emptyList()
+        appliedParamSets = emptyList()
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
-        if (requestedRevision != appliedRevision) rebuildStates()
-        val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
+        val currentTimeMs = (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
+        val currentParamSets = requestedSegments.map { it.paramsAt(currentTimeMs) }
+        if (requestedRevision != appliedRevision || currentParamSets != appliedParamSets) {
+            rebuildStates(currentTimeMs)
+        }
+        val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         while (inputBuffer.remaining() >= 2) {
             val channel = (sampleIndex % channels).toInt()
             val timeMs = (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
@@ -59,16 +65,19 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
         output.flip()
     }
 
-    private fun rebuildStates() {
+    private fun rebuildStates(timeMs: Long = 0) {
         val next = requestedSegments
         appliedSegments = next
         appliedRevision = requestedRevision
         if (inputAudioFormat == AudioProcessor.AudioFormat.NOT_SET) {
             states = emptyList()
+            appliedParamSets = emptyList()
             return
         }
-        states = next.mapNotNull {
-            createAudioDspState(it, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
+        appliedParamSets = next.map { it.paramsAt(timeMs) }
+        states = next.mapIndexedNotNull { index, segment ->
+            val resolved = segment.copy(params = appliedParamSets[index], keyframes = emptyList())
+            createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         }
     }
 }

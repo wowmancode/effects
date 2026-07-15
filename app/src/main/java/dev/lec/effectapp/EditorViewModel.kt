@@ -1,11 +1,14 @@
 package dev.lec.effectapp
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.EffectKeyframe
 import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.PresetLibraryJson
 import dev.lec.effectapp.model.ProjectJson
 import dev.lec.effectapp.model.PresetJson
 import dev.lec.effectapp.model.TimelineSegment
@@ -15,12 +18,20 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class EditorViewModel : ViewModel() {
+class EditorViewModel(application: Application) : AndroidViewModel(application) {
+    private val presetFile = application.filesDir.resolve("effect-presets.json")
     private val _project = MutableStateFlow(EditProject())
     val project: StateFlow<EditProject> = _project.asStateFlow()
 
     private val _selection = MutableStateFlow<Selection?>(null)
     val selection: StateFlow<Selection?> = _selection.asStateFlow()
+
+    init {
+        val savedPresets = runCatching {
+            if (presetFile.exists()) PresetLibraryJson.decode(presetFile.readText()) else emptyList()
+        }.getOrDefault(emptyList())
+        if (savedPresets.isNotEmpty()) _project.value = _project.value.copy(presets = savedPresets)
+    }
 
     fun addClip(uri: String, displayName: String, durationMs: Long) {
         val clip = Clip(
@@ -91,6 +102,30 @@ class EditorViewModel : ViewModel() {
         }
     }
 
+    fun addKeyframe(clipId: String, segmentId: String, timeMs: Long) {
+        updateSegment(clipId, segmentId) {
+            val time = timeMs.coerceIn(0, durationMs)
+            val keyframe = EffectKeyframe(time, paramsAt(time).toMap())
+            copy(keyframes = (keyframes.filterNot { it.timeMs == time } + keyframe).sortedBy { it.timeMs })
+        }
+    }
+
+    fun updateKeyframe(clipId: String, segmentId: String, timeMs: Long, params: Map<String, Float>) {
+        updateSegment(clipId, segmentId) {
+            copy(
+                keyframes = keyframes.map {
+                    if (it.timeMs == timeMs) it.copy(params = params) else it
+                },
+            )
+        }
+    }
+
+    fun removeKeyframe(clipId: String, segmentId: String, timeMs: Long) {
+        updateSegment(clipId, segmentId) {
+            copy(keyframes = keyframes.filterNot { it.timeMs == timeMs })
+        }
+    }
+
     fun moveSelectedSegment(delta: Int) {
         val selected = _selection.value ?: return
         val segmentId = selected.segmentId ?: return
@@ -127,24 +162,17 @@ class EditorViewModel : ViewModel() {
             audioSegments = clip.audioSegments.map { it.copy(id = "") },
         )
         _project.value = _project.value.copy(presets = _project.value.presets + preset)
+        persistPresets()
     }
 
     fun applyPreset(presetId: String, clipId: String) {
         val preset = _project.value.presets.find { it.id == presetId } ?: return
         val clip = _project.value.clips.find { it.id == clipId } ?: return
         val visual = preset.effectSegments.map {
-            it.copy(
-                id = UUID.randomUUID().toString(),
-                startMs = 0,
-                endMs = clip.durationMs,
-            )
+            it.copy(id = UUID.randomUUID().toString()).forWholeClip(clip.durationMs)
         }
         val audio = preset.audioSegments.map {
-            it.copy(
-                id = UUID.randomUUID().toString(),
-                startMs = 0,
-                endMs = clip.durationMs,
-            )
+            it.copy(id = UUID.randomUUID().toString()).forWholeClip(clip.durationMs)
         }
         updateClip(clipId) {
             copy(
@@ -164,6 +192,7 @@ class EditorViewModel : ViewModel() {
 
     fun removePreset(id: String) {
         _project.value = _project.value.copy(presets = _project.value.presets.filterNot { it.id == id })
+        persistPresets()
     }
 
     fun encodePreset(id: String): String? =
@@ -178,13 +207,19 @@ class EditorViewModel : ViewModel() {
             audioSegments = decoded.audioSegments.map { it.copy(id = "") },
         )
         _project.value = _project.value.copy(presets = _project.value.presets + imported)
+        persistPresets()
     }
 
     fun encode(): String = ProjectJson.encode(_project.value)
 
     fun load(json: String) {
         val loaded = ProjectJson.decode(json)
+        val mergedPresets = (_project.value.presets + loaded.presets)
+            .associateBy { it.id }
+            .values
+            .toList()
         _project.value = loaded.copy(
+            presets = mergedPresets,
             clips = loaded.clips.map { clip ->
                 clip.copy(
                     effectSegments = clip.effectSegments.map { it.forWholeClip(clip.durationMs) },
@@ -192,11 +227,16 @@ class EditorViewModel : ViewModel() {
                 )
             },
         )
+        persistPresets()
         _selection.value = null
     }
 
     private fun updateClip(id: String, transform: Clip.() -> Clip) {
         _project.value = _project.value.copy(clips = _project.value.clips.map { if (it.id == id) it.transform() else it })
+    }
+
+    private fun persistPresets() {
+        runCatching { presetFile.writeText(PresetLibraryJson.encode(_project.value.presets)) }
     }
 }
 

@@ -33,6 +33,7 @@ fun EditPanel(
     viewModel: EditorViewModel,
     project: EditProject,
     selection: Selection?,
+    playerPositionMs: Long,
     modifier: Modifier = Modifier,
     currentClipId: String?,
     onSavePreset: (String, String) -> Unit,
@@ -82,6 +83,21 @@ fun EditPanel(
                     } else {
                         val stack = if (activeCategory == EffectCategory.AUDIO) selectedClip.audioSegments else selectedClip.effectSegments
                         val stackIndex = stack.indexOfFirst { it.id == segment.id }
+                        val clipStartMs = project.clips.takeWhile { it.id != selectedClip.id }.sumOf { it.durationMs }
+                        val localPlayheadMs = (playerPositionMs - clipStartMs).coerceIn(0, selectedClip.durationMs)
+                        var editingKeyframeTime by remember(segment.id) { mutableStateOf<Long?>(null) }
+                        val editingKeyframe = editingKeyframeTime?.let { time ->
+                            segment.keyframes.find { it.timeMs == time }
+                        }
+                        val editorParams = editingKeyframe?.params ?: segment.params
+                        val updateEditorParams: (Map<String, Float>) -> Unit = { params ->
+                            val keyframeTime = editingKeyframeTime
+                            if (keyframeTime == null) {
+                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            } else {
+                                viewModel.updateKeyframe(selectedClip.id, segment.id, keyframeTime, params)
+                            }
+                        }
                         Text(effect.displayName, style = MaterialTheme.typography.titleMedium)
                         Text("Clip: ${selectedClip.displayName}")
                         Text("Applies to the entire clip")
@@ -98,15 +114,54 @@ fun EditPanel(
                                 modifier = Modifier.weight(1f),
                             ) { Text("Move later") }
                         }
+                        Text("Keyframes · values hold until the next keyframe")
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.addKeyframe(selectedClip.id, segment.id, localPlayheadMs)
+                                editingKeyframeTime = localPlayheadMs
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("+ Keyframe at ${formatTime(localPlayheadMs)}")
+                        }
+                        if (editingKeyframeTime == null) {
+                            Text("Editing base values")
+                        } else {
+                            OutlinedButton(
+                                onClick = { editingKeyframeTime = null },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("Editing ${formatTime(editingKeyframeTime ?: 0)} · switch to base")
+                            }
+                        }
+                        segment.keyframes.forEach { keyframe ->
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                OutlinedButton(
+                                    onClick = { editingKeyframeTime = keyframe.timeMs },
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                    Text(if (editingKeyframeTime == keyframe.timeMs) "◆ ${formatTime(keyframe.timeMs)}" else "◇ ${formatTime(keyframe.timeMs)}")
+                                }
+                                TextButton(
+                                    onClick = {
+                                        viewModel.removeKeyframe(selectedClip.id, segment.id, keyframe.timeMs)
+                                        if (editingKeyframeTime == keyframe.timeMs) editingKeyframeTime = null
+                                    },
+                                ) { Text("Delete") }
+                            }
+                        }
                         when (effect.id) {
-                            "gradient_map" -> GradientMapEditor(segment.params) { params ->
-                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            "gradient_map" -> GradientMapEditor(editorParams) { params ->
+                                updateEditorParams(params)
                             }
-                            "mirror" -> MirrorEditor(segment.params) { params ->
-                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            "mirror" -> MirrorEditor(editorParams) { params ->
+                                updateEditorParams(params)
                             }
-                            "split_pitch" -> SplitPitchEditor(segment.params) { params ->
-                                viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(params = params) }
+                            "split_pitch" -> SplitPitchEditor(editorParams) { params ->
+                                updateEditorParams(params)
                             }
                             else -> {
                                 if (effect.id == "vocoder_custom") {
@@ -117,12 +172,10 @@ fun EditPanel(
                                     }
                                 }
                                 effect.params.forEach { parameter ->
-                                    val value = segment.params[parameter.id] ?: parameter.default
+                                    val value = editorParams[parameter.id] ?: parameter.default
                                     if (parameter.kind == ParamKind.BOOLEAN) {
                                         BooleanParameterButton(parameter.displayName, value >= 0.5f) { enabled ->
-                                            viewModel.updateSegment(selectedClip.id, segment.id) {
-                                                it.copy(params = it.params + (parameter.id to if (enabled) 1f else 0f))
-                                            }
+                                            updateEditorParams(editorParams + (parameter.id to if (enabled) 1f else 0f))
                                         }
                                     } else {
                                         ParameterSlider(
@@ -130,9 +183,7 @@ fun EditPanel(
                                             value,
                                             parameter.min..parameter.max,
                                         ) { updated ->
-                                            viewModel.updateSegment(selectedClip.id, segment.id) {
-                                                it.copy(params = it.params + (parameter.id to updated))
-                                            }
+                                            updateEditorParams(editorParams + (parameter.id to updated))
                                         }
                                     }
                                 }

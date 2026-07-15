@@ -56,6 +56,12 @@ data class TransformSettings(
 )
 
 @Serializable
+data class EffectKeyframe(
+    val timeMs: Long,
+    val params: Map<String, Float> = emptyMap(),
+)
+
+@Serializable
 data class TimelineSegment(
     val id: String,
     val effectId: String,
@@ -64,6 +70,7 @@ data class TimelineSegment(
     val enabled: Boolean = true,
     val params: Map<String, Float> = emptyMap(),
     val stringParams: Map<String, String> = emptyMap(),
+    val keyframes: List<EffectKeyframe> = emptyList(),
 ) {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0)
 
@@ -74,5 +81,16 @@ data class TimelineSegment(
     }
 
     fun forWholeClip(clipDurationMs: Long): TimelineSegment =
-        copy(startMs = 0, endMs = clipDurationMs.coerceAtLeast(0))
+        copy(
+            startMs = 0,
+            endMs = clipDurationMs.coerceAtLeast(0),
+            keyframes = keyframes
+                .map { it.copy(timeMs = it.timeMs.coerceIn(0, clipDurationMs.coerceAtLeast(0))) }
+                .distinctBy { it.timeMs }
+                .sortedBy { it.timeMs },
+        )
+
+    /** Keyframes use hold interpolation to avoid rebuilding an effect stack on every rendered frame. */
+    fun paramsAt(timeMs: Long): Map<String, Float> =
+        keyframes.lastOrNull { it.timeMs <= timeMs }?.params ?: params
 }

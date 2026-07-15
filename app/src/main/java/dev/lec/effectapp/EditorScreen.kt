@@ -238,12 +238,17 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         previewCarrierUris.forEach { uri -> withContext(Dispatchers.IO) { CarrierAudioStore.load(context, uri) } }
         previewAudioProcessor.setSegments(previewClip?.audioSegments.orEmpty())
     }
-    val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments) }
+    val previewClipStartMs = project.clips.take(currentClipIndex).sumOf { it.durationMs }
+    val previewLocalMs = (playerPositionMs - previewClipStartMs).coerceAtLeast(0)
+    val activeVideoKeyframes = previewClip?.effectSegments.orEmpty().map { segment ->
+        segment.keyframes.lastOrNull { it.timeMs <= previewLocalMs }?.timeMs ?: -1L
+    }
+    val previewEffectKey = previewClip?.let { listOf(it.id, it.transform, it.effectSegments, activeVideoKeyframes) }
     LaunchedEffect(player, currentClipIndex, previewEffectKey) {
         val clip = previewClip ?: return@LaunchedEffect
         // Avoid rebuilding the GL chain dozens of times per second while a slider is dragged.
         delay(160)
-        rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip))
+        rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs))
     }
 
     Scaffold(

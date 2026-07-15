@@ -87,4 +87,37 @@ class ProjectJsonTest {
         assertEquals(clip.audioSegments.map { it.forWholeClip(6_000) }, replaced.audioSegments)
     }
 
+    @Test
+    fun keyframesUseHeldValuesAndRoundTrip() {
+        val segment = TimelineSegment(
+            id = "effect",
+            effectId = "glow",
+            startMs = 0,
+            endMs = 3_000,
+            params = mapOf("strength" to 0.2f),
+            keyframes = listOf(
+                EffectKeyframe(1_000, mapOf("strength" to 0.8f)),
+                EffectKeyframe(2_000, mapOf("strength" to 1.4f)),
+            ),
+        )
+        val project = EditProject(
+            clips = listOf(Clip("clip", "content://video", "video", trimEndMs = 3_000, effectSegments = listOf(segment))),
+        )
+
+        assertEquals(0.2f, segment.paramsAt(999)["strength"])
+        assertEquals(0.8f, segment.paramsAt(1_500)["strength"])
+        assertEquals(1.4f, segment.paramsAt(2_500)["strength"])
+        assertEquals(project, ProjectJson.decode(ProjectJson.encode(project)))
+    }
+
+    @Test
+    fun presetLibraryRoundTripsIndependentlyFromProjects() {
+        val presets = listOf(
+            EffectPreset("one", "First"),
+            EffectPreset("two", "Second", effectSegments = listOf(TimelineSegment("", "glow", 0, 1_000))),
+        )
+
+        assertEquals(presets, PresetLibraryJson.decode(PresetLibraryJson.encode(presets)))
+    }
+
 }

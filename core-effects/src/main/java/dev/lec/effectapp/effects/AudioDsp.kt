@@ -12,12 +12,15 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.pow
+import kotlin.math.round
 import kotlin.math.sin
 import kotlin.math.tanh
 
 private val DSP_EFFECT_IDS = setOf(
     "audio_echo",
     "chorus",
+    "tremolo",
+    "bitcrush",
     "reverse_audio",
     "pitch_change",
     "split_pitch",
@@ -31,8 +34,8 @@ private val DSP_EFFECT_IDS = setOf(
 internal fun isAudioDspEffect(effectId: String): Boolean = effectId in DSP_EFFECT_IDS
 
 @OptIn(UnstableApi::class)
-fun audioProcessorFor(segment: TimelineSegment): AudioProcessor? =
-    if (isAudioDspEffect(segment.effectId)) SegmentedDspProcessor(segment) else null
+fun audioProcessorFor(segment: TimelineSegment, timeOffsetMs: Long = 0): AudioProcessor? =
+    if (isAudioDspEffect(segment.effectId)) SegmentedDspProcessor(segment, timeOffsetMs) else null
 
 internal interface AudioDspState {
     fun process(input: Int, timeMs: Long, channel: Int): Int
@@ -45,6 +48,8 @@ internal fun createAudioDspState(
 ): AudioDspState? = when (segment.effectId) {
     "audio_echo" -> DelayDspState(segment, sampleRate, channels, chorus = false)
     "chorus" -> DelayDspState(segment, sampleRate, channels, chorus = true)
+    "tremolo" -> TremoloDspState(segment)
+    "bitcrush" -> BitcrushDspState(segment, sampleRate, channels)
     "reverse_audio" -> GrainReverseDspState(segment, sampleRate, channels)
     "pitch_change" -> PitchDspState.single(segment, sampleRate, channels)
     "split_pitch" -> PitchDspState.split(segment, sampleRate, channels)
@@ -54,7 +59,10 @@ internal fun createAudioDspState(
 }
 
 @OptIn(UnstableApi::class)
-private class SegmentedDspProcessor(private val segment: TimelineSegment) : BaseAudioProcessor() {
+private class SegmentedDspProcessor(
+    private val segment: TimelineSegment,
+    private val timeOffsetMs: Long,
+) : BaseAudioProcessor() {
     private var state: AudioDspState? = null
     private var sampleIndex = 0L
 
@@ -62,7 +70,8 @@ private class SegmentedDspProcessor(private val segment: TimelineSegment) : Base
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
-        state = createAudioDspState(segment, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
+        val resolved = segment.copy(params = segment.paramsAt(timeOffsetMs), keyframes = emptyList())
+        state = createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         sampleIndex = 0
         return inputAudioFormat
     }
@@ -70,7 +79,8 @@ private class SegmentedDspProcessor(private val segment: TimelineSegment) : Base
     override fun onFlush() {
         sampleIndex = 0
         if (inputAudioFormat != AudioProcessor.AudioFormat.NOT_SET) {
-            state = createAudioDspState(segment, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
+            val resolved = segment.copy(params = segment.paramsAt(timeOffsetMs), keyframes = emptyList())
+            state = createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         }
     }
 
@@ -79,7 +89,7 @@ private class SegmentedDspProcessor(private val segment: TimelineSegment) : Base
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
         while (inputBuffer.remaining() >= 2) {
             val channel = (sampleIndex % channels).toInt()
-            val timeMs = (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
+            val timeMs = timeOffsetMs + (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
             val rendered = state?.process(inputBuffer.short.toInt(), timeMs, channel) ?: 0
             output.putShort(rendered.coerceToShort())
             sampleIndex++
@@ -116,6 +126,40 @@ private class DelayDspState(
         samples[writeIndex] = (input + delayed * feedback).toInt().coerceToShort()
         writeIndex = (writeIndex + 1) % samples.size
         return rendered.toInt()
+    }
+}
+
+private class TremoloDspState(private val segment: TimelineSegment) : AudioDspState {
+    override fun process(input: Int, timeMs: Long, channel: Int): Int {
+        if (timeMs !in segment.startMs until segment.endMs) return input
+        val rate = segment.params["rate_hz"] ?: 5f
+        val depth = (segment.params["depth"] ?: 0.75f).coerceIn(0f, 1f)
+        val mix = (segment.params["mix"] ?: 1f).coerceIn(0f, 1f)
+        val modulation = 1f - depth * (0.5f + 0.5f * sin(2.0 * PI * rate * timeMs / 1_000.0).toFloat())
+        return (input * (1f - mix + mix * modulation)).toInt()
+    }
+}
+
+private class BitcrushDspState(
+    private val segment: TimelineSegment,
+    sampleRate: Int,
+    channels: Int,
+) : AudioDspState {
+    private val held = IntArray(channels)
+    private val frameCounters = IntArray(channels)
+    private val targetRate = (segment.params["sample_rate"] ?: 8_000f).coerceIn(500f, sampleRate.toFloat())
+    private val holdFrames = (sampleRate / targetRate).toInt().coerceAtLeast(1)
+    private val bitDepth = (segment.params["bit_depth"] ?: 8f).toInt().coerceIn(2, 16)
+    private val quantizationStep = (65_536f / (1 shl bitDepth)).coerceAtLeast(1f)
+    private val mix = (segment.params["mix"] ?: 1f).coerceIn(0f, 1f)
+
+    override fun process(input: Int, timeMs: Long, channel: Int): Int {
+        if (timeMs !in segment.startMs until segment.endMs) return input
+        if (frameCounters[channel] == 0) {
+            held[channel] = (round(input / quantizationStep) * quantizationStep).toInt()
+        }
+        frameCounters[channel] = (frameCounters[channel] + 1) % holdFrames
+        return (input * (1f - mix) + held[channel] * mix).toInt()
     }
 }
 

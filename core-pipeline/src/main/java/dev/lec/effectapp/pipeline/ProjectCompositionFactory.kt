@@ -27,7 +27,8 @@ object ProjectCompositionFactory {
     fun create(project: EditProject): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
-        if (!hasReverse) {
+        val hasKeyframes = project.clips.any { clip -> (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() } }
+        if (!hasReverse && !hasKeyframes) {
             return Composition.Builder(
                 listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map(::editedItem))),
             ).build()
@@ -51,7 +52,7 @@ object ProjectCompositionFactory {
         ).build()
     }
 
-    fun videoEffects(clip: Clip): List<Effect> {
+    fun videoEffects(clip: Clip, timeMs: Long = 0): List<Effect> {
         val result = mutableListOf<Effect>()
         val transform = clip.transform
         if (transform.scale != 1f || transform.rotationDegrees != 0f || transform.offsetX != 0f || transform.offsetY != 0f) {
@@ -65,14 +66,14 @@ object ProjectCompositionFactory {
         }
         // Visual effects are deliberately clip-wide. List order is stack order and is unbounded.
         clip.effectSegments.filter { it.enabled }.forEach { segment ->
-            EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.params)?.let(result::add)
+            EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))?.let(result::add)
         }
         return result
     }
 
-    fun previewVideoEffects(clip: Clip): List<Effect> = buildList {
+    fun previewVideoEffects(clip: Clip, timeMs: Long = 0): List<Effect> = buildList {
         add(Presentation.createForHeight(540))
-        addAll(videoEffects(clip))
+        addAll(videoEffects(clip, timeMs))
     }
 
     private fun editedItem(clip: Clip): EditedMediaItem =
@@ -101,11 +102,11 @@ object ProjectCompositionFactory {
         val audioProcessors = if (includeAudio) {
             clip.audioSegments
                 .filter { it.enabled && it.effectId != "reverse_audio" }
-                .mapNotNull(::audioProcessorFor)
+                .mapNotNull { audioProcessorFor(it, slice.startMs) }
         } else {
             emptyList()
         }
-        val effects = Effects(audioProcessors, if (includeVideo) videoEffects(clip) else emptyList())
+        val effects = Effects(audioProcessors, if (includeVideo) videoEffects(clip, slice.startMs) else emptyList())
         return EditedMediaItem.Builder(mediaItem)
             .setRemoveAudio(!includeAudio)
             .setRemoveVideo(!includeVideo)
@@ -114,13 +115,23 @@ object ProjectCompositionFactory {
     }
 
     private fun sourceSlices(clip: Clip, reversed: Boolean): List<SourceSlice> {
-        if (!reversed) return listOf(SourceSlice(0, clip.durationMs))
+        val keyframeTimes = (clip.effectSegments + clip.audioSegments)
+            .flatMap { it.keyframes }
+            .map { it.timeMs.coerceIn(0, clip.durationMs) }
+            .filter { it in 1 until clip.durationMs }
+            .distinct()
+            .sorted()
+        if (!reversed) {
+            val boundaries = listOf(0L) + keyframeTimes + clip.durationMs
+            return boundaries.zipWithNext(::SourceSlice)
+        }
         val sliceMs = max(MIN_REVERSE_SLICE_MS, ceil(clip.durationMs / MAX_REVERSE_SLICES.toDouble()).toLong())
         val slices = buildList {
             var start = 0L
             while (start < clip.durationMs) {
                 val end = (start + sliceMs).coerceAtMost(clip.durationMs)
-                add(SourceSlice(start, end))
+                val boundaries = listOf(start) + keyframeTimes.filter { it in (start + 1) until end } + end
+                addAll(boundaries.zipWithNext(::SourceSlice))
                 start = end
             }
         }
