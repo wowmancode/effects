@@ -10,7 +10,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlayEffect
-import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextureOverlay
@@ -201,7 +200,7 @@ object ProjectCompositionFactory {
     ) : BitmapOverlay() {
         override fun getBitmap(presentationTimeUs: Long): Bitmap = bitmap
 
-        override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+        override fun getOverlaySettings(presentationTimeUs: Long): StaticOverlaySettings =
             if (presentationTimeUs in startUs until endUs) shown else HIDDEN
 
         private companion object {
