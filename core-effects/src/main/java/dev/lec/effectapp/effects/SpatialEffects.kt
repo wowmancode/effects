@@ -54,6 +54,28 @@ class SwirlEffect : LecEffect {
 }
 
 @OptIn(UnstableApi::class)
+class SpinEffect : LecEffect {
+    override val id = "spin"
+    override val displayName = "Spin"
+    override val category = EffectCategory.EFFECTS
+    override val params = listOf(
+        EffectParam("position_x", "Position X", 0f, 1f, 0.5f),
+        EffectParam("position_y", "Position Y", 0f, 1f, 0.5f),
+        EffectParam("angle", "Angle", -180f, 180f, 0f),
+        EffectParam("speed", "Speed", -3f, 3f, 1f),
+    )
+
+    override fun toMediaEffect(values: Map<String, Float>): Effect = SpatialWarpEffect(
+        mode = 4,
+        centerX = values["position_x"] ?: 0.5f,
+        centerY = values["position_y"] ?: 0.5f,
+        first = values["angle"] ?: 0f,
+        second = 0f,
+        third = values["speed"] ?: 1f,
+    )
+}
+
+@OptIn(UnstableApi::class)
 class WaveEffect : LecEffect {
     override val id = "wave"
     override val displayName = "Wave"
@@ -260,6 +282,12 @@ private class SpatialWarpShaderProgram(
                 float influence = 1.0 - smoothstep(0.0, radius, distanceFromCenter);
                 float scale = max(0.05, 1.0 + uParams.x * influence);
                 corrected *= scale;
+                uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
+              } else if (uMode == 4) {
+                float angle = radians(uParams.x) + uTime * uParams.z * 6.2831853;
+                float sine = sin(angle);
+                float cosine = cos(angle);
+                corrected = mat2(cosine, -sine, sine, cosine) * corrected;
                 uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
               } else {
                 float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);

@@ -24,6 +24,7 @@ import dev.lec.effectapp.effects.audioProcessorFor
 import dev.lec.effectapp.effects.videoPluginEffect
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.TimelineSegment
 import kotlin.math.ceil
 import kotlin.math.max
 
@@ -43,12 +44,13 @@ object ProjectCompositionFactory {
         }
 
         val videoItems = project.clips.flatMap { clip ->
-            sourceSlices(clip, clip.reversesVideo()).map { slice ->
+            sourceSlices(clip, clip.reversesVideo(), clip.effectSegments).map { slice ->
                 editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap)
             }
         }
         val audioItems = project.clips.flatMap { clip ->
-            sourceSlices(clip, clip.reversesAudio()).map { slice ->
+            // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
+            sourceSlices(clip, clip.reversesAudio(), clip.audioSegments).map { slice ->
                 editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap)
             }
         }
@@ -150,8 +152,8 @@ object ProjectCompositionFactory {
             .build()
     }
 
-    private fun sourceSlices(clip: Clip, reversed: Boolean): List<SourceSlice> {
-        val keyframedSegments = (clip.effectSegments + clip.audioSegments).filter { it.keyframes.isNotEmpty() }
+    private fun sourceSlices(clip: Clip, reversed: Boolean, segments: List<TimelineSegment>): List<SourceSlice> {
+        val keyframedSegments = segments.filter { it.keyframes.isNotEmpty() }
         val keyframeTimes = keyframedSegments
             .flatMap { it.keyframes }
             .map { it.timeMs.coerceIn(0, clip.durationMs) }

@@ -11,6 +11,7 @@ object EffectRegistry {
         GlowEffect(),
         GodRaysEffect(),
         SwirlEffect(),
+        SpinEffect(),
         WaveEffect(),
         PinchBulgeEffect(),
         GhostTrailEffect(),
