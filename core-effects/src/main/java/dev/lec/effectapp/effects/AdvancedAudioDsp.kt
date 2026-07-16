@@ -8,7 +8,7 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.tanh
 
-private class OverdriveDspState(
+class OverdriveDspState(
     private val segment: TimelineSegment,
     sampleRate: Int,
     channels: Int,
@@ -29,7 +29,7 @@ private class OverdriveDspState(
     }
 }
 
-private class FlangerDspState(
+class FlangerDspState(
     private val segment: TimelineSegment,
     private val sampleRate: Int,
     private val channels: Int,
@@ -53,7 +53,7 @@ private class FlangerDspState(
     }
 }
 
-private class RingModDspState(private val segment: TimelineSegment) : AudioDspState {
+class RingModDspState(private val segment: TimelineSegment) : AudioDspState {
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         if (timeMs !in segment.startMs until segment.endMs) return input
         val dry = input / 32768f
@@ -65,7 +65,7 @@ private class RingModDspState(private val segment: TimelineSegment) : AudioDspSt
     }
 }
 
-private class FilterDspState(
+class FilterDspState(
     private val segment: TimelineSegment,
     sampleRate: Int,
     channels: Int,
@@ -82,7 +82,7 @@ private class FilterDspState(
     }
 }
 
-private class AutoPanDspState(
+class AutoPanDspState(
     private val segment: TimelineSegment,
     private val channels: Int,
 ) : AudioDspState {
@@ -98,7 +98,7 @@ private class AutoPanDspState(
     }
 }
 
-private class VocoderLabDspState(
+class VocoderLabDspState(
     private val segment: TimelineSegment,
     private val sampleRate: Int,
     private val channels: Int,
