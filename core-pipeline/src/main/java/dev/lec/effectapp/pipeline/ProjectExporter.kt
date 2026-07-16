@@ -1,6 +1,8 @@
 package dev.lec.effectapp.pipeline
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
@@ -19,6 +21,7 @@ class ProjectExporter(context: Context) {
  private var callback: Callback? = null
  private var batch: Batch? = null
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
+ private val queue = Handler(Looper.getMainLooper())
  private lateinit var transformer: Transformer
  init {
   transformer = Transformer.Builder(context).addListener(object : Transformer.Listener {
@@ -26,8 +29,15 @@ class ProjectExporter(context: Context) {
    val b=batch
    if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
    b.done++
-   if (b.done < b.projects.size) startStage(b,b.done)
-   else if (!b.concat) { b.concat=true; transformer.start(concatenate(b.files),b.output) }
+   if (b.done < b.projects.size) queue.post { if (batch===b) startStage(b,b.done) }
+   else if (!b.concat && b.files.size == 1) {
+    b.files.single().copyTo(File(b.output), overwrite=true)
+    batch=null; b.files.forEach(File::delete); val c=callback; callback=null; c?.onCompleted()
+   }
+   else if (!b.concat) {
+    b.concat=true
+    queue.post { if (batch===b) transformer.start(concatenate(b.files),b.output) }
+   }
    else { batch=null; b.files.forEach(File::delete); val c=callback; callback=null; c?.onCompleted() }
   }
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
