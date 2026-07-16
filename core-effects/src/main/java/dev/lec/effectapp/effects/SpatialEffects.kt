@@ -65,8 +65,8 @@ class WaveEffect : LecEffect {
         EffectParam("stretch", "Stretch", 0.25f, 4f, 1f),
         EffectParam("speed", "Speed", -5f, 5f, 1f),
         EffectParam("phase", "Phase", 0f, 1f, 0f),
-        EffectParam("radius_x", "Radius X", 0.05f, 2f, 0.9f),
-        EffectParam("radius_y", "Radius Y", 0.05f, 2f, 0.9f),
+        EffectParam("strength_x", "X strength", 0f, 2f, 1f),
+        EffectParam("strength_y", "Y strength", 0f, 2f, 1f),
         EffectParam("wave_x", "X wave", 0f, 1f, 1f, ParamKind.BOOLEAN),
         EffectParam("wave_y", "Y wave", 0f, 1f, 0f, ParamKind.BOOLEAN),
     )
@@ -81,8 +81,8 @@ class WaveEffect : LecEffect {
         fourth = (if ((values["wave_x"] ?: 1f) >= 0.5f) 1f else 0f) +
             (if ((values["wave_y"] ?: 0f) >= 0.5f) 2f else 0f),
         fifth = values["phase"] ?: 0f,
-        sixth = values["radius_x"] ?: 0.9f,
-        seventh = values["radius_y"] ?: 0.9f,
+        sixth = values["strength_x"] ?: 1f,
+        seventh = values["strength_y"] ?: 1f,
     )
 }
 
@@ -245,18 +245,15 @@ private class SpatialWarpShaderProgram(
                 uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
               } else if (uMode == 1) {
                 float stretch = max(uParams.y, 0.01);
-                float radiusX = max(uExtra.y, 0.01);
-                float radiusY = max(uExtra.z, 0.01);
-                float ellipse = length(vec2(corrected.x / radiusX, corrected.y / radiusY));
-                float falloff = 1.0 - smoothstep(0.0, 1.0, ellipse);
+                float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);
                 float animation = uTime * uParams.z * 6.2831853 + uExtra.x * 6.2831853;
                 if (uParams.w == 1.0 || uParams.w >= 3.0) {
                   float xPhase = (uv.y - uCenter.y) * 12.56637 * stretch + animation;
-                  uv.x += sin(xPhase) * uParams.x * 0.12 * falloff;
+                  uv.x += sin(xPhase) * uParams.x * uExtra.y * 0.12 * falloff;
                 }
                 if (uParams.w >= 2.0) {
                   float yPhase = (uv.x - uCenter.x) * 12.56637 * stretch + animation;
-                  uv.y += sin(yPhase) * uParams.x * 0.12 * falloff;
+                  uv.y += sin(yPhase) * uParams.x * uExtra.z * 0.12 * falloff;
                 }
               } else if (uMode == 2) {
                 float radius = max(uParams.y, 0.001);

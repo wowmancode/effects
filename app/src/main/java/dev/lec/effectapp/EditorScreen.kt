@@ -210,6 +210,9 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         }
     }
 
+    // Bumping this recreates the ExoPlayer to recover from a wedged Media3 effect pipeline
+    // (the freeze that otherwise only clears by leaving and reopening the editor).
+    var playerResetKey by remember { mutableIntStateOf(0) }
     val previewAudioProcessor = remember { PreviewAudioProcessor() }
     val renderersFactory = remember(previewAudioProcessor) {
         object : DefaultRenderersFactory(context.applicationContext) {
@@ -224,7 +227,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 .build()
         }
     }
-    val player = remember(renderersFactory) {
+    val player = remember(renderersFactory, playerResetKey) {
         // Media3 requires the effect pipeline to be enabled before the first prepare().
         ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply {
             setVideoEffects(emptyList())
@@ -269,7 +272,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" },
         )
     }
-    LaunchedEffect(playlistKey) {
+    LaunchedEffect(player, playlistKey) {
         val previousGlobalPosition = playerPositionMs
         val resumePlayback = player.playWhenReady
         val entries = buildPreviewEntries(project)
@@ -417,6 +420,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             onSplitClip = {
                 project.clips.getOrNull(currentClipIndex)?.let { viewModel.splitClip(it.id, previewLocalMs) }
             },
+            onResetPreview = { playerResetKey++ },
             onPreviousClip = { seekToClip(currentClipIndex - 1) },
             onNextClip = { seekToClip(currentClipIndex + 1) },
             modifier = Modifier.fillMaxSize().padding(padding),

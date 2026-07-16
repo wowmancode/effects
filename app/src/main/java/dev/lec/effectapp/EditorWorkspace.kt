@@ -48,6 +48,7 @@ internal fun EditorWorkspace(
     onAddVisualEffect: (String) -> Unit,
     onAddOverlay: (String, Boolean) -> Unit,
     onSplitClip: () -> Unit,
+    onResetPreview: () -> Unit,
     onPreviousClip: () -> Unit,
     onNextClip: () -> Unit,
     onAddAudioEffect: (String) -> Unit,
@@ -76,6 +77,7 @@ internal fun EditorWorkspace(
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
                     onSplitClip = onSplitClip,
+                    onResetPreview = onResetPreview,
                     onPlayerView = onPlayerView,
                     modifier = Modifier.weight(0.6f).fillMaxHeight(),
                 )
@@ -136,6 +138,7 @@ internal fun EditorWorkspace(
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
                     onSplitClip = onSplitClip,
+                    onResetPreview = onResetPreview,
                     modifier = Modifier.fillMaxWidth().weight(0.5f),
                     onPlayerView = onPlayerView,
                 )
@@ -209,6 +212,7 @@ private fun PreviewPane(
     onAddClip: () -> Unit,
     onReplaceMedia: (String) -> Unit,
     onSplitClip: () -> Unit,
+    onResetPreview: () -> Unit,
     onPlayerView: (PlayerView) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -276,6 +280,7 @@ private fun PreviewPane(
                 Text("Split")
             }
             OutlinedButton(onClick = onAddClip, contentPadding = CompactButtonPadding) { Text("+ Clip") }
+            OutlinedButton(onClick = onResetPreview, contentPadding = CompactButtonPadding) { Text("↻ Reset") }
         }
     }
 }

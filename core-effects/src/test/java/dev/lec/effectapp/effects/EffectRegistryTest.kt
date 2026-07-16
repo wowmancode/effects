@@ -36,7 +36,7 @@ class EffectRegistryTest {
         assertEquals(
             setOf(
                 "position_x", "position_y", "strength", "stretch", "speed",
-                "phase", "radius_x", "radius_y", "wave_x", "wave_y",
+                "phase", "strength_x", "strength_y", "wave_x", "wave_y",
             ),
             wave.params.map { it.id }.toSet(),
         )
