@@ -115,7 +115,6 @@ class AudioDspTest {
         assertEquals(first, held)
         assertEquals(0, first % 4_096)
     }
-}
 
     @Test
     fun creativeEffectsAndVocoderLabAreRegistered() {
@@ -145,3 +144,4 @@ class AudioDspTest {
         assertTrue(rendered.all { it in Short.MIN_VALUE.toInt()..Short.MAX_VALUE.toInt() })
         assertTrue(rendered.any { it != 0 })
     }
+}
