@@ -32,6 +32,11 @@ object EffectRegistry {
         VibratoEffect(),
         AudioPluginEffect(),
         BitcrushEffect(),
+        OverdriveEffect(),
+        FlangerEffect(),
+        RingModEffect(),
+        FilterEffect(),
+        AutoPanEffect(),
         PitchChangeEffect(),
         SplitPitchEffect(),
         VocoderEffect("vocoder_square", "Vocoder · square"),
@@ -40,6 +45,7 @@ object EffectRegistry {
         VocoderEffect("vocoder_sine", "Vocoder · sine"),
         VocoderEffect("vocoder_triangle", "Vocoder · triangle"),
         VocoderEffect("vocoder_custom", "Vocoder · custom carrier", customCarrier = true),
+        VocoderLabEffect(),
     )
     val all: List<LecEffect> get() = registered
 

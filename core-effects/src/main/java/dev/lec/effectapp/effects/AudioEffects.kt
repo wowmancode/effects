@@ -83,3 +83,69 @@ class ReverseAudioEffect : LecEffect {
     @OptIn(UnstableApi::class)
     override fun toMediaEffect(values: Map<String, Float>): Effect? = null
 }
+
+class OverdriveEffect : LecEffect {
+    override val id = "overdrive"
+    override val displayName = "Overdrive"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("drive", "Drive", 0f, 1f, 0.4f),
+        EffectParam("tone", "Tone", 0f, 1f, 0.6f),
+        EffectParam("mix", "Wet mix", 0f, 1f, 0.8f),
+    )
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
+
+class FlangerEffect : LecEffect {
+    override val id = "flanger"
+    override val displayName = "Flanger"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("rate_hz", "Rate (Hz)", 0.05f, 8f, 0.35f),
+        EffectParam("depth_ms", "Depth (ms)", 0.1f, 15f, 4f),
+        EffectParam("feedback", "Feedback", -0.9f, 0.9f, 0.35f),
+        EffectParam("mix", "Wet mix", 0f, 1f, 0.65f),
+    )
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
+
+class RingModEffect : LecEffect {
+    override val id = "ring_mod"
+    override val displayName = "Ring modulator"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("frequency_hz", "Frequency (Hz)", 1f, 4_000f, 180f),
+        EffectParam("depth", "Depth", 0f, 1f, 0.8f),
+        EffectParam("mix", "Wet mix", 0f, 1f, 0.8f),
+    )
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
+
+class FilterEffect : LecEffect {
+    override val id = "filter"
+    override val displayName = "Filter"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("cutoff_hz", "Cutoff (Hz)", 40f, 18_000f, 2_000f),
+        EffectParam("high_pass", "High-pass", 0f, 1f, 0f, ParamKind.BOOLEAN),
+        EffectParam("mix", "Wet mix", 0f, 1f, 1f),
+    )
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
+
+class AutoPanEffect : LecEffect {
+    override val id = "auto_pan"
+    override val displayName = "Auto pan"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("rate_hz", "Rate (Hz)", 0.05f, 12f, 0.7f),
+        EffectParam("depth", "Width", 0f, 1f, 0.85f),
+        EffectParam("mix", "Wet mix", 0f, 1f, 1f),
+    )
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}

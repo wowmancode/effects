@@ -116,3 +116,32 @@ class AudioDspTest {
         assertEquals(0, first % 4_096)
     }
 }
+
+    @Test
+    fun creativeEffectsAndVocoderLabAreRegistered() {
+        val ids = EffectRegistry.byCategory(EffectCategory.AUDIO).map { it.id }.toSet()
+
+        assertTrue(ids.containsAll(setOf("overdrive", "flanger", "ring_mod", "filter", "auto_pan", "vocoder_lab")))
+        val lab = requireNotNull(EffectRegistry.byId("vocoder_lab"))
+        assertTrue(lab.params.size >= 10)
+        assertTrue(lab.params.any { it.id == "carrier_shape" })
+        assertTrue(lab.params.any { it.id == "organ" })
+        assertTrue(lab.params.any { it.id == "formant_shift" })
+    }
+
+    @Test
+    fun vocoderLabProducesBoundedAudio() {
+        val effect = requireNotNull(EffectRegistry.byId("vocoder_lab"))
+        val segment = TimelineSegment(
+            id = "vocoder-lab",
+            effectId = effect.id,
+            startMs = 0,
+            endMs = 1_000,
+            params = effect.params.associate { it.id to it.default },
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+        val rendered = (0 until 1_000).map { index -> state.process(20_000, index / 48L, 0) }
+
+        assertTrue(rendered.all { it in Short.MIN_VALUE.toInt()..Short.MAX_VALUE.toInt() })
+        assertTrue(rendered.any { it != 0 })
+    }

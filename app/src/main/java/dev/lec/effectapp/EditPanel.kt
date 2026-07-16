@@ -210,6 +210,13 @@ fun EditPanel(
                                         }
                                     }
                                 }
+                                if (effect.id == "vocoder_lab") {
+                                    Text(
+                                        "Shape moves sine → saw → square → triangle. Pipe organ, Air, " +
+                                            "Formant shift, Motion, Growl, and Drive make the carrier radically different.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
                                 effect.params.forEach { parameter ->
                                     val value = editorParams[parameter.id] ?: parameter.default
                                     if (parameter.kind == ParamKind.BOOLEAN) {

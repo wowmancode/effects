@@ -23,6 +23,12 @@ private val DSP_EFFECT_IDS = setOf(
     "tremolo",
     "vibrato",
     "bitcrush",
+    "overdrive",
+    "flanger",
+    "ring_mod",
+    "filter",
+    "auto_pan",
+    "vocoder_lab",
     "plugin_audio",
     "reverse_audio",
     "pitch_change",
@@ -54,6 +60,12 @@ internal fun createAudioDspState(
     "tremolo" -> TremoloDspState(segment)
     "vibrato" -> VibratoDspState(segment, sampleRate, channels)
     "bitcrush" -> BitcrushDspState(segment, sampleRate, channels)
+    "overdrive" -> OverdriveDspState(segment, sampleRate, channels)
+    "flanger" -> FlangerDspState(segment, sampleRate, channels)
+    "ring_mod" -> RingModDspState(segment)
+    "filter" -> FilterDspState(segment, sampleRate, channels)
+    "auto_pan" -> AutoPanDspState(segment, channels)
+    "vocoder_lab" -> VocoderLabDspState(segment, sampleRate, channels)
     "plugin_audio" -> AudioPluginDspState(segment, sampleRate, channels)
     "reverse_audio" -> GrainReverseDspState(segment, sampleRate, channels)
     "pitch_change" -> PitchDspState.single(segment, sampleRate, channels)

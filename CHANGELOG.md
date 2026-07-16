@@ -86,3 +86,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 [0.7.0]: https://github.com/wowmancode/effects/compare/v0.6...HEAD
 [0.6.0]: https://github.com/wowmancode/effects/releases/tag/v0.6
+- Five new creative audio effects: Overdrive, Flanger, Ring modulator, Filter,
+  and stereo Auto pan.
+- Vocoder Lab, a 15-control vocoder with continuously morphing sine, saw,
+  square, and triangle carriers plus pipe-organ harmonics, air, formants,
+  detune, motion, growl, drive, and independent dry/wet levels.
+- Wave distortion now holds its selected strength across the whole frame instead
+  of fading away as pixels get farther from its center.

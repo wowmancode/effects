@@ -68,3 +68,28 @@ class VocoderEffect(
     @OptIn(UnstableApi::class)
     override fun toMediaEffect(values: Map<String, Float>): Effect? = null
 }
+
+class VocoderLabEffect : LecEffect {
+    override val id = "vocoder_lab"
+    override val displayName = "Vocoder Lab"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(
+        EffectParam("carrier_pitch", "Carrier pitch (Hz)", 30f, 440f, 110f),
+        EffectParam("carrier_shape", "Carrier shape", 0f, 1f, 0.25f),
+        EffectParam("organ", "Pipe organ", 0f, 1f, 0f),
+        EffectParam("air", "Air", 0f, 1f, 0.15f),
+        EffectParam("brightness", "Brightness", 0f, 1f, 0.55f),
+        EffectParam("formant_shift", "Formant shift", -24f, 24f, 0f),
+        EffectParam("bands", "Bands", 4f, 16f, 10f),
+        EffectParam("response", "Voice response", 0f, 1f, 0.45f),
+        EffectParam("detune_cents", "Detune (cents)", 0f, 60f, 8f),
+        EffectParam("motion_rate", "Motion rate", 0f, 12f, 0f),
+        EffectParam("motion_depth", "Motion depth", 0f, 1f, 0f),
+        EffectParam("growl", "Growl", 0f, 1f, 0f),
+        EffectParam("drive", "Drive", 0f, 1f, 0.2f),
+        EffectParam("dry_mix", "Original voice", 0f, 1f, 0.1f),
+        EffectParam("wet_mix", "Vocoder mix", 0f, 1f, 0.9f),
+    )
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}

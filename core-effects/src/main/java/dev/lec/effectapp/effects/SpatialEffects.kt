@@ -286,15 +286,14 @@ private class SpatialWarpShaderProgram(
                 uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
               } else if (uMode == 1) {
                 float stretch = max(uParams.y, 0.01);
-                float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);
                 float animation = uTime * uParams.z * 6.2831853 + uExtra.x * 6.2831853;
                 if (uParams.w == 1.0 || uParams.w >= 3.0) {
                   float xPhase = (uv.y - uCenter.y) * 12.56637 * stretch + animation;
-                  uv.x += sin(xPhase) * uParams.x * uExtra.y * 0.12 * falloff;
+                  uv.x += sin(xPhase) * uParams.x * uExtra.y * 0.12;
                 }
                 if (uParams.w >= 2.0) {
                   float yPhase = (uv.x - uCenter.x) * 12.56637 * stretch + animation;
-                  uv.y += sin(yPhase) * uParams.x * uExtra.z * 0.12 * falloff;
+                  uv.y += sin(yPhase) * uParams.x * uExtra.z * 0.12;
                 }
               } else if (uMode == 2) {
                 float radius = max(uParams.y, 0.001);
