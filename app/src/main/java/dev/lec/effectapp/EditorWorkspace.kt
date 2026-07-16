@@ -22,6 +22,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -233,17 +234,24 @@ private fun PreviewPane(
                 )
             }
         } else {
-            AndroidView(
-                factory = {
-                    PlayerView(it).apply {
-                        this.player = player
-                        useController = true
-                        onPlayerView(this)
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().weight(1f),
-                update = { it.player = player },
-            )
+            // key(player) rebuilds the PlayerView (and its GL surface) whenever the player is
+            // recreated by a reset, so a wedged effect pipeline is fully torn down — matching
+            // what leaving and reopening the editor does.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                key(player) {
+                    AndroidView(
+                        factory = {
+                            PlayerView(it).apply {
+                                this.player = player
+                                useController = true
+                                onPlayerView(this)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        update = { it.player = player },
+                    )
+                }
+            }
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
