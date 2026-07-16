@@ -5,6 +5,7 @@ object EffectRegistry {
         HueRotateEffect(),
         HslAdjustEffect(),
         ColorCurvesEffect(),
+        CustomLutEffect(),
         VideoPluginEffect(),
         SharpenEffect(),
         GradientMapEffect(),

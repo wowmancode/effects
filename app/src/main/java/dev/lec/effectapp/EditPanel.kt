@@ -203,6 +203,11 @@ fun EditPanel(
                                 updateEditorParams(params)
                             }
                             else -> {
+                                if (effect.id == "custom_lut") {
+                                    CustomLutEditor(segment.stringParams) { values ->
+                                        viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(stringParams = values) }
+                                    }
+                                }
                                 if (effect.id == "vocoder_custom") {
                                     CustomCarrierEditor(segment.stringParams) { values ->
                                         viewModel.updateSegment(selectedClip.id, segment.id) {

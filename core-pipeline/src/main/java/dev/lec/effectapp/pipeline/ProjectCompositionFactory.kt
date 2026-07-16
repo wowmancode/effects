@@ -25,6 +25,7 @@ import androidx.media3.transformer.Effects
 import dev.lec.effectapp.effects.DEFAULT_VIDEO_PLUGIN_SOURCE
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.audioProcessorFor
+import dev.lec.effectapp.effects.customLutMediaEffect
 import dev.lec.effectapp.effects.videoPluginEffect
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
@@ -94,6 +95,8 @@ object ProjectCompositionFactory {
                     segment.stringParams["source"] ?: DEFAULT_VIDEO_PLUGIN_SOURCE,
                     segment.paramsAt(timeMs),
                 )
+            } else if (segment.effectId == "custom_lut") {
+                customLutMediaEffect(segment.stringParams["lut_uri"], segment.paramsAt(timeMs)["mix"] ?: 1f)
             } else {
                 EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))
             }
