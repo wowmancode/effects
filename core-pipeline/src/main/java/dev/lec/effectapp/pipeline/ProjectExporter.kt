@@ -19,7 +19,9 @@ class ProjectExporter(context: Context) {
  private var callback: Callback? = null
  private var batch: Batch? = null
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
- private val transformer = Transformer.Builder(context).addListener(object : Transformer.Listener {
+ private lateinit var transformer: Transformer
+ init {
+  transformer = Transformer.Builder(context).addListener(object : Transformer.Listener {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
    val b=batch
    if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
@@ -31,7 +33,8 @@ class ProjectExporter(context: Context) {
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
    batch?.files?.forEach(File::delete); batch=null; val c=callback; callback=null; c?.onError(exportException)
   }
- }).build()
+  }).build()
+ }
  fun start(project: EditProject, outputPath: String, callback: Callback) {
   check(this.callback==null) { "An export is already running" }; this.callback=callback
   transformer.start(ProjectCompositionFactory.create(project,resolveBitmap),outputPath)
