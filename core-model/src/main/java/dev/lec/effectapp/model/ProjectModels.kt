@@ -60,6 +60,7 @@ data class Overlay(
     val sourceUri: String,
     val displayName: String,
     val isVideo: Boolean = false,
+    val sourceDurationMs: Long = 0,
     val startMs: Long = 0,
     val endMs: Long = 0,
     val alpha: Float = 1f,

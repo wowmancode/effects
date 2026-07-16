@@ -18,6 +18,16 @@ class ProjectJsonTest {
                     effectSegments = listOf(
                         TimelineSegment("segment", "hue_rotate", 0, 5_000, params = mapOf("degrees" to 90f)),
                     ),
+                    overlays = listOf(
+                        Overlay(
+                            id = "overlay",
+                            sourceUri = "content://overlay",
+                            displayName = "overlay.mp4",
+                            isVideo = true,
+                            sourceDurationMs = 2_500,
+                            endMs = 5_000,
+                        ),
+                    ),
                 ),
             ),
         )

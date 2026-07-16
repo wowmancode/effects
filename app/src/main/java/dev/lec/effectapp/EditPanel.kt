@@ -309,6 +309,7 @@ private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddOverlay:
     }
     val maxSeconds = (clip.durationMs / 1000f).coerceAtLeast(0.1f)
     clip.overlays.forEach { overlay ->
+        val index = clip.overlays.indexOfFirst { it.id == overlay.id }
         Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -316,11 +317,19 @@ private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddOverlay:
                     Modifier.weight(1f),
                     style = MaterialTheme.typography.titleSmall,
                 )
+                TextButton(
+                    onClick = { viewModel.moveOverlay(clip.id, overlay.id, -1) },
+                    enabled = index > 0,
+                ) { Text("Up") }
+                TextButton(
+                    onClick = { viewModel.moveOverlay(clip.id, overlay.id, 1) },
+                    enabled = index in 0 until clip.overlays.lastIndex,
+                ) { Text("Down") }
                 TextButton(onClick = { viewModel.removeOverlay(clip.id, overlay.id) }) { Text("Delete") }
             }
             if (overlay.isVideo) {
                 Text(
-                    "Video overlay: currently shown as a still frame. Moving playback on export is coming next.",
+                    "Video overlays move and loop during export. Preview uses a lightweight poster frame.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

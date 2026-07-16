@@ -13,6 +13,7 @@ object EffectRegistry {
         SwirlEffect(),
         SpinEffect(),
         WaveEffect(),
+        TilesEffect(),
         PinchBulgeEffect(),
         GhostTrailEffect(),
         ColorInvertEffect(),

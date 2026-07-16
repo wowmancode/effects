@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Moving video overlays during export, with timeline positioning, opacity, scale,
+  position, automatic looping, and reorderable layer priority. The editor preview
+  uses a still poster to keep playback lightweight.
+- A stackable Tiles effect with independent 1–8 horizontal and vertical repeats,
+  including 2x2, 3x3, and rectangular grids.
 - Gradient maps now support an alpha channel for every color point. Alpha is
   interpolated with the RGB channels and controls the mapped color's opacity over
   the original frame.

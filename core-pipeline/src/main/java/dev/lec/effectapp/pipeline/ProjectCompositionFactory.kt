@@ -4,8 +4,12 @@ import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.common.OverlaySettings
+import androidx.media3.common.VideoCompositorSettings
+import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
 import androidx.media3.effect.MatrixTransformation
@@ -24,6 +28,7 @@ import dev.lec.effectapp.effects.audioProcessorFor
 import dev.lec.effectapp.effects.videoPluginEffect
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.TimelineSegment
 import kotlin.math.ceil
 import kotlin.math.max
@@ -37,32 +42,40 @@ object ProjectCompositionFactory {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
         val hasKeyframes = project.clips.any { clip -> (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() } }
-        if (!hasReverse && !hasKeyframes) {
-            return Composition.Builder(
-                listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map { editedItem(it, resolveBitmap) })),
-            ).build()
-        }
-
-        val videoItems = project.clips.flatMap { clip ->
-            sourceSlices(clip, clip.reversesVideo(), clip.effectSegments).map { slice ->
-                editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap)
+        val baseSequences = if (!hasReverse && !hasKeyframes) {
+            listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map { editedItem(it, resolveBitmap) }))
+        } else {
+            val videoItems = project.clips.flatMap { clip ->
+                sourceSlices(clip, clip.reversesVideo(), clip.effectSegments).map { slice ->
+                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap)
+                }
             }
-        }
-        val audioItems = project.clips.flatMap { clip ->
-            // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
-            sourceSlices(clip, clip.reversesAudio(), clip.audioSegments).map { slice ->
-                editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap)
+            val audioItems = project.clips.flatMap { clip ->
+                // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
+                sourceSlices(clip, clip.reversesAudio(), clip.audioSegments).map { slice ->
+                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap)
+                }
             }
-        }
-        return Composition.Builder(
             listOf(
                 EditedMediaItemSequence.withVideoFrom(videoItems),
                 EditedMediaItemSequence.withAudioFrom(audioItems),
-            ),
-        ).build()
+            )
+        }
+
+        val videoOverlays = videoOverlayTracks(project)
+        if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences).build()
+        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs) }
+        return Composition.Builder(overlaySequences + baseSequences)
+            .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays))
+            .build()
     }
 
-    fun videoEffects(clip: Clip, timeMs: Long = 0, resolveBitmap: (String) -> Bitmap? = { null }): List<Effect> {
+    fun videoEffects(
+        clip: Clip,
+        timeMs: Long = 0,
+        resolveBitmap: (String) -> Bitmap? = { null },
+        includeVideoOverlayPosters: Boolean = true,
+    ): List<Effect> {
         val result = mutableListOf<Effect>()
         val transform = clip.transform
         if (transform.scale != 1f || transform.rotationDegrees != 0f || transform.offsetX != 0f || transform.offsetY != 0f) {
@@ -87,13 +100,14 @@ object ProjectCompositionFactory {
             mediaEffect?.let(result::add)
         }
         // Overlays composite last so they sit on top of the processed image.
-        overlayEffect(clip, resolveBitmap)?.let(result::add)
+        overlayEffect(clip, resolveBitmap, includeVideoOverlayPosters)?.let(result::add)
         return result
     }
 
-    private fun overlayEffect(clip: Clip, resolveBitmap: (String) -> Bitmap?): Effect? {
+    private fun overlayEffect(clip: Clip, resolveBitmap: (String) -> Bitmap?, includeVideoPosters: Boolean): Effect? {
         if (clip.overlays.isEmpty()) return null
-        val overlays: List<TextureOverlay> = clip.overlays.mapNotNull { overlay ->
+        val overlays: List<TextureOverlay> = clip.overlays.asReversed().mapNotNull { overlay ->
+            if (overlay.isVideo && !includeVideoPosters) return@mapNotNull null
             val bitmap = resolveBitmap(overlay.sourceUri) ?: return@mapNotNull null
             val endMs = if (overlay.endMs <= overlay.startMs) clip.durationMs else overlay.endMs
             val shown = StaticOverlaySettings.Builder()
@@ -144,7 +158,12 @@ object ProjectCompositionFactory {
         } else {
             emptyList()
         }
-        val effects = Effects(audioProcessors, if (includeVideo) videoEffects(clip, slice.startMs, resolveBitmap) else emptyList())
+        val effects = Effects(
+            audioProcessors,
+            if (includeVideo) {
+                videoEffects(clip, slice.startMs, resolveBitmap, includeVideoOverlayPosters = false)
+            } else emptyList(),
+        )
         return EditedMediaItem.Builder(mediaItem)
             .setRemoveAudio(!includeAudio)
             .setRemoveVideo(!includeVideo)
@@ -184,6 +203,86 @@ object ProjectCompositionFactory {
         }
         return slices.asReversed()
     }
+
+    private fun videoOverlayTracks(project: EditProject): List<VideoOverlayTrack> = buildList {
+        var clipStartMs = 0L
+        project.clips.forEach { clip ->
+            clip.overlays.filter(Overlay::isVideo).forEach { overlay ->
+                val localStart = overlay.startMs.coerceIn(0, clip.durationMs)
+                val localEnd = (if (overlay.endMs <= localStart) clip.durationMs else overlay.endMs)
+                    .coerceIn(localStart, clip.durationMs)
+                if (localEnd > localStart) {
+                    add(
+                        VideoOverlayTrack(
+                            overlay = overlay,
+                            globalStartMs = clipStartMs + localStart,
+                            globalEndMs = clipStartMs + localEnd,
+                        ),
+                    )
+                }
+            }
+            clipStartMs += clip.durationMs
+        }
+    }
+
+    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long): EditedMediaItemSequence {
+        val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
+        if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
+
+        var remainingMs = track.globalEndMs - track.globalStartMs
+        val sourceDurationMs = track.overlay.sourceDurationMs.takeIf { it >= 100 } ?: remainingMs
+        while (remainingMs > 0) {
+            val pieceDurationMs = minOf(sourceDurationMs, remainingMs)
+            val mediaItem = MediaItem.Builder()
+                .setUri(Uri.parse(track.overlay.sourceUri))
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(0)
+                        .setEndPositionMs(pieceDurationMs)
+                        .build(),
+                )
+                .build()
+            builder.addItem(
+                EditedMediaItem.Builder(mediaItem)
+                    .setRemoveAudio(true)
+                    .build(),
+            )
+            remainingMs -= pieceDurationMs
+        }
+
+        val trailingGapMs = projectDurationMs - track.globalEndMs
+        if (trailingGapMs > 0) builder.addGap(trailingGapMs * 1_000)
+        return builder.build()
+    }
+
+    private class OverlayVideoCompositorSettings(
+        private val overlays: List<VideoOverlayTrack>,
+    ) : VideoCompositorSettings {
+        override fun getOutputSize(inputSizes: List<Size>): Size =
+            inputSizes.getOrElse(overlays.size) { inputSizes.first() }
+
+        override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings {
+            val track = overlays.getOrNull(inputId) ?: return StaticOverlaySettings.Builder().build()
+            val visible = presentationTimeUs in (track.globalStartMs * 1_000) until (track.globalEndMs * 1_000)
+            return StaticOverlaySettings.Builder()
+                .setAlphaScale(if (visible) track.overlay.alpha.coerceIn(0f, 1f) else 0f)
+                .setScale(
+                    track.overlay.scale.coerceAtLeast(0.01f),
+                    track.overlay.scale.coerceAtLeast(0.01f),
+                )
+                .setBackgroundFrameAnchor(
+                    track.overlay.offsetX.coerceIn(-1f, 1f),
+                    track.overlay.offsetY.coerceIn(-1f, 1f),
+                )
+                .build()
+        }
+    }
+
+    private data class VideoOverlayTrack(
+        val overlay: Overlay,
+        val globalStartMs: Long,
+        val globalEndMs: Long,
+    )
 
     private fun Clip.reversesVideo(): Boolean =
         effectSegments.any { it.enabled && it.effectId == "reverse_video" }

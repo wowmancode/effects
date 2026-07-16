@@ -95,7 +95,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _selection.value = null
     }
 
-    fun addOverlay(clipId: String, uri: String, displayName: String, isVideo: Boolean) {
+    fun addOverlay(
+        clipId: String,
+        uri: String,
+        displayName: String,
+        isVideo: Boolean,
+        sourceDurationMs: Long = 0,
+    ) {
         updateClip(clipId) {
             copy(
                 overlays = overlays + Overlay(
@@ -103,6 +109,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     sourceUri = uri,
                     displayName = displayName,
                     isVideo = isVideo,
+                    sourceDurationMs = sourceDurationMs.coerceAtLeast(0),
                     startMs = 0,
                     endMs = durationMs,
                 ),
@@ -116,6 +123,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun removeOverlay(clipId: String, overlayId: String) {
         updateClip(clipId) { copy(overlays = overlays.filterNot { it.id == overlayId }) }
+    }
+
+    fun moveOverlay(clipId: String, overlayId: String, direction: Int) {
+        updateClip(clipId) {
+            val from = overlays.indexOfFirst { it.id == overlayId }
+            if (from < 0) return@updateClip this
+            val to = (from + direction).coerceIn(0, overlays.lastIndex)
+            if (from == to) return@updateClip this
+            copy(overlays = overlays.toMutableList().apply {
+                add(to, removeAt(from))
+            })
+        }
     }
 
     fun selectClip(id: String) {

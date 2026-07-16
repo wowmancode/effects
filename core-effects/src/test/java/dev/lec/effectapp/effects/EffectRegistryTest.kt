@@ -41,6 +41,9 @@ class EffectRegistryTest {
             wave.params.map { it.id }.toSet(),
         )
 
+        val tiles = requireNotNull(EffectRegistry.byId("tiles"))
+        assertEquals(setOf("columns", "rows"), tiles.params.map { it.id }.toSet())
+
         val ripple = requireNotNull(EffectRegistry.byId("ripple"))
         assertEquals(setOf("position_x", "position_y", "strength", "stretch", "speed"), ripple.params.map { it.id }.toSet())
 

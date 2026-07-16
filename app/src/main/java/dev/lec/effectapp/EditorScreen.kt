@@ -206,7 +206,14 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            viewModel.addOverlay(clipId, uri.toString(), editorDisplayName(context, uri), isVideo = true)
+            val metadata = editorMetadata(context, uri)
+            viewModel.addOverlay(
+                clipId = clipId,
+                uri = uri.toString(),
+                displayName = metadata.first,
+                isVideo = true,
+                sourceDurationMs = metadata.second,
+            )
         }
     }
 

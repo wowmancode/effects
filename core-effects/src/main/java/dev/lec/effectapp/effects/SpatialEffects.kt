@@ -153,6 +153,25 @@ class PinchBulgeEffect : LecEffect {
 }
 
 @OptIn(UnstableApi::class)
+class TilesEffect : LecEffect {
+    override val id = "tiles"
+    override val displayName = "Tiles"
+    override val category = EffectCategory.EFFECTS
+    override val params = listOf(
+        EffectParam("columns", "Horizontal tiles", 1f, 8f, 2f),
+        EffectParam("rows", "Vertical tiles", 1f, 8f, 2f),
+    )
+
+    override fun toMediaEffect(values: Map<String, Float>): Effect = SpatialWarpEffect(
+        mode = 5,
+        centerX = 0.5f,
+        centerY = 0.5f,
+        first = values["columns"] ?: 2f,
+        second = values["rows"] ?: 2f,
+    )
+}
+
+@OptIn(UnstableApi::class)
 private data class SpatialWarpEffect(
     val mode: Int,
     val centerX: Float,
@@ -289,6 +308,10 @@ private class SpatialWarpShaderProgram(
                 float cosine = cos(angle);
                 corrected = mat2(cosine, -sine, sine, cosine) * corrected;
                 uv = uCenter + vec2(corrected.x / uAspect, corrected.y);
+              } else if (uMode == 5) {
+                float columns = max(1.0, floor(uParams.x + 0.5));
+                float rows = max(1.0, floor(uParams.y + 0.5));
+                uv = fract(uv * vec2(columns, rows));
               } else {
                 float falloff = 1.0 - smoothstep(0.0, 0.9, distanceFromCenter);
                 float phase = distanceFromCenter * 31.4159 * max(uParams.y, 0.01) -
