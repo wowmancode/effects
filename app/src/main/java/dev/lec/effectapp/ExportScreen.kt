@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -28,6 +29,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.core.content.FileProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.ExportException
@@ -49,6 +52,8 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
     var state by remember { mutableStateOf(ExportState.IDLE) }
     var progress by remember { mutableIntStateOf(0) }
+    var exportsText by remember { mutableStateOf("1") }
+    var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
@@ -91,6 +96,21 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         ) {
             when (state) {
                 ExportState.IDLE -> {
+                    Text("IHTX · cumulative effect passes, then concatenate")
+                    OutlinedTextField(
+                        value = exportsText,
+                        onValueChange = { value -> if (value.all(Char::isDigit)) exportsText = value },
+                        label = { Text("Exports") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = lengthText,
+                        onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) lengthText = value },
+                        label = { Text("Length per export (seconds)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Text("Export ${project.clips.size} clips with hard cuts and all enabled effects.")
                     if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
                     carrierError?.let { Text("Carrier audio error: $it") }
@@ -99,8 +119,12 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                             output.delete()
                             state = ExportState.RUNNING
                             progress = 0
-                            exporter.start(
+                            val exports = exportsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                            val lengthMs = ((lengthText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(1)
+                            exporter.startIhtx(
                                 project,
+                                exports,
+                                lengthMs,
                                 output.absolutePath,
                                 object : ProjectExporter.Callback {
                                     override fun onCompleted() { state = ExportState.DONE; progress = 100 }
