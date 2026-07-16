@@ -235,16 +235,29 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         }
     }
     DisposableEffect(player, lifecycleOwner) {
+        // Rapid repeated errors mean the effect/GL chain is wedged. Retrying the same effects just
+        // replays a fraction of a second forever, so after a few fast failures we drop the video
+        // effects and let the clip keep playing without them instead of looping.
+        var errorRetries = 0
+        var lastErrorAtMs = 0L
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                if (player.mediaItemCount > 0) {
-                    val item = player.currentMediaItemIndex.coerceAtLeast(0)
-                    val position = player.currentPosition.coerceAtLeast(0)
-                    // Tear down a failed decoder/effect chain before asking Media3 to retry it.
-                    player.stop()
-                    player.seekTo(item, position)
-                    player.prepare()
+                if (player.mediaItemCount == 0) return
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastErrorAtMs > 4_000) errorRetries = 0
+                lastErrorAtMs = now
+                errorRetries++
+                val item = player.currentMediaItemIndex.coerceAtLeast(0)
+                val position = player.currentPosition.coerceAtLeast(0)
+                // Tear down a failed decoder/effect chain before asking Media3 to retry it.
+                player.stop()
+                if (errorRetries >= 3) {
+                    // Effects keep failing: fall back to plain playback so it can't loop.
+                    runCatching { player.setVideoEffects(emptyList()) }
+                    errorRetries = 0
                 }
+                player.seekTo(item, position)
+                player.prepare()
             }
         }
         val observer = LifecycleEventObserver { _, event ->
