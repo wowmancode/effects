@@ -40,13 +40,18 @@ class DisplacementMapEffect : LecEffect {
 }
 
 @OptIn(UnstableApi::class)
-fun displacementMapMediaEffect(uri: String?, values: Map<String, Float>): Effect? {
+fun displacementMapMediaEffect(
+    uri: String?,
+    values: Map<String, Float>,
+    waitForVideoMapFrames: Boolean = false,
+): Effect? {
     val source = uri?.takeIf(String::isNotBlank) ?: return null
     return DisplacementMapGlEffect(
         uri = source,
         strength = (values["strength"] ?: 0.06f).coerceIn(0f, 0.25f),
         warpX = (values["warp_x"] ?: 1f) >= 0.5f,
         warpY = (values["warp_y"] ?: 1f) >= 0.5f,
+        waitForVideoMapFrames = waitForVideoMapFrames,
     )
 }
 
@@ -56,9 +61,10 @@ private data class DisplacementMapGlEffect(
     val strength: Float,
     val warpX: Boolean,
     val warpY: Boolean,
+    val waitForVideoMapFrames: Boolean,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-        val mapSource = openMapSource(context, uri)
+        val mapSource = openMapSource(context, uri, waitForVideoMapFrames)
             ?: throw VideoFrameProcessingException(IllegalArgumentException("Could not read displacement map"))
         return DisplacementMapShaderProgram(useHdr, mapSource, strength, warpX, warpY)
     }
@@ -78,6 +84,7 @@ private sealed interface MapSource : AutoCloseable {
     class Video(
         private val retriever: MediaMetadataRetriever,
         private val durationUs: Long,
+        private val waitForFrames: Boolean,
         private var cachedFrame: Bitmap,
     ) : MapSource {
         private val decoder = Executors.newSingleThreadExecutor()
@@ -90,25 +97,31 @@ private sealed interface MapSource : AutoCloseable {
         override fun initialFrame(): Bitmap = cachedFrame
 
         override fun frameAt(presentationTimeUs: Long): Bitmap? {
-            requestFrame(presentationTimeUs % durationUs)
-            val frame = pendingFrame.getAndSet(null) ?: return null
+            val mapTimeUs = presentationTimeUs % durationUs
+            if (waitForFrames) return decodeFrame(mapTimeUs)?.also(::replaceCachedFrame)
+            requestFrame(mapTimeUs)
+            return pendingFrame.getAndSet(null)?.also(::replaceCachedFrame)
+        }
+
+        private fun decodeFrame(mapTimeUs: Long): Bitmap? {
+            val option = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                MediaMetadataRetriever.OPTION_CLOSEST
+            } else {
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+            }
+            return retriever.getFrameAtTime(mapTimeUs, option)?.downscaled()
+        }
+
+        private fun replaceCachedFrame(frame: Bitmap) {
             val previous = cachedFrame
             cachedFrame = frame
             if (!previous.isRecycled) previous.recycle()
-            return frame
         }
 
         private fun requestFrame(mapTimeUs: Long) {
             if (!frameRequestInFlight.compareAndSet(false, true) || closed) return
             decoder.execute {
-                val option = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    MediaMetadataRetriever.OPTION_CLOSEST
-                } else {
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                }
-                val frame = runCatching {
-                    retriever.getFrameAtTime(mapTimeUs, option)?.downscaled()
-                }.getOrNull()
+                val frame = runCatching { decodeFrame(mapTimeUs) }.getOrNull()
                 if (frame != null) {
                     if (closed) {
                         if (!frame.isRecycled) frame.recycle()
@@ -133,7 +146,11 @@ private sealed interface MapSource : AutoCloseable {
     }
 }
 
-private fun openMapSource(context: Context, source: String): MapSource? = runCatching {
+private fun openMapSource(
+    context: Context,
+    source: String,
+    waitForVideoMapFrames: Boolean,
+): MapSource? = runCatching {
     val uri = Uri.parse(source)
     context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
         ?.downscaled()
@@ -147,7 +164,7 @@ private fun openMapSource(context: Context, source: String): MapSource? = runCat
         ).downscaled()
         val durationUs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
             ?.toLongOrNull()?.times(1_000L)?.coerceAtLeast(1L) ?: 1L
-        MapSource.Video(retriever, durationUs, bitmap)
+        MapSource.Video(retriever, durationUs, waitForVideoMapFrames, bitmap)
     } catch (error: Throwable) {
         retriever.release()
         throw error

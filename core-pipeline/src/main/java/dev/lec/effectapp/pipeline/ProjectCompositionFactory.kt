@@ -77,6 +77,7 @@ object ProjectCompositionFactory {
         timeMs: Long = 0,
         resolveBitmap: (String) -> Bitmap? = { null },
         includeVideoOverlayPosters: Boolean = true,
+        waitForVideoMapFrames: Boolean = false,
     ): List<Effect> {
         val result = mutableListOf<Effect>()
         val transform = clip.transform
@@ -99,7 +100,11 @@ object ProjectCompositionFactory {
             } else if (segment.effectId == "custom_lut") {
                 customLutMediaEffect(segment.stringParams["lut_uri"], segment.paramsAt(timeMs)["mix"] ?: 1f)
             } else if (segment.effectId == "displacement_map") {
-                displacementMapMediaEffect(segment.stringParams["map_uri"], segment.paramsAt(timeMs))
+                displacementMapMediaEffect(
+                    segment.stringParams["map_uri"],
+                    segment.paramsAt(timeMs),
+                    waitForVideoMapFrames,
+                )
             } else {
                 EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))
             }
@@ -167,7 +172,13 @@ object ProjectCompositionFactory {
         val effects = Effects(
             audioProcessors,
             if (includeVideo) {
-                videoEffects(clip, slice.startMs, resolveBitmap, includeVideoOverlayPosters = false)
+                videoEffects(
+                    clip,
+                    slice.startMs,
+                    resolveBitmap,
+                    includeVideoOverlayPosters = false,
+                    waitForVideoMapFrames = true,
+                )
             } else emptyList(),
         )
         return EditedMediaItem.Builder(mediaItem)
