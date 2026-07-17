@@ -202,6 +202,12 @@ fun EditPanel(
                             "split_pitch" -> SplitPitchEditor(editorParams) { params ->
                                 updateEditorParams(params)
                             }
+                            "displacement_map" -> {
+                                DisplacementMapEditor(segment.stringParams) { values ->
+                                    viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(stringParams = values) }
+                                }
+                                EffectParameterControls(effect, editorParams, updateEditorParams)
+                            }
                             else -> {
                                 if (effect.id == "custom_lut") {
                                     CustomLutEditor(segment.stringParams) { values ->
@@ -222,22 +228,7 @@ fun EditPanel(
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
-                                effect.params.forEach { parameter ->
-                                    val value = editorParams[parameter.id] ?: parameter.default
-                                    if (parameter.kind == ParamKind.BOOLEAN) {
-                                        BooleanParameterButton(parameter.displayName, value >= 0.5f) { enabled ->
-                                            updateEditorParams(editorParams + (parameter.id to if (enabled) 1f else 0f))
-                                        }
-                                    } else {
-                                        ParameterSlider(
-                                            parameter.displayName,
-                                            value,
-                                            parameter.min..parameter.max,
-                                        ) { updated ->
-                                            updateEditorParams(editorParams + (parameter.id to updated))
-                                        }
-                                    }
-                                }
+                                EffectParameterControls(effect, editorParams, updateEditorParams)
                             }
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -385,6 +376,26 @@ private fun RowScope.CategoryButton(
         Button(onClick = { onClick(category) }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel(label) }
     } else {
         OutlinedButton(onClick = { onClick(category) }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel(label) }
+    }
+}
+
+@Composable
+private fun EffectParameterControls(
+    effect: dev.lec.effectapp.effects.LecEffect,
+    values: Map<String, Float>,
+    onChange: (Map<String, Float>) -> Unit,
+) {
+    effect.params.forEach { parameter ->
+        val value = values[parameter.id] ?: parameter.default
+        if (parameter.kind == ParamKind.BOOLEAN) {
+            BooleanParameterButton(parameter.displayName, value >= 0.5f) { enabled ->
+                onChange(values + (parameter.id to if (enabled) 1f else 0f))
+            }
+        } else {
+            ParameterSlider(parameter.displayName, value, parameter.min..parameter.max) { updated ->
+                onChange(values + (parameter.id to updated))
+            }
+        }
     }
 }
 

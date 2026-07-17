@@ -23,6 +23,7 @@ import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
 import dev.lec.effectapp.effects.DEFAULT_VIDEO_PLUGIN_SOURCE
+import dev.lec.effectapp.effects.displacementMapMediaEffect
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.audioProcessorFor
 import dev.lec.effectapp.effects.customLutMediaEffect
@@ -97,6 +98,8 @@ object ProjectCompositionFactory {
                 )
             } else if (segment.effectId == "custom_lut") {
                 customLutMediaEffect(segment.stringParams["lut_uri"], segment.paramsAt(timeMs)["mix"] ?: 1f)
+            } else if (segment.effectId == "displacement_map") {
+                displacementMapMediaEffect(segment.stringParams["map_uri"], segment.paramsAt(timeMs))
             } else {
                 EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))
             }

@@ -8,6 +8,7 @@ object EffectRegistry {
         LabInvertEffect(),
         LabHueShiftEffect(),
         ColorCurvesEffect(),
+        DisplacementMapEffect(),
         CustomLutEffect(),
         VideoPluginEffect(),
         SharpenEffect(),
