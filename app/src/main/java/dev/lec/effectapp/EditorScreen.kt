@@ -385,7 +385,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                     TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo()) { Text("Undo") }
                     TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo()) { Text("Redo") }
                     TextButton(onClick = { loadProject.launch(arrayOf("application/json")) }) { Text("Load") }
-                    TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let(viewModel::removeClip) }, enabled = project.clips.isNotEmpty()) { Text("Delete") }
+                    TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } }, enabled = project.clips.isNotEmpty()) { Text("Delete") }
                     TextButton(onClick = { saveProject.launch("effect-project.json") }) { Text("Save") }
                     TextButton(onClick = onExport, enabled = project.clips.isNotEmpty()) { Text("Export") }
                 },
