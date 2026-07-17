@@ -5,6 +5,8 @@ object EffectRegistry {
         HueRotateEffect(),
         HslAdjustEffect(),
         SelectiveHueEffect(),
+        LabInvertEffect(),
+        LabHueShiftEffect(),
         ColorCurvesEffect(),
         CustomLutEffect(),
         VideoPluginEffect(),
