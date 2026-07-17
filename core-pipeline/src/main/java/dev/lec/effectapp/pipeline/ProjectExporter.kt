@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -24,7 +25,10 @@ class ProjectExporter(context: Context) {
  private val queue = Handler(Looper.getMainLooper())
  private lateinit var transformer: Transformer
  init {
-  transformer = Transformer.Builder(context).addListener(object : Transformer.Listener {
+  transformer = Transformer.Builder(context)
+   .setVideoMimeType(MimeTypes.VIDEO_H264)
+   .setAudioMimeType(MimeTypes.AUDIO_AAC)
+   .addListener(object : Transformer.Listener {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
    val b=batch
    if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
