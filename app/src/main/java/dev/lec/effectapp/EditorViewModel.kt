@@ -23,6 +23,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class EditorViewModel(application: Application) : AndroidViewModel(application) {
+    private val undoStack = ArrayDeque<EditProject>()
+    private val redoStack = ArrayDeque<EditProject>()
+    private val maxHistory = 80
     private val presetFile = application.filesDir.resolve("effect-presets.json")
     private val _project = MutableStateFlow(EditProject())
     val project: StateFlow<EditProject> = _project.asStateFlow()
@@ -38,6 +41,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun addClip(uri: String, displayName: String, durationMs: Long) {
+        recordUndo()
         val clip = Clip(
             id = UUID.randomUUID().toString(),
             sourceUri = uri,
@@ -51,12 +55,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val clips = _project.value.clips.toMutableList()
         val destination = (index + delta).coerceIn(clips.indices)
         if (index == destination) return
+        recordUndo()
         val clip = clips.removeAt(index)
         clips.add(destination, clip)
         _project.value = _project.value.copy(clips = clips)
     }
 
     fun removeClip(id: String) {
+        recordUndo()
         _project.value = _project.value.copy(clips = _project.value.clips.filterNot { it.id == id })
         if (_selection.value?.clipId == id) _selection.value = null
     }
@@ -67,6 +73,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Snips [clipId] at [atLocalMs] (local to the clip) into two independent clips. */
     fun splitClip(clipId: String, atLocalMs: Long) {
+        recordUndo()
         val clips = _project.value.clips
         val index = clips.indexOfFirst { it.id == clipId }
         if (index == -1) return
@@ -353,7 +360,29 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun updateClip(id: String, transform: Clip.() -> Clip) {
+        recordUndo()
         _project.value = _project.value.copy(clips = _project.value.clips.map { if (it.id == id) it.transform() else it })
+    }
+
+    fun canUndo(): Boolean = undoStack.isNotEmpty()
+    fun canRedo(): Boolean = redoStack.isNotEmpty()
+
+    fun undo() {
+        val previous = undoStack.removeLastOrNull() ?: return
+        redoStack.addLast(_project.value)
+        _project.value = previous
+        _selection.value = null
+    }
+
+    fun redo() {
+        val next = redoStack.removeLastOrNull() ?: return
+        undoStack.addLast(_project.value)
+        _project.value = next
+        _selection.value = null
+    }
+
+    private fun recordUndo() {
+        undoStack.addLast(_project.value); while (undoStack.size > maxHistory) undoStack.removeFirst(); redoStack.clear()
     }
 
     private fun canReadMedia(source: String): Boolean = runCatching {
