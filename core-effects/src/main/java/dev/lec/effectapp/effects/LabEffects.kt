@@ -18,8 +18,16 @@ class LabInvertEffect : LecEffect {
     override val id = "lab_invert"
     override val displayName = "LAB invert"
     override val category = EffectCategory.EFFECTS
-    override val params = listOf(EffectParam("mix", "Mix", 0f, 1f, 1f))
-    override fun toMediaEffect(values: Map<String, Float>): Effect = LabColorEffect(0, values["mix"] ?: 1f, 0f)
+    override val params = listOf(
+        EffectParam("red", "Invert red", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("green", "Invert green", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("blue", "Invert blue", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("mix", "Mix", 0f, 1f, 1f),
+    )
+    override fun toMediaEffect(values: Map<String, Float>): Effect = LabColorEffect(
+        0, values["mix"] ?: 1f, 0f,
+        floatArrayOf(values["red"] ?: 1f, values["green"] ?: 1f, values["blue"] ?: 1f),
+    )
 }
 
 @OptIn(UnstableApi::class)
@@ -32,17 +40,17 @@ class LabHueShiftEffect : LecEffect {
         EffectParam("mix", "Mix", 0f, 1f, 1f),
     )
     override fun toMediaEffect(values: Map<String, Float>): Effect =
-        LabColorEffect(1, values["mix"] ?: 1f, values["degrees"] ?: 0f)
+        LabColorEffect(1, values["mix"] ?: 1f, values["degrees"] ?: 0f, floatArrayOf(1f, 1f, 1f))
 }
 
 @OptIn(UnstableApi::class)
-private data class LabColorEffect(val mode: Int, val mix: Float, val degrees: Float) : GlEffect {
+private data class LabColorEffect(val mode: Int, val mix: Float, val degrees: Float, val channels: FloatArray) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        LabColorShaderProgram(useHdr, mode, mix, degrees)
+        LabColorShaderProgram(useHdr, mode, mix, degrees, channels)
 }
 
 @OptIn(UnstableApi::class)
-private class LabColorShaderProgram(useHdr: Boolean, mode: Int, mix: Float, degrees: Float) : BaseGlShaderProgram(useHdr, 1) {
+private class LabColorShaderProgram(useHdr: Boolean, mode: Int, mix: Float, degrees: Float, private val channels: FloatArray) : BaseGlShaderProgram(useHdr, 1) {
     private val program = try { GlProgram(LAB_VERTEX, LAB_FRAGMENT) } catch (error: GlUtil.GlException) { throw VideoFrameProcessingException(error) }
     private val settings = floatArrayOf(mode.toFloat(), mix.coerceIn(0f, 1f), degrees * Math.PI.toFloat() / 180f, 0f)
     override fun configure(inputWidth: Int, inputHeight: Int): Size = Size(inputWidth, inputHeight)
@@ -51,6 +59,7 @@ private class LabColorShaderProgram(useHdr: Boolean, mode: Int, mix: Float, degr
             program.use()
             program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             program.setFloatsUniform("uSettings", settings)
+            program.setFloatsUniform("uChannels", floatArrayOf(channels[0], channels[1], channels[2], 0f))
             program.setBufferAttribute("aFramePosition", LAB_VERTICES, 4)
             program.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, 4)
@@ -67,7 +76,7 @@ private const val LAB_VERTEX = """
 """
 private const val LAB_FRAGMENT = """
  precision mediump float;
- uniform sampler2D uTexSampler; uniform vec4 uSettings; varying vec2 vTexSamplingCoord;
+ uniform sampler2D uTexSampler; uniform vec4 uSettings; uniform vec4 uChannels; varying vec2 vTexSamplingCoord;
  float lin(float c){return c<=.04045?c/12.92:pow((c+.055)/1.055,2.4);}
  float srgb(float c){return c<=.0031308?12.92*c:1.055*pow(c,1.0/2.4)-.055;}
  float f(float t){return t>.008856?pow(t,1.0/3.0):7.787*t+16.0/116.0;}
@@ -88,6 +97,8 @@ private const val LAB_FRAGMENT = """
    vec4 source=texture2D(uTexSampler,vTexSamplingCoord); vec3 lab=rgbLab(source.rgb);
    if(uSettings.x<.5){ lab=vec3(100.0-lab.x,-lab.y,-lab.z); }
    else { float cs=cos(uSettings.z),sn=sin(uSettings.z); lab.yz=vec2(lab.y*cs-lab.z*sn,lab.y*sn+lab.z*cs); }
-   gl_FragColor=vec4(mix(source.rgb,labRgb(lab),uSettings.y),source.a);
+   vec3 changed=mix(source.rgb,labRgb(lab),uSettings.y);
+   if(uSettings.x<.5) changed=mix(source.rgb,changed,uChannels.rgb);
+   gl_FragColor=vec4(changed,source.a);
  }
 """
