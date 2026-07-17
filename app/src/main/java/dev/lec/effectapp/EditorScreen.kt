@@ -1,5 +1,6 @@
 package dev.lec.effectapp
 
+import android.content.res.Configuration
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -50,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -93,6 +95,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     val selection by viewModel.selection.collectAsState()
     var playerPositionMs by remember { mutableLongStateOf(0) }
     var currentClipIndex by remember { mutableIntStateOf(0) }
+    val portrait = LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT
     var pendingSegment by remember { mutableStateOf<PendingSegment?>(null) }
     var pendingPresetExportId by remember { mutableStateOf<String?>(null) }
     var pendingReplaceClipId by remember { mutableStateOf<String?>(null) }
@@ -379,11 +382,20 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(project.name) },
+                title = {
+                    if (portrait) {
+                        Row {
+                            TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo()) { Text("Undo") }
+                            TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo()) { Text("Redo") }
+                        }
+                    }
+                },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
                 actions = {
-                    TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo()) { Text("Undo") }
-                    TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo()) { Text("Redo") }
+                    if (!portrait) {
+                        TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo()) { Text("Undo") }
+                        TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo()) { Text("Redo") }
+                    }
                     TextButton(onClick = { loadProject.launch(arrayOf("application/json")) }) { Text("Load") }
                     TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } }, enabled = project.clips.isNotEmpty()) { Text("Delete") }
                     TextButton(onClick = { saveProject.launch("effect-project.json") }) { Text("Save") }
