@@ -36,7 +36,7 @@ internal fun DisplacementMapEditor(values: Map<String, String>, onChange: (Map<S
     Text(
         when {
             uri == null -> "Import a grayscale/color map. Mid-gray (128) leaves pixels in place."
-            type == "video" -> "Video map selected. Its first frame is currently used by the single-texture preview/export path."
+            type == "video" -> "Video map selected. It loops with the clip; red controls X and green controls Y."
             else -> "Image map selected. Red controls X and green controls Y; 128 is neutral."
         },
     )
