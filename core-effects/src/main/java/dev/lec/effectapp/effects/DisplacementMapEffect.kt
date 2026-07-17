@@ -18,6 +18,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
 /** Displaces source pixels using red (X) and green (Y) values from a map. */
@@ -74,29 +78,55 @@ private sealed interface MapSource : AutoCloseable {
     class Video(
         private val retriever: MediaMetadataRetriever,
         private val durationUs: Long,
-        private var cachedTimeUs: Long,
         private var cachedFrame: Bitmap,
     ) : MapSource {
+        private val decoder = Executors.newSingleThreadExecutor()
+        private val frameRequestInFlight = AtomicBoolean()
+        private val pendingFrame = AtomicReference<Bitmap?>()
+
+        @Volatile
+        private var closed = false
+
         override fun initialFrame(): Bitmap = cachedFrame
 
         override fun frameAt(presentationTimeUs: Long): Bitmap? {
-            val mapTimeUs = presentationTimeUs % durationUs
-            if (mapTimeUs / MAP_FRAME_INTERVAL_US == cachedTimeUs / MAP_FRAME_INTERVAL_US) return null
-            val option = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                MediaMetadataRetriever.OPTION_CLOSEST
-            } else {
-                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-            }
-            val frame = retriever.getFrameAtTime(mapTimeUs, option)
-                ?.downscaled() ?: return null
+            requestFrame(presentationTimeUs % durationUs)
+            val frame = pendingFrame.getAndSet(null) ?: return null
             val previous = cachedFrame
             cachedFrame = frame
-            cachedTimeUs = mapTimeUs
             if (!previous.isRecycled) previous.recycle()
             return frame
         }
 
+        private fun requestFrame(mapTimeUs: Long) {
+            if (!frameRequestInFlight.compareAndSet(false, true) || closed) return
+            decoder.execute {
+                val option = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    MediaMetadataRetriever.OPTION_CLOSEST
+                } else {
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                }
+                val frame = runCatching {
+                    retriever.getFrameAtTime(mapTimeUs, option)?.downscaled()
+                }.getOrNull()
+                if (frame != null) {
+                    if (closed) {
+                        if (!frame.isRecycled) frame.recycle()
+                    } else {
+                        pendingFrame.getAndSet(frame)?.let { pending ->
+                            if (!pending.isRecycled) pending.recycle()
+                        }
+                    }
+                }
+                frameRequestInFlight.set(false)
+            }
+        }
+
         override fun close() {
+            closed = true
+            decoder.shutdownNow()
+            runCatching { decoder.awaitTermination(1, TimeUnit.SECONDS) }
+            pendingFrame.getAndSet(null)?.let { frame -> if (!frame.isRecycled) frame.recycle() }
             if (!cachedFrame.isRecycled) cachedFrame.recycle()
             retriever.release()
         }
@@ -117,7 +147,7 @@ private fun openMapSource(context: Context, source: String): MapSource? = runCat
         ).downscaled()
         val durationUs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
             ?.toLongOrNull()?.times(1_000L)?.coerceAtLeast(1L) ?: 1L
-        MapSource.Video(retriever, durationUs, 0L, bitmap)
+        MapSource.Video(retriever, durationUs, bitmap)
     } catch (error: Throwable) {
         retriever.release()
         throw error
@@ -189,8 +219,6 @@ private class DisplacementMapShaderProgram(
         super.release()
     }
 }
-
-private const val MAP_FRAME_INTERVAL_US = 1_000_000L / 30L
 
 private val VERTICES = floatArrayOf(-1f, -1f, 0f, 1f, -1f, 1f, 0f, 1f, 1f, 1f, 0f, 1f, 1f, -1f, 0f, 1f)
 private const val VERTEX_SHADER = """
