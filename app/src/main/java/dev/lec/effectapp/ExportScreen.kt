@@ -129,7 +129,12 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 object : ProjectExporter.Callback {
                                     override fun onCompleted() { state = ExportState.DONE; progress = 100 }
                                     override fun onError(errorValue: ExportException) {
-                                        error = errorValue.message
+                                        error = listOfNotNull(
+                                            errorValue.message,
+                                            errorValue.cause?.message,
+                                        ).distinct().joinToString(" · ").ifBlank {
+                                            errorValue.javaClass.simpleName
+                                        }
                                         state = ExportState.ERROR
                                     }
                                 },
