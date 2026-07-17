@@ -40,7 +40,7 @@ internal fun DisplacementMapEditor(values: Map<String, String>, onChange: (Map<S
             else -> "Image map selected. Red controls X and green controls Y; 128 is neutral."
         },
     )
-    error?.let { Text(error) }
+    error?.let { Text(it) }
     OutlinedButton(
         onClick = { picker.launch(arrayOf("image/*", "video/*")) },
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
