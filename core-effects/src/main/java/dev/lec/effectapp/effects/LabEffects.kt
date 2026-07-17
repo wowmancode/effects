@@ -19,9 +19,9 @@ class LabInvertEffect : LecEffect {
     override val displayName = "LAB invert"
     override val category = EffectCategory.EFFECTS
     override val params = listOf(
-        EffectParam("red", "Invert red", 0f, 1f, 1f, ParamKind.BOOLEAN),
-        EffectParam("green", "Invert green", 0f, 1f, 1f, ParamKind.BOOLEAN),
-        EffectParam("blue", "Invert blue", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("red", "R · L* lightness", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("green", "G · a* axis", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("blue", "B · b* axis", 0f, 1f, 1f, ParamKind.BOOLEAN),
         EffectParam("mix", "Mix", 0f, 1f, 1f),
     )
     override fun toMediaEffect(values: Map<String, Float>): Effect = LabColorEffect(
@@ -95,10 +95,13 @@ private const val LAB_FRAGMENT = """
  }
  void main(){
    vec4 source=texture2D(uTexSampler,vTexSamplingCoord); vec3 lab=rgbLab(source.rgb);
-   if(uSettings.x<.5){ lab=vec3(100.0-lab.x,-lab.y,-lab.z); }
+   if(uSettings.x<.5){
+     if(uChannels.r>.5) lab.x=100.0-lab.x;
+     if(uChannels.g>.5) lab.y=-lab.y;
+     if(uChannels.b>.5) lab.z=-lab.z;
+   }
    else { float cs=cos(uSettings.z),sn=sin(uSettings.z); lab.yz=vec2(lab.y*cs-lab.z*sn,lab.y*sn+lab.z*cs); }
    vec3 changed=mix(source.rgb,labRgb(lab),uSettings.y);
-   if(uSettings.x<.5) changed=mix(source.rgb,changed,uChannels.rgb);
    gl_FragColor=vec4(changed,source.a);
  }
 """
