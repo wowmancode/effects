@@ -3,11 +3,15 @@ package dev.lec.effectapp.effects
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
+import android.graphics.SurfaceTexture
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
-import android.os.Build
+import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLUtils
+import android.view.Surface
 import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.VideoFrameProcessingException
@@ -18,10 +22,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 
 /** Displaces source pixels using red (X) and green (Y) values from a map. */
@@ -72,76 +72,113 @@ private data class DisplacementMapGlEffect(
 
 /** A still image or a looping video map selected at the input frame presentation timestamp. */
 private sealed interface MapSource : AutoCloseable {
-    fun initialFrame(): Bitmap
-    fun frameAt(presentationTimeUs: Long): Bitmap?
+    val externalTextureId: Int? get() = null
+    fun initialFrame(): Bitmap? = null
+    fun frameAt(presentationTimeUs: Long)
 
     class Image(private val bitmap: Bitmap) : MapSource {
         override fun initialFrame(): Bitmap = bitmap
-        override fun frameAt(presentationTimeUs: Long): Bitmap? = null
+        override fun frameAt(presentationTimeUs: Long) = Unit
         override fun close() { if (!bitmap.isRecycled) bitmap.recycle() }
     }
 
-    class Video(
-        private val retriever: MediaMetadataRetriever,
-        private val durationUs: Long,
-        private val waitForFrames: Boolean,
-        private var cachedFrame: Bitmap,
-    ) : MapSource {
-        private val decoder = Executors.newSingleThreadExecutor()
-        private val frameRequestInFlight = AtomicBoolean()
-        private val pendingFrame = AtomicReference<Bitmap?>()
+    class Video(context: Context, source: String, private val waitForFrames: Boolean) : MapSource {
+        private val extractor = MediaExtractor()
+        private val codec: MediaCodec
+        private val surfaceTexture: SurfaceTexture
+        private val outputSurface: Surface
+        private val durationUs: Long
+        private var inputEnded = false
+        private var lastFrameUs = -1L
+        private var frameAvailable = false
+        private val frameLock = Object()
+        override val externalTextureId: Int
 
-        @Volatile
-        private var closed = false
-
-        override fun initialFrame(): Bitmap = cachedFrame
-
-        override fun frameAt(presentationTimeUs: Long): Bitmap? {
-            val mapTimeUs = presentationTimeUs % durationUs
-            if (waitForFrames) return decodeFrame(mapTimeUs)?.also(::replaceCachedFrame)
-            requestFrame(mapTimeUs)
-            return pendingFrame.getAndSet(null)?.also(::replaceCachedFrame)
-        }
-
-        private fun decodeFrame(mapTimeUs: Long): Bitmap? {
-            val option = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                MediaMetadataRetriever.OPTION_CLOSEST
+        init {
+            extractor.setDataSource(context, Uri.parse(source), emptyMap())
+            val track = (0 until extractor.trackCount).firstOrNull { index ->
+                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
+            } ?: error("Displacement map has no video track")
+            val format = extractor.getTrackFormat(track)
+            durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(1L)
             } else {
-                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                Long.MAX_VALUE
             }
-            return retriever.getFrameAtTime(mapTimeUs, option)?.downscaled()
+            extractor.selectTrack(track)
+            externalTextureId = IntArray(1).also { textures ->
+                GLES20.glGenTextures(1, textures, 0)
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0])
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+            }[0]
+            surfaceTexture = SurfaceTexture(externalTextureId).apply {
+                setOnFrameAvailableListener {
+                    synchronized(frameLock) { frameAvailable = true; frameLock.notifyAll() }
+                }
+            }
+            outputSurface = Surface(surfaceTexture)
+            codec = MediaCodec.createDecoderByType(requireNotNull(format.getString(MediaFormat.KEY_MIME)))
+            codec.configure(format, outputSurface, null, 0)
+            codec.start()
         }
 
-        private fun replaceCachedFrame(frame: Bitmap) {
-            val previous = cachedFrame
-            cachedFrame = frame
-            if (!previous.isRecycled) previous.recycle()
+        override fun frameAt(presentationTimeUs: Long) {
+            val targetUs = presentationTimeUs % durationUs
+            if (targetUs < lastFrameUs) restart()
+            val limit = if (waitForFrames) 128 else 1
+            repeat(limit) {
+                val timestamp = decodeOne() ?: return
+                if (timestamp >= targetUs) return
+            }
         }
 
-        private fun requestFrame(mapTimeUs: Long) {
-            if (!frameRequestInFlight.compareAndSet(false, true) || closed) return
-            decoder.execute {
-                val frame = runCatching { decodeFrame(mapTimeUs) }.getOrNull()
-                if (frame != null) {
-                    if (closed) {
-                        if (!frame.isRecycled) frame.recycle()
+        private fun decodeOne(): Long? {
+            if (!inputEnded) {
+                val index = codec.dequeueInputBuffer(CODEC_TIMEOUT_US)
+                if (index >= 0) {
+                    val buffer = requireNotNull(codec.getInputBuffer(index))
+                    val size = extractor.readSampleData(buffer, 0)
+                    if (size < 0) {
+                        codec.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        inputEnded = true
                     } else {
-                        pendingFrame.getAndSet(frame)?.let { pending ->
-                            if (!pending.isRecycled) pending.recycle()
-                        }
+                        codec.queueInputBuffer(index, 0, size, extractor.sampleTime, extractor.sampleFlags)
+                        extractor.advance()
                     }
                 }
-                frameRequestInFlight.set(false)
             }
+            val info = MediaCodec.BufferInfo()
+            val output = codec.dequeueOutputBuffer(info, CODEC_TIMEOUT_US)
+            if (output < 0) return null
+            val render = info.size > 0
+            codec.releaseOutputBuffer(output, render)
+            if (!render) return null
+            synchronized(frameLock) {
+                if (!frameAvailable && waitForFrames) frameLock.wait(100)
+                if (!frameAvailable) return null
+                frameAvailable = false
+            }
+            surfaceTexture.updateTexImage()
+            lastFrameUs = info.presentationTimeUs
+            return lastFrameUs
+        }
+
+        private fun restart() {
+            codec.flush()
+            extractor.seekTo(0, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            inputEnded = false
+            lastFrameUs = -1L
         }
 
         override fun close() {
-            closed = true
-            decoder.shutdownNow()
-            runCatching { decoder.awaitTermination(1, TimeUnit.SECONDS) }
-            pendingFrame.getAndSet(null)?.let { frame -> if (!frame.isRecycled) frame.recycle() }
-            if (!cachedFrame.isRecycled) cachedFrame.recycle()
-            retriever.release()
+            runCatching { codec.stop() }; codec.release()
+            outputSurface.release(); surfaceTexture.release()
+            GLES20.glDeleteTextures(1, intArrayOf(externalTextureId), 0)
+            extractor.release()
         }
     }
 }
@@ -153,22 +190,8 @@ private fun openMapSource(
 ): MapSource? = runCatching {
     val uri = Uri.parse(source)
     context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-        ?.downscaled()
-        ?.let(MapSource::Image)
-        ?.also { return@runCatching it }
-    val retriever = MediaMetadataRetriever()
-    try {
-        retriever.setDataSource(context, uri)
-        val bitmap = requireNotNull(
-            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC),
-        ).downscaled()
-        val durationUs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            ?.toLongOrNull()?.times(1_000L)?.coerceAtLeast(1L) ?: 1L
-        MapSource.Video(retriever, durationUs, waitForVideoMapFrames, bitmap)
-    } catch (error: Throwable) {
-        retriever.release()
-        throw error
-    }
+        ?.downscaled()?.let(MapSource::Image)?.also { return@runCatching it }
+    MapSource.Video(context, source, waitForVideoMapFrames)
 }.getOrNull()
 
 private fun Bitmap.downscaled(): Bitmap {
@@ -179,6 +202,8 @@ private fun Bitmap.downscaled(): Bitmap {
             .also { if (it !== this && !isRecycled) recycle() }
     }
 }
+
+private const val CODEC_TIMEOUT_US = 10_000L
 
 @OptIn(UnstableApi::class)
 private class DisplacementMapShaderProgram(
@@ -203,7 +228,9 @@ private class DisplacementMapShaderProgram(
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, mapSource.initialFrame(), 0)
+        mapSource.initialFrame()?.let { frame ->
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, frame, 0)
+        }
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
     }
 
@@ -211,14 +238,15 @@ private class DisplacementMapShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
-            mapSource.frameAt(presentationTimeUs)?.let { frame ->
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mapTexture[0])
-                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, frame, 0)
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
-            }
+            mapSource.frameAt(presentationTimeUs)
             program.use()
             program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             program.setSamplerTexIdUniform("uMapSampler", mapTexture[0], 1)
+            program.setSamplerTexIdUniform("uVideoMapSampler", mapSource.externalTextureId ?: 0, 2)
+            program.setFloatsUniform(
+                "uUseVideoMap",
+                floatArrayOf(if (mapSource.externalTextureId == null) 0f else 1f),
+            )
             program.setFloatsUniform("uControls", controls)
             program.setBufferAttribute("aFramePosition", VERTICES, 4)
             program.bindAttributesAndUniforms()
@@ -247,14 +275,18 @@ private const val VERTEX_SHADER = """
     }
 """
 private const val FRAGMENT_SHADER = """
+    #extension GL_OES_EGL_image_external : require
     precision mediump float;
     uniform sampler2D uTexSampler;
     uniform sampler2D uMapSampler;
+    uniform samplerExternalOES uVideoMapSampler;
+    uniform float uUseVideoMap;
     uniform vec4 uControls;
     varying vec2 vTexSamplingCoord;
 
     void main() {
       vec4 map = texture2D(uMapSampler, vTexSamplingCoord);
+      if (uUseVideoMap > 0.5) map = texture2D(uVideoMapSampler, vTexSamplingCoord);
       // 0.5 (128 in 8-bit maps) is exactly neutral. Positive values move pixels right/down.
       vec2 offset = (map.rg - vec2(0.5)) * (2.0 * uControls.x);
       offset.x *= uControls.y;
