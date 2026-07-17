@@ -304,14 +304,13 @@ private class PitchDspState(
     private val ratios = voices.map { 2.0.pow(it.semitones.toDouble() / 12.0).toFloat() }
     private val phases = FloatArray(voices.size) { 0.25f }
     private var writeIndex = 0
-    private val totalVoiceLevel = voices.sumOf { it.level.toDouble() }.toFloat().coerceAtLeast(0.0001f)
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
         buffers[channel][writeIndex] = normalized
         var wet = 0f
         voices.forEachIndexed { index, voice ->
-            wet += shiftedSample(channel, phases[index], ratios[index]) * voice.level / totalVoiceLevel
+            wet += shiftedSample(channel, phases[index], ratios[index]) * voice.level
         }
         val active = timeMs in segment.startMs until segment.endMs
         val rendered = if (active) normalized * dryMix + wet * wetMix else normalized
