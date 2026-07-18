@@ -34,6 +34,7 @@ class DisplacementMapEffect : LecEffect {
         EffectParam("strength", "Strength", 0f, 0.25f, 0.06f),
         EffectParam("warp_x", "X warp", 0f, 1f, 1f, ParamKind.BOOLEAN),
         EffectParam("warp_y", "Y warp", 0f, 1f, 1f, ParamKind.BOOLEAN),
+        EffectParam("wrap_edges", "Wrap edges", 0f, 1f, 0f, ParamKind.BOOLEAN),
     )
 
     override fun toMediaEffect(values: Map<String, Float>): Effect? = null
@@ -51,6 +52,7 @@ fun displacementMapMediaEffect(
         strength = (values["strength"] ?: 0.06f).coerceIn(0f, 0.25f),
         warpX = (values["warp_x"] ?: 1f) >= 0.5f,
         warpY = (values["warp_y"] ?: 1f) >= 0.5f,
+        wrapEdges = (values["wrap_edges"] ?: 0f) >= 0.5f,
         waitForVideoMapFrames = waitForVideoMapFrames,
     )
 }
@@ -61,12 +63,13 @@ private data class DisplacementMapGlEffect(
     val strength: Float,
     val warpX: Boolean,
     val warpY: Boolean,
+    val wrapEdges: Boolean,
     val waitForVideoMapFrames: Boolean,
 ) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
         val mapSource = openMapSource(context, uri, waitForVideoMapFrames)
             ?: throw VideoFrameProcessingException(IllegalArgumentException("Could not read displacement map"))
-        return DisplacementMapShaderProgram(useHdr, mapSource, strength, warpX, warpY)
+        return DisplacementMapShaderProgram(useHdr, mapSource, strength, warpX, warpY, wrapEdges)
     }
 }
 
@@ -212,6 +215,7 @@ private class DisplacementMapShaderProgram(
     strength: Float,
     warpX: Boolean,
     warpY: Boolean,
+    wrapEdges: Boolean,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val program = try {
         GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -219,7 +223,7 @@ private class DisplacementMapShaderProgram(
         throw VideoFrameProcessingException(error)
     }
     private val mapTexture = IntArray(1)
-    private val controls = floatArrayOf(strength, if (warpX) 1f else 0f, if (warpY) 1f else 0f, 0f)
+    private val controls = floatArrayOf(strength, if (warpX) 1f else 0f, if (warpY) 1f else 0f, if (wrapEdges) 1f else 0f)
 
     init {
         GLES20.glGenTextures(1, mapTexture, 0)
@@ -292,7 +296,10 @@ private const val FRAGMENT_SHADER = """
       offset.x *= uControls.y;
       offset.y *= uControls.z;
       // Read from the opposite side so a positive map value moves the displayed pixel right/down.
-      vec2 sourceUv = clamp(vTexSamplingCoord - offset, 0.0, 1.0);
+      vec2 sourceUv = vTexSamplingCoord - offset;
+      // FFmpeg displace edge=wrap samples from the opposite edge instead of smearing.
+      if (uControls.w > 0.5) sourceUv = fract(sourceUv);
+      else sourceUv = clamp(sourceUv, 0.0, 1.0);
       gl_FragColor = texture2D(uTexSampler, sourceUv);
     }
 """

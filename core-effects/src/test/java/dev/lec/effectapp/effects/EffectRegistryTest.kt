@@ -46,6 +46,7 @@ class EffectRegistryTest {
         assertEquals(EffectCategory.EFFECTS, displacement.category)
         assertTrue(displacement.params.any { it.id == "warp_x" && it.kind == ParamKind.BOOLEAN })
         assertTrue(displacement.params.any { it.id == "warp_y" && it.kind == ParamKind.BOOLEAN })
+        assertTrue(displacement.params.any { it.id == "wrap_edges" && it.kind == ParamKind.BOOLEAN })
 
         assertEquals(setOf("columns", "rows"), tiles.params.map { it.id }.toSet())
 
