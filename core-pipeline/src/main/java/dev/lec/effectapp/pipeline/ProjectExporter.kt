@@ -20,7 +20,7 @@ import dev.lec.effectapp.model.Overlay
 import java.io.File
 import java.util.UUID
 @OptIn(UnstableApi::class)
-class ProjectExporter(context: Context) {
+class ProjectExporter(private val context: Context) {
  private var callback: Callback? = null
  private var batch: Batch? = null
  private var failedIhtxStatus: IhtxStatus? = null
