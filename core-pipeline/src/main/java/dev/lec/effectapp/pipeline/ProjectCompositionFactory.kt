@@ -262,7 +262,7 @@ object ProjectCompositionFactory {
                 )
                 .build()
             val videoEffects = if (track.overlay.includeAudio) {
-                listOf(Presentation.createForAspectRatio(1f, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+                listOf(Presentation.createForWidthAndHeight(512, 512, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             } else {
                 emptyList()
             }
