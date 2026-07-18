@@ -67,7 +67,9 @@ object ProjectCompositionFactory {
         val videoOverlays = videoOverlayTracks(project)
         if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences).build()
         val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs) }
-        return Composition.Builder(overlaySequences + baseSequences)
+        val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
+            .map { audioOverlaySequence(it, project.durationMs) }
+        return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences)
             .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays))
             .build()
     }
@@ -267,6 +269,30 @@ object ProjectCompositionFactory {
             remainingMs -= pieceDurationMs
         }
 
+        val trailingGapMs = projectDurationMs - track.globalEndMs
+        if (trailingGapMs > 0) builder.addGap(trailingGapMs * 1_000)
+        return builder.build()
+    }
+
+    private fun audioOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long): EditedMediaItemSequence {
+        val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
+        if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
+        var remainingMs = track.globalEndMs - track.globalStartMs
+        val sourceDurationMs = track.overlay.sourceDurationMs.takeIf { it >= 100 } ?: remainingMs
+        while (remainingMs > 0) {
+            val pieceDurationMs = minOf(sourceDurationMs, remainingMs)
+            val mediaItem = MediaItem.Builder()
+                .setUri(Uri.parse(track.overlay.sourceUri))
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(0)
+                        .setEndPositionMs(pieceDurationMs)
+                        .build(),
+                )
+                .build()
+            builder.addItem(EditedMediaItem.Builder(mediaItem).setRemoveVideo(true).build())
+            remainingMs -= pieceDurationMs
+        }
         val trailingGapMs = projectDurationMs - track.globalEndMs
         if (trailingGapMs > 0) builder.addGap(trailingGapMs * 1_000)
         return builder.build()

@@ -81,6 +81,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                 displayName = uri.lastPathSegment ?: "Video overlay",
                 isVideo = true,
                 sourceDurationMs = durationMs,
+                includeAudio = true,
             )
         }
         ihtxOverlays = ihtxOverlays + added
