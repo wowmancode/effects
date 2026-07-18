@@ -44,6 +44,7 @@ object ProjectCompositionFactory {
         project: EditProject,
         resolveBitmap: (String) -> Bitmap? = { null },
         targetFrameRate: Int? = null,
+        overlayPresentationSize: Size? = null,
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
@@ -70,7 +71,7 @@ object ProjectCompositionFactory {
 
         val videoOverlays = videoOverlayTracks(project)
         if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences).build()
-        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate) }
+        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, overlayPresentationSize) }
         val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
             .map { audioOverlaySequence(it, project.durationMs) }
         return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences)
@@ -251,7 +252,7 @@ object ProjectCompositionFactory {
         }
     }
 
-    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?): EditedMediaItemSequence {
+    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?, overlayPresentationSize: Size?): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
 
@@ -268,8 +269,8 @@ object ProjectCompositionFactory {
                         .build(),
                 )
                 .build()
-            val videoEffects = if (track.overlay.includeAudio) {
-                listOf(Presentation.createForWidthAndHeight(512, 512, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            val videoEffects = if (track.overlay.includeAudio && overlayPresentationSize != null) {
+                listOf(Presentation.createForWidthAndHeight(overlayPresentationSize.width, overlayPresentationSize.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             } else {
                 emptyList()
             }
