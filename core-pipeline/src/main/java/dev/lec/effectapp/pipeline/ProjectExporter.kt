@@ -26,33 +26,34 @@ class ProjectExporter(private val context: Context) {
  private var failedIhtxStatus: IhtxStatus? = null
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
  private val queue = Handler(Looper.getMainLooper())
- private lateinit var transformer: Transformer
- init {
-  transformer = Transformer.Builder(context)
-   .setVideoMimeType(MimeTypes.VIDEO_H264)
-   .setAudioMimeType(MimeTypes.AUDIO_AAC)
-   .addListener(object : Transformer.Listener {
+ private val transformerListener = object : Transformer.Listener {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
    val b=batch
-   if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
+   if (b==null) { val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted(); return }
    b.done++
    b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done, exportResult.approximateDurationMs) }
-   if (b.done < b.projects.size) queue.post { if (batch===b) startStage(b,b.done) }
+   if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
-    batch=null; b.files.forEach(File::delete); val c=callback; callback=null; c?.onCompleted()
+    batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted()
    }
    else if (!b.concat) {
     b.concat=true
+    transformer=newTransformer()
     queue.post { if (batch===b) transformer.start(concatenate(b.files),b.output) }
    }
-   else { batch=null; b.files.forEach(File::delete); val c=callback; callback=null; c?.onCompleted() }
+   else { batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted() }
   }
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
-   failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; val c=callback; callback=null; c?.onError(exportException)
+   failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; val c=callback; callback=null; transformer=newTransformer(); c?.onError(exportException)
   }
-  }).build()
  }
+ private var transformer: Transformer = newTransformer()
+ private fun newTransformer():Transformer = Transformer.Builder(context)
+  .setVideoMimeType(MimeTypes.VIDEO_H264)
+  .setAudioMimeType(MimeTypes.AUDIO_AAC)
+  .addListener(transformerListener)
+  .build()
  fun start(project: EditProject, outputPath: String, callback: Callback) {
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   transformer.start(ProjectCompositionFactory.create(project,resolveBitmap),outputPath)
