@@ -33,6 +33,7 @@ import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.ParamKind
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import kotlin.random.Random
 
 @Composable
 fun EditPanel(
@@ -229,6 +230,10 @@ fun EditPanel(
                                     }
                                 }
                                 if (effect.id == "vocoder_lab") {
+                                    OutlinedButton(
+                                        onClick = { updateEditorParams(randomizeVocoderLabParams(effect, editorParams)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) { Text("Randomize Vocoder Lab") }
                                     Text(
                                         "Three oscillators can each have their own shape, level, octave, and fine tune. Add sub, noise, up to seven unison voices with stereo spread, and use the LFO for pitch, filter, amplitude, and pan-style movement.",
                                         style = MaterialTheme.typography.bodySmall,
@@ -318,6 +323,21 @@ private fun RowScope.CategoryButton(
         Button(onClick = { onClick(category) }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel(label) }
     } else {
         OutlinedButton(onClick = { onClick(category) }, modifier = Modifier.weight(1f), contentPadding = TabButtonPadding) { tabLabel(label) }
+    }
+}
+
+internal fun randomizeVocoderLabParams(
+    effect: dev.lec.effectapp.effects.LecEffect,
+    current: Map<String, Float>,
+): Map<String, Float> {
+    val stepped = setOf("osc1_shape", "osc2_shape", "osc3_shape", "lfo_shape", "filter_mode", "bands", "unison_voices")
+    return current + effect.params.associate { parameter ->
+        val value = if (parameter.id in stepped) {
+            Random.nextInt(parameter.min.toInt(), parameter.max.toInt() + 1).toFloat()
+        } else {
+            Random.nextFloat() * (parameter.max - parameter.min) + parameter.min
+        }
+        parameter.id to value
     }
 }
 

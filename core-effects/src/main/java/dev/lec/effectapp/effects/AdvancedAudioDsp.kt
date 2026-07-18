@@ -39,7 +39,6 @@ class FlangerDspState(
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val dry = input / 32768f
-        currentChannel = channel
         val active = timeMs in segment.startMs until segment.endMs
         val rate = segment.params["rate_hz"] ?: 0.35f
         val depth = (segment.params["depth_ms"] ?: 4f).coerceIn(0.1f, 15f)
