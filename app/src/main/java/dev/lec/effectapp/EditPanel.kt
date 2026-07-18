@@ -214,7 +214,13 @@ fun EditPanel(
                                 DisplacementMapEditor(segment.stringParams) { values ->
                                     viewModel.updateSegment(selectedClip.id, segment.id) { it.copy(stringParams = values) }
                                 }
-                                EffectParameterControls(effect, editorParams, updateEditorParams)
+                                if (effect.id == "colorspace_hue_shift" || effect.id == "colorspace_invert") {
+                                    ColorspaceEffectPicker(effect, editorParams, updateEditorParams)
+                                    val hidden = if (effect.id == "colorspace_invert") setOf("colorspace", "red", "green", "blue") else setOf("colorspace")
+                                    EffectParameterControls(effect.withoutControls(hidden), editorParams, updateEditorParams)
+                                } else {
+                                    EffectParameterControls(effect, editorParams, updateEditorParams)
+                                }
                             }
                             else -> {
                                 if (effect.id == "custom_lut") {
@@ -341,7 +347,40 @@ internal fun randomizeVocoderLabParams(
     }
 }
 
-@Composable
+private fun dev.lec.effectapp.effects.LecEffect.withoutControls(hidden: Set<String>): dev.lec.effectapp.effects.LecEffect {
+    val base = this
+    return object : dev.lec.effectapp.effects.LecEffect by base {
+        override val params = base.params.filterNot { it.id in hidden }
+    }
+}
+
+
+private fun ColorspaceEffectPicker(effect: dev.lec.effectapp.effects.LecEffect, values: Map<String, Float>, onChange: (Map<String, Float>) -> Unit) {
+    val choices = listOf("RGB", "HSV", "HSL", "YUV", "YCbCr", "YCoCg", "XYZ", "LAB", "CMY")
+    val selected = (values["colorspace"] ?: 0f).toInt().coerceIn(0, choices.lastIndex)
+    Text("Colorspace", style = MaterialTheme.typography.titleSmall)
+    choices.chunked(3).forEachIndexed { row, group ->
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            group.forEachIndexed { column, name ->
+                val index = row * 3 + column
+                if (index == selected) Button(onClick = {}, modifier = Modifier.weight(1f)) { Text(name) }
+                else OutlinedButton(onClick = { onChange(values + ("colorspace" to index.toFloat())) }, modifier = Modifier.weight(1f)) { Text(name) }
+            }
+        }
+    }
+    if (effect.id == "colorspace_invert") {
+        Text("Channels to invert", style = MaterialTheme.typography.titleSmall)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("red" to "R", "green" to "G", "blue" to "B").forEach { (id, label) ->
+                val enabled = (values[id] ?: 1f) >= 0.5f
+                if (enabled) Button(onClick = { onChange(values + (id to 0f)) }, modifier = Modifier.weight(1f)) { Text(label) }
+                else OutlinedButton(onClick = { onChange(values + (id to 1f)) }, modifier = Modifier.weight(1f)) { Text(label) }
+            }
+        }
+    }
+}
+
+
 internal fun EffectParameterControls(
     effect: dev.lec.effectapp.effects.LecEffect,
     values: Map<String, Float>,

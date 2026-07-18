@@ -90,17 +90,21 @@ private const val LAB_FRAGMENT = """
  vec3 ycocgrgb(vec3 c){return clamp(vec3(c.x+c.y-c.z,c.x+c.z,c.x-c.y-c.z),0.,1.);}
  vec3 xyz(vec3 c){c=vec3(lin(c.r),lin(c.g),lin(c.b));return vec3(dot(c,vec3(.4124,.3576,.1805)),dot(c,vec3(.2126,.7152,.0722)),dot(c,vec3(.0193,.1192,.9505)));}
  vec3 xyzrgb(vec3 c){vec3 v=vec3(3.2406*c.x-1.5372*c.y-.4986*c.z,-.9689*c.x+1.8758*c.y+.0415*c.z,.0557*c.x-.204*c.y+1.057*c.z);return clamp(vec3(srgb(max(v.r,0.)),srgb(max(v.g,0.)),srgb(max(v.b,0.))),0.,1.);}
- vec3 lab(vec3 c){vec3 q=xyz(c),n=vec3(q.x/.95047,q.y,q.z/1.08883);vec3 f=pow(max(n,vec3(.008856)),vec3(1./3.));return vec3(116.*f.y-16.,500.*(f.x-f.y),200.*(f.y-f.z));}
- vec3 labrgb(vec3 v){float y=(v.x+16.)/116.,x=v.y/500.+y,z=y-v.z/200.;return xyzrgb(vec3(.95047*x*x*x,y*y*y,1.08883*z*z*z));}
+ float labf(float t){return t>.008856?pow(t,1./3.):7.787*t+16./116.;}
+ float labi(float t){float t3=t*t*t;return t3>.008856?t3:(t-16./116.)/7.787;}
+ vec3 lab(vec3 c){vec3 q=xyz(c),n=vec3(q.x/.95047,q.y,q.z/1.08883);return vec3(116.*labf(n.y)-16.,500.*(labf(n.x)-labf(n.y)),200.*(labf(n.y)-labf(n.z)));}
+ vec3 labrgb(vec3 v){float y=(v.x+16.)/116.,x=v.y/500.+y,z=y-v.z/200.;return xyzrgb(vec3(.95047*labi(x),labi(y),1.08883*labi(z)));}
+ vec3 inv01(vec3 v){if(uChannels.r>.5)v.r=1.-v.r;if(uChannels.g>.5)v.g=1.-v.g;if(uChannels.b>.5)v.b=1.-v.b;return v;}
+ vec3 invSigned(vec3 v){if(uChannels.r>.5)v.r=1.-v.r;if(uChannels.g>.5)v.g=-v.g;if(uChannels.b>.5)v.b=-v.b;return v;}
  void main(){vec4 s=texture2D(uTexSampler,vTexSamplingCoord);vec3 o=s.rgb;float c=cos(uSettings.z),n=sin(uSettings.z);
- if(uSettings.w<.5){if(uSettings.x<.5)o=1.-s.rgb;else{vec3 v=hsv(s.rgb);v.x=fract(v.x+uSettings.z/6.2831853);o=rgb(v);}}
- else if(uSettings.w<1.5){vec3 v=hsv(s.rgb);if(uSettings.x<.5)v=1.-v;else v.x=fract(v.x+uSettings.z/6.2831853);o=rgb(v);}
- else if(uSettings.w<2.5){vec3 v=hsl(s.rgb);if(uSettings.x<.5)v=1.-v;else v.x=fract(v.x+uSettings.z/6.2831853);o=hslrgb(v);}
- else if(uSettings.w<3.5){vec3 v=yuv(s.rgb);if(uSettings.x<.5)v=vec3(1.-v.x,-v.y,-v.z);else v.yz=vec2(v.y*c-v.z*n,v.y*n+v.z*c);o=yuvrgb(v);}
- else if(uSettings.w<4.5){vec3 v=ycbcr(s.rgb);if(uSettings.x<.5)v=1.-v;else{vec2 q=v.yz-vec2(.5);v.yz=vec2(q.x*c-q.y*n,q.x*n+q.y*c)+vec2(.5);}o=ycbcrrgb(v);}
- else if(uSettings.w<5.5){vec3 v=ycocg(s.rgb);if(uSettings.x<.5)v=vec3(1.-v.x,-v.y,-v.z);else v.yz=vec2(v.y*c-v.z*n,v.y*n+v.z*c);o=ycocgrgb(v);}
- else if(uSettings.w<6.5){vec3 v=xyz(s.rgb);if(uSettings.x<.5)v=1.-v;else v.xz=vec2(v.x*c-v.z*n,v.x*n+v.z*c);o=xyzrgb(v);}
+ if(uSettings.w<.5){if(uSettings.x<.5)o=inv01(s.rgb);else{vec3 v=hsv(s.rgb);v.x=fract(v.x+uSettings.z/6.2831853);o=rgb(v);}}
+ else if(uSettings.w<1.5){vec3 v=hsv(s.rgb);if(uSettings.x<.5)v=inv01(v);else v.x=fract(v.x+uSettings.z/6.2831853);o=rgb(v);}
+ else if(uSettings.w<2.5){vec3 v=hsl(s.rgb);if(uSettings.x<.5)v=inv01(v);else v.x=fract(v.x+uSettings.z/6.2831853);o=hslrgb(v);}
+ else if(uSettings.w<3.5){vec3 v=yuv(s.rgb);if(uSettings.x<.5)v=invSigned(v);else v.yz=vec2(v.y*c-v.z*n,v.y*n+v.z*c);o=yuvrgb(v);}
+ else if(uSettings.w<4.5){vec3 v=ycbcr(s.rgb);if(uSettings.x<.5)v=inv01(v);else{vec2 q=v.yz-vec2(.5);v.yz=vec2(q.x*c-q.y*n,q.x*n+q.y*c)+vec2(.5);}o=ycbcrrgb(v);}
+ else if(uSettings.w<5.5){vec3 v=ycocg(s.rgb);if(uSettings.x<.5)v=invSigned(v);else v.yz=vec2(v.y*c-v.z*n,v.y*n+v.z*c);o=ycocgrgb(v);}
+ else if(uSettings.w<6.5){vec3 v=xyz(s.rgb);if(uSettings.x<.5)v=inv01(v);else v.xz=vec2(v.x*c-v.z*n,v.x*n+v.z*c);o=xyzrgb(v);}
  else if(uSettings.w<7.5){vec3 v=lab(s.rgb);if(uSettings.x<.5){if(uChannels.r>.5)v.x=100.-v.x;if(uChannels.g>.5)v.y=-v.y;if(uChannels.b>.5)v.z=-v.z;}else v.yz=vec2(v.y*c-v.z*n,v.y*n+v.z*c);o=labrgb(v);}
- else {vec3 v=1.-s.rgb;if(uSettings.x<.5)v=1.-v;else v.rg=vec2(v.r*c-v.g*n,v.r*n+v.g*c);o=clamp(1.-v,0.,1.);}
+ else {vec3 v=1.-s.rgb;if(uSettings.x<.5)v=inv01(v);else v.rg=vec2(v.r*c-v.g*n,v.r*n+v.g*c);o=clamp(1.-v,0.,1.);}
  gl_FragColor=vec4(mix(s.rgb,o,uSettings.y),s.a);}
 """
