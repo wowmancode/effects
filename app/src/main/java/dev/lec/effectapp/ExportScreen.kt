@@ -57,6 +57,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
     var state by remember { mutableStateOf(ExportState.IDLE) }
     var progress by remember { mutableIntStateOf(0) }
+    var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportsText by remember { mutableStateOf("1") }
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -103,6 +104,9 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     LaunchedEffect(state) {
         while (state == ExportState.RUNNING) {
             exporter.progress()?.let { progress = it }
+            exporter.ihtxStatus()?.let { status ->
+                exportStatus = if (status.concatenating) "Concatenating…" else "Export " + status.current + "/" + status.total
+            }
             delay(200)
         }
     }
@@ -155,6 +159,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                             output.delete()
                             state = ExportState.RUNNING
                             progress = 0
+                            exportStatus = null
                             val exports = exportsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
                             val lengthMs = ((lengthText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(1)
                             exporter.startIhtx(
@@ -166,6 +171,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                     override fun onCompleted() { state = ExportState.DONE; progress = 100 }
                                     override fun onError(errorValue: ExportException) {
                                         error = listOfNotNull(
+                                            exporter.lastIhtxFailure()?.let { "IHTX export " + it.current + "/" + it.total },
                                             errorValue.message,
                                             errorValue.cause?.message,
                                         ).distinct().joinToString(" · ").ifBlank {
@@ -181,7 +187,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {
-                    Text("Exporting… $progress%")
+                    Text(exportStatus ?: "Exporting… " + progress + "%")
                     LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
                     OutlinedButton(onClick = { exporter.cancel(); state = ExportState.IDLE }) { Text("Cancel") }
                 }
