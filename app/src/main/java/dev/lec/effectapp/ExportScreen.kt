@@ -1,6 +1,7 @@
 package dev.lec.effectapp
 
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
@@ -36,7 +37,9 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.ExportException
 import dev.lec.effectapp.effects.CarrierAudioStore
 import dev.lec.effectapp.pipeline.ProjectExporter
+import dev.lec.effectapp.model.Overlay
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -55,10 +58,28 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var exportsText by remember { mutableStateOf("1") }
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
+    var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }
     val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
     var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
     var carrierError by remember(carrierUris) { mutableStateOf<String?>(null) }
+    val ihtxOverlayPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        val durationMs = runCatching {
+            MediaMetadataRetriever().run {
+                try { setDataSource(context, uri); extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L }
+                finally { release() }
+            }
+        }.getOrDefault(0L)
+        ihtxOverlays = ihtxOverlays + Overlay(
+            id = UUID.randomUUID().toString(),
+            sourceUri = uri.toString(),
+            displayName = uri.lastPathSegment ?: "Video overlay",
+            isVideo = true,
+            sourceDurationMs = durationMs,
+        )
+    }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
         uri?.let { destination ->
             context.contentResolver.openOutputStream(destination)?.use { target -> output.inputStream().use { it.copyTo(target) } }
@@ -111,7 +132,18 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("Export ${project.clips.size} clips with hard cuts and all enabled effects.")
+                    Text("Export " + project.clips.size + " clips with hard cuts and all enabled effects.")
+                    Text("IHTX animated overlays")
+                    OutlinedButton(onClick = { ihtxOverlayPicker.launch(arrayOf("video/*")) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("+ Overlay")
+                    }
+                    if (ihtxOverlays.isEmpty()) Text("No IHTX overlays selected.")
+                    ihtxOverlays.forEach { overlay ->
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(overlay.displayName)
+                            TextButton(onClick = { ihtxOverlays = ihtxOverlays.filterNot { it.id == overlay.id } }) { Text("Delete") }
+                        }
+                    }
                     if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
                     carrierError?.let { Text("Carrier audio error: $it") }
                     Button(
@@ -138,6 +170,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                         state = ExportState.ERROR
                                     }
                                 },
+                                overlays = ihtxOverlays,
                             )
                         },
                         enabled = project.clips.isNotEmpty() && carriersReady,
