@@ -5,6 +5,8 @@ import android.media.MediaMetadataRetriever
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -63,22 +65,24 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
     var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
     var carrierError by remember(carrierUris) { mutableStateOf<String?>(null) }
-    val ihtxOverlayPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        val durationMs = runCatching {
-            MediaMetadataRetriever().run {
-                try { setDataSource(context, uri); extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L }
-                finally { release() }
-            }
-        }.getOrDefault(0L)
-        ihtxOverlays = ihtxOverlays + Overlay(
-            id = UUID.randomUUID().toString(),
-            sourceUri = uri.toString(),
-            displayName = uri.lastPathSegment ?: "Video overlay",
-            isVideo = true,
-            sourceDurationMs = durationMs,
-        )
+    val ihtxOverlayPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val added = uris.map { uri ->
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val durationMs = runCatching {
+                MediaMetadataRetriever().run {
+                    try { setDataSource(context, uri); extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L }
+                    finally { release() }
+                }
+            }.getOrDefault(0L)
+            Overlay(
+                id = UUID.randomUUID().toString(),
+                sourceUri = uri.toString(),
+                displayName = uri.lastPathSegment ?: "Video overlay",
+                isVideo = true,
+                sourceDurationMs = durationMs,
+            )
+        }
+        ihtxOverlays = ihtxOverlays + added
     }
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
         uri?.let { destination ->
@@ -112,7 +116,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         },
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(24.dp),
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             when (state) {
@@ -135,7 +139,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     Text("Export " + project.clips.size + " clips with hard cuts and all enabled effects.")
                     Text("IHTX animated overlays")
                     OutlinedButton(onClick = { ihtxOverlayPicker.launch(arrayOf("video/*")) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("+ Overlay")
+                        Text("+ Overlay videos")
                     }
                     if (ihtxOverlays.isEmpty()) Text("No IHTX overlays selected.")
                     ihtxOverlays.forEach { overlay ->
