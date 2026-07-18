@@ -73,7 +73,7 @@ class ProjectExporter(private val context: Context) {
  fun progress():Int? { val h=ProgressHolder(); if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE)return null; val b=batch?:return h.progress; return ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100) }
  fun cancel(){ transformer.cancel(); batch?.files?.forEach(File::delete); batch=null; callback=null }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
- private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio),b.files[index].absolutePath) }
+ private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs),b.files[index].absolutePath) }
  private fun videoAspectRatio(sourceUri:String):Float? {
   val retriever=MediaMetadataRetriever()
   return try {

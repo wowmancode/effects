@@ -45,6 +45,7 @@ object ProjectCompositionFactory {
         resolveBitmap: (String) -> Bitmap? = { null },
         targetFrameRate: Int? = null,
         overlayAspectRatio: Float? = null,
+        durationAnchorMs: Long? = null,
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
@@ -69,12 +70,19 @@ object ProjectCompositionFactory {
             )
         }
 
+        val durationAnchorSequences = durationAnchorMs?.takeIf { it > 0 }?.let { durationMs ->
+            listOf(
+                EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
+                    .addGap(durationMs * 1_000)
+                    .build(),
+            )
+        } ?: emptyList()
         val videoOverlays = videoOverlayTracks(project)
-        if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences).build()
+        if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences + durationAnchorSequences).build()
         val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, overlayAspectRatio) }
         val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
             .map { audioOverlaySequence(it, project.durationMs) }
-        return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences)
+        return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences + durationAnchorSequences)
             .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays))
             .build()
     }
