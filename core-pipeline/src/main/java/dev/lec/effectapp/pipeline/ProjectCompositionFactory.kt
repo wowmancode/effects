@@ -40,22 +40,26 @@ object ProjectCompositionFactory {
     private const val MIN_REVERSE_SLICE_MS = 80L
     private const val MAX_REVERSE_SLICES = 600L
 
-    fun create(project: EditProject, resolveBitmap: (String) -> Bitmap? = { null }): Composition {
+    fun create(
+        project: EditProject,
+        resolveBitmap: (String) -> Bitmap? = { null },
+        targetFrameRate: Int? = null,
+    ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
         val hasKeyframes = project.clips.any { clip -> (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() } }
         val baseSequences = if (!hasReverse && !hasKeyframes) {
-            listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map { editedItem(it, resolveBitmap) }))
+            listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map { editedItem(it, resolveBitmap, targetFrameRate) }))
         } else {
             val videoItems = project.clips.flatMap { clip ->
                 sourceSlices(clip, clip.reversesVideo(), clip.effectSegments).map { slice ->
-                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap)
+                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
                 }
             }
             val audioItems = project.clips.flatMap { clip ->
                 // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
                 sourceSlices(clip, clip.reversesAudio(), clip.audioSegments).map { slice ->
-                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap)
+                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
                 }
             }
             listOf(
@@ -66,7 +70,7 @@ object ProjectCompositionFactory {
 
         val videoOverlays = videoOverlayTracks(project)
         if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences).build()
-        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs) }
+        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate) }
         val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
             .map { audioOverlaySequence(it, project.durationMs) }
         return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences)
@@ -139,13 +143,14 @@ object ProjectCompositionFactory {
         addAll(videoEffects(clip, timeMs, resolveBitmap))
     }
 
-    private fun editedItem(clip: Clip, resolveBitmap: (String) -> Bitmap?): EditedMediaItem =
+    private fun editedItem(clip: Clip, resolveBitmap: (String) -> Bitmap?, targetFrameRate: Int?): EditedMediaItem =
         editedItem(
             clip = clip,
             slice = SourceSlice(0, clip.durationMs),
             includeVideo = true,
             includeAudio = true,
             resolveBitmap = resolveBitmap,
+            targetFrameRate = targetFrameRate,
         )
 
     private fun editedItem(
@@ -154,6 +159,7 @@ object ProjectCompositionFactory {
         includeVideo: Boolean,
         includeAudio: Boolean,
         resolveBitmap: (String) -> Bitmap?,
+        targetFrameRate: Int?,
     ): EditedMediaItem {
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(clip.sourceUri))
@@ -183,11 +189,12 @@ object ProjectCompositionFactory {
                 )
             } else emptyList(),
         )
-        return EditedMediaItem.Builder(mediaItem)
+        val builder = EditedMediaItem.Builder(mediaItem)
             .setRemoveAudio(!includeAudio)
             .setRemoveVideo(!includeVideo)
             .setEffects(effects)
-            .build()
+        if (includeVideo && targetFrameRate != null) builder.setFrameRate(targetFrameRate)
+        return builder.build()
     }
 
     private fun sourceSlices(clip: Clip, reversed: Boolean, segments: List<TimelineSegment>): List<SourceSlice> {
@@ -244,7 +251,7 @@ object ProjectCompositionFactory {
         }
     }
 
-    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long): EditedMediaItemSequence {
+    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
 
@@ -266,12 +273,11 @@ object ProjectCompositionFactory {
             } else {
                 emptyList()
             }
-            builder.addItem(
-                EditedMediaItem.Builder(mediaItem)
-                    .setRemoveAudio(true)
-                    .setEffects(Effects(emptyList(), videoEffects))
-                    .build(),
-            )
+            val itemBuilder = EditedMediaItem.Builder(mediaItem)
+                .setRemoveAudio(true)
+                .setEffects(Effects(emptyList(), videoEffects))
+            if (targetFrameRate != null) itemBuilder.setFrameRate(targetFrameRate)
+            builder.addItem(itemBuilder.build())
             remainingMs -= pieceDurationMs
         }
 
