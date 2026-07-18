@@ -36,6 +36,7 @@ class ProjectExporter(private val context: Context) {
    val b=batch
    if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
    b.done++
+   b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
    if (b.done < b.projects.size) queue.post { if (batch===b) startStage(b,b.done) }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
@@ -64,14 +65,14 @@ class ProjectExporter(private val context: Context) {
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
   val plan=IhtxPlan(base,overlays,passes,overlayGridSize.coerceAtLeast(1),videoAspectRatio(base.clips.first().sourceUri))
-  this.callback=callback; batch=Batch(MutableList(total) { index -> plan.projectForStage(index) },files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
+  this.callback=callback; batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
  }
  fun ihtxStatus():IhtxStatus? { val b=batch ?: return null; return if(b.concat) IhtxStatus(b.projects.size,b.projects.size,true) else IhtxStatus(b.done+1,b.projects.size,false) }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
  fun progress():Int? { val h=ProgressHolder(); if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE)return null; val b=batch?:return h.progress; return ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100) }
  fun cancel(){ transformer.cancel(); batch?.files?.forEach(File::delete); batch=null; callback=null }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
- private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,if (b.ihtx != null) 30 else null,b.ihtx?.overlayAspectRatio),b.files[index].absolutePath) }
+ private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio),b.files[index].absolutePath) }
  private fun videoAspectRatio(sourceUri:String):Float? {
   val retriever=MediaMetadataRetriever()
   return try {
@@ -82,29 +83,21 @@ class ProjectExporter(private val context: Context) {
    if(rotation % 180 == 0) width / height else height / width
   } catch (_:RuntimeException) { null } finally { retriever.release() }
  }
- private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).setFrameRate(30).build() }))).build()
+ private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() }))).build()
  data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
  private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
  private fun EditProject.takeForExport(length:Long):EditProject { var left=length.coerceIn(1,durationMs); return copy(clips=clips.mapNotNull { c -> if(left<=0)null else { val d=c.durationMs.coerceAtMost(left); left-=d; c.copy(trimEndMs=c.trimStartMs+d,effectSegments=c.effectSegments.map{it.forWholeClip(d)},audioSegments=c.audioSegments.map{it.forWholeClip(d)}) } }) }
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?) {
   private companion object { const val GRID_COVERAGE = 1.02f }
-  fun projectForStage(index:Int):EditProject {
-   val effectPasses = index + 1
-   val overlayCount = (index / passes).coerceAtMost(overlays.size)
-   val gridOverlays = overlays.take(overlayCount).mapIndexed { overlayIndex, overlay ->
-    val column = overlayIndex % gridSize; val row = overlayIndex / gridSize
-    overlay.copy(
-     startMs = 0, endMs = base.clips.first().durationMs, scale = GRID_COVERAGE / gridSize,
-     offsetX = ((column + .5f) / gridSize) * 2f - 1f, offsetY = 1f - ((row + .5f) / gridSize) * 2f,
-    )
-   }
-   return base.copy(clips = base.clips.mapIndexed { clipIndex, clip ->
-    clip.copy(
-     effectSegments = List(effectPasses) { clip.effectSegments }.flatten(),
-     audioSegments = List(effectPasses) { clip.audioSegments }.flatten(),
-     overlays = if (clipIndex == 0) clip.overlays + gridOverlays else clip.overlays,
-    )
-   })
+  fun nextProject(previous:File,index:Int):EditProject {
+   val stage=index/passes
+   val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=base.durationMs,overlays=emptyList())
+   val project=base.copy(clips=listOf(first))
+   if(index%passes!=0 || stage==0) return project
+   val overlay=overlays[stage-1]
+   val column=(stage-1)%gridSize; val row=(stage-1)/gridSize
+   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=GRID_COVERAGE/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
+   return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
   }
  }
 
