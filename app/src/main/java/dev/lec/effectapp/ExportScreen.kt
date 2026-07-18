@@ -62,6 +62,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }
+    var overlayGridSizeText by remember { mutableStateOf("2") }
     val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
     var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
@@ -143,6 +144,14 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     )
                     Text("Export " + project.clips.size + " clips with hard cuts and all enabled effects.")
                     Text("IHTX animated overlays")
+                    OutlinedTextField(
+                        value = overlayGridSizeText,
+                        onValueChange = { value -> if (value.all(Char::isDigit)) overlayGridSizeText = value },
+                        label = { Text("Overlay grid size") },
+                        supportingText = { Text("Tiles per row and column (the original script’s scale divisor).") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     OutlinedButton(onClick = { ihtxOverlayPicker.launch(arrayOf("video/*")) }, modifier = Modifier.fillMaxWidth()) {
                         Text("+ Overlay videos")
                     }
@@ -163,6 +172,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                             exportStatus = null
                             val exports = exportsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
                             val lengthMs = ((lengthText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(1)
+                            val overlayGridSize = overlayGridSizeText.toIntOrNull()?.coerceAtLeast(1) ?: 2
                             exporter.startIhtx(
                                 project,
                                 exports,
@@ -182,6 +192,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                     }
                                 },
                                 overlays = ihtxOverlays,
+                                overlayGridSize = overlayGridSize,
                             )
                         },
                         enabled = project.clips.isNotEmpty() && carriersReady,
