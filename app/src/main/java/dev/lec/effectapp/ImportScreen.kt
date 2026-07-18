@@ -1,6 +1,7 @@
 package dev.lec.effectapp
 
 import android.content.Context
+import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -26,19 +27,29 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 @Composable
 fun ImportScreen(viewModel: EditorViewModel, onEdit: () -> Unit) {
     val context = LocalContext.current
     val project by viewModel.project.collectAsState()
+    val scope = rememberCoroutineScope()
+    val preferences = remember { context.getSharedPreferences(PRESET_SCAN_PREFERENCES, Context.MODE_PRIVATE) }
+    var scanMessage by remember { mutableStateOf<String?>(null) }
+    var scanning by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         uris.forEach { uri ->
             runCatching { context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -47,11 +58,48 @@ fun ImportScreen(viewModel: EditorViewModel, onEdit: () -> Unit) {
         }
     }
 
+    fun scan(uri: Uri) {
+        if (scanning) return
+        scanning = true
+        scanMessage = "Scanning preset folder…"
+        scope.launch {
+            runCatching { scanPresetFolder(context.applicationContext, uri) }
+                .onSuccess { result ->
+                    val added = viewModel.importPresetArchive(result.payloads)
+                    scanMessage = "Scanned " + result.filesRead + " preset files · added " + added + " new presets"
+                }
+                .onFailure { error ->
+                    scanMessage = "Preset scan failed: " + (error.message ?: "folder access unavailable")
+                }
+            scanning = false
+        }
+    }
+
+    val presetFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        preferences.edit().putString(PRESET_SCAN_URI, uri.toString()).apply()
+        scan(uri)
+    }
+
+    LaunchedEffect(Unit) {
+        preferences.getString(PRESET_SCAN_URI, null)?.let { saved -> scan(Uri.parse(saved)) }
+    }
+
     Scaffold(topBar = { TopAppBar(title = { Text("Import videos") }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Text("Choose one or more clips. They will play in this order with hard cuts.")
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Choose videos") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { presetFolderPicker.launch(preferences.getString(PRESET_SCAN_URI, null)?.let(Uri::parse)) },
+                enabled = !scanning,
+            ) { Text(if (scanning) "Scanning presets…" else "Folder scan for presets") }
+            Text("Scans JSON, preset, ZIP, and preset archive files. Duplicate presets are hidden in the app; files in the folder are never changed.")
+            scanMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Spacer(Modifier.height(12.dp))
             if (project.clips.isEmpty()) {
                 Text("No clips imported", style = MaterialTheme.typography.bodyLarge)
@@ -113,6 +161,9 @@ private fun readVideoMetadata(context: Context, uri: Uri): Pair<String, Long> {
     }.getOrNull() ?: 1L
     return name to duration
 }
+
+private const val PRESET_SCAN_PREFERENCES = "preset-folder-scan"
+private const val PRESET_SCAN_URI = "tree-uri"
 
 internal fun formatTime(milliseconds: Long): String {
     val totalSeconds = milliseconds / 1_000

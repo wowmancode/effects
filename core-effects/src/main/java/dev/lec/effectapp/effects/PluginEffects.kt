@@ -13,13 +13,18 @@ import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 const val DEFAULT_VIDEO_PLUGIN_SOURCE = "red = 1.0 - red;\nblue = 1.0 - blue;"
 const val DEFAULT_AUDIO_PLUGIN_SOURCE = "sample = sample * (0.65 + 0.35 * sin(time * 12.0));"
@@ -147,6 +152,12 @@ private data class FunctionExpression(val name: String, val arguments: List<Plug
             "offset_green" -> "texture2D(uTexSampler, vec2(x + ${values[0]}, y + ${values[1]})).g"
             "offset_blue" -> "texture2D(uTexSampler, vec2(x + ${values[0]}, y + ${values[1]})).b"
             "offset_alpha" -> "texture2D(uTexSampler, vec2(x + ${values[0]}, y + ${values[1]})).a"
+            "atan2" -> "atan(${values[0]}, ${values[1]})"
+            "noise" -> "fract(sin(${values[0]} * 12.9898) * 43758.5453)"
+            "select" -> "(${values[0]} >= 0.5 ? ${values[1]} : ${values[2]})"
+            "less" -> "(${values[0]} < ${values[1]} ? 1.0 : 0.0)"
+            "greater" -> "(${values[0]} > ${values[1]} ? 1.0 : 0.0)"
+            "equal" -> "(abs(${values[0]} - ${values[1]}) < 0.000001 ? 1.0 : 0.0)"
             "mirror" -> "abs(fract(${values[0]} * 0.5) * 2.0 - 1.0)"
             "pixelate" -> "(floor(${values[0]} / max(abs(${values[1]}), 0.0001)) * max(abs(${values[1]}), 0.0001))"
             "blend_difference" -> "mix(${values[0]}, abs(${values[0]} - ${values[1]}), clamp(${values[2]}, 0.0, 1.0))"
@@ -165,6 +176,11 @@ private data class FunctionExpression(val name: String, val arguments: List<Plug
 private fun builtinFunction(name: String, values: List<Float>): Float = when (name) {
     "sin" -> sin(values[0])
     "cos" -> cos(values[0])
+    "tan" -> tan(values[0])
+    "ceil" -> ceil(values[0])
+    "exp" -> exp(values[0])
+    "log" -> ln(values[0].coerceAtLeast(0.000001f))
+    "atan2" -> atan2(values[0], values[1])
     "abs" -> abs(values[0])
     "floor" -> floor(values[0]).toFloat()
     "fract" -> values[0] - floor(values[0])
@@ -176,6 +192,11 @@ private fun builtinFunction(name: String, values: List<Float>): Float = when (na
     "clamp" -> values[0].coerceIn(values[1], values[2])
     "mix" -> values[0] + (values[1] - values[0]) * values[2]
     "step" -> if (values[1] < values[0]) 0f else 1f
+    "noise" -> values[0].let { value -> value * 12.9898f }.let { value -> sin(value) * 43758.5453f }.let { value -> value - floor(value) }
+    "select" -> if (values[0] >= 0.5f) values[1] else values[2]
+    "less" -> if (values[0] < values[1]) 1f else 0f
+    "greater" -> if (values[0] > values[1]) 1f else 0f
+    "equal" -> if (abs(values[0] - values[1]) < 0.000001f) 1f else 0f
     "smoothstep" -> {
         val denominator = values[1] - values[0]
         val amount = if (abs(denominator) < 0.000001f) 0f
@@ -202,9 +223,11 @@ private fun blend(values: List<Float>, blended: Float): Float =
     values[0] + (blended - values[0]) * values[2].coerceIn(0f, 1f)
 
 private val COMMON_FUNCTIONS = mapOf(
-    "sin" to 1, "cos" to 1, "abs" to 1, "floor" to 1, "fract" to 1, "sqrt" to 1,
-    "pow" to 2, "mod" to 2, "min" to 2, "max" to 2,
-    "clamp" to 3, "mix" to 3, "step" to 2, "smoothstep" to 3,
+    "sin" to 1, "cos" to 1, "tan" to 1, "abs" to 1, "floor" to 1, "ceil" to 1,
+    "fract" to 1, "sqrt" to 1, "exp" to 1, "log" to 1, "noise" to 1,
+    "pow" to 2, "mod" to 2, "min" to 2, "max" to 2, "atan2" to 2,
+    "less" to 2, "greater" to 2, "equal" to 2,
+    "clamp" to 3, "mix" to 3, "select" to 3, "step" to 2, "smoothstep" to 3,
 )
 private val VIDEO_FUNCTIONS = COMMON_FUNCTIONS + mapOf(
     "sample_red" to 2, "sample_green" to 2, "sample_blue" to 2, "sample_alpha" to 2,
@@ -222,14 +245,15 @@ private val AUDIO_FUNCTIONS = COMMON_FUNCTIONS + mapOf(
     "triangle" to 1,
 )
 private val CONTROL_VARIABLES = (1..8).map { "control$it" }.toSet()
+private val TEMP_VARIABLES = (1..16).map { "temp$it" }.toSet()
 
 private fun compilePlugin(source: String, audio: Boolean): Result<PluginProgram> = runCatching {
-    require(source.length <= 4_000) { "Plug-in source is limited to 4,000 characters." }
-    val allowedTargets = if (audio) setOf("sample") else setOf("red", "green", "blue", "alpha", "x", "y")
+    require(source.length <= 12_000) { "Plug-in source is limited to 12,000 characters." }
+    val allowedTargets = (if (audio) setOf("sample") else setOf("red", "green", "blue", "alpha", "x", "y")) + TEMP_VARIABLES
     val allowedVariables = if (audio) {
-        setOf("sample", "channel", "time", "sample_rate") + CONTROL_VARIABLES
+        setOf("sample", "channel", "time", "sample_rate") + CONTROL_VARIABLES + TEMP_VARIABLES
     } else {
-        setOf("red", "green", "blue", "alpha", "x", "y", "time") + CONTROL_VARIABLES
+        setOf("red", "green", "blue", "alpha", "x", "y", "time", "width", "height", "aspect") + CONTROL_VARIABLES + TEMP_VARIABLES
     }
     val cleaned = source.lineSequence()
         .map { it.substringBefore("//") }
@@ -237,7 +261,7 @@ private fun compilePlugin(source: String, audio: Boolean): Result<PluginProgram>
     val statements = cleaned.split(';', '\n').map(String::trim).filter(String::isNotEmpty)
     val allowedFunctions = if (audio) AUDIO_FUNCTIONS else VIDEO_FUNCTIONS
     require(statements.isNotEmpty()) { "Add at least one assignment, such as red = 1.0 - red;" }
-    require(statements.size <= 24) { "Plug-ins are limited to 24 assignments." }
+    require(statements.size <= 64) { "Plug-ins are limited to 64 assignments." }
     val assignments = statements.map { statement ->
         val match = ASSIGNMENT.matchEntire(statement)
             ?: error("Use assignments like red = 1.0 - red;")
@@ -365,19 +389,30 @@ private class PluginVideoShaderProgram(
     plugin: PluginProgram,
     controls: Map<String, Float>,
 ) : BaseGlShaderProgram(useHdr, 1) {
-    private val usesTime = plugin.glslStatements().contains(Regex("\\btime\\b"))
+    private val pluginStatements = plugin.glslStatements()
+    private val usesTime = pluginStatements.contains(Regex("\\btime\\b"))
+    private val usesWidth = pluginStatements.contains(Regex("\\b(width|aspect)\\b"))
+    private val usesHeight = pluginStatements.contains(Regex("\\b(height|aspect)\\b"))
+    private var inputWidth = 1f
+    private var inputHeight = 1f
     private val program = try {
         GlProgram(VERTEX_SHADER, fragmentShader(plugin, controls))
     } catch (exception: GlUtil.GlException) {
         throw VideoFrameProcessingException(exception)
     }
 
-    override fun configure(inputWidth: Int, inputHeight: Int): Size = Size(inputWidth, inputHeight)
+    override fun configure(inputWidth: Int, inputHeight: Int): Size {
+        this.inputWidth = inputWidth.toFloat()
+        this.inputHeight = inputHeight.toFloat()
+        return Size(inputWidth, inputHeight)
+    }
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
             program.use()
             program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+            if (usesWidth) program.setFloatUniform("uWidth", inputWidth)
+            if (usesHeight) program.setFloatUniform("uHeight", inputHeight)
             if (usesTime) {
                 program.setFloatUniform("uTime", presentationTimeUs / 1_000_000f)
             }
@@ -400,6 +435,8 @@ private fun fragmentShader(plugin: PluginProgram, controls: Map<String, Float>):
     precision highp float;
     uniform sampler2D uTexSampler;
     uniform float uTime;
+    uniform float uWidth;
+    uniform float uHeight;
     varying vec2 vTexSamplingCoord;
     void main() {
       vec2 uv = vTexSamplingCoord;
@@ -411,11 +448,18 @@ private fun fragmentShader(plugin: PluginProgram, controls: Map<String, Float>):
       float x = uv.x;
       float y = uv.y;
       float time = uTime;
+      float width = uWidth;
+      float height = uHeight;
+      float aspect = uWidth / max(uHeight, 1.0);
+      ${pluginTempDeclarations()}
       ${pluginControlDeclarations(controls)}
       ${plugin.glslStatements()}
       gl_FragColor = clamp(vec4(red, green, blue, alpha), 0.0, 1.0);
     }
 """.trimIndent()
+private fun pluginTempDeclarations(): String =
+    (1..16).joinToString("\n") { index -> "float temp$index = 0.0;" }
+
 private fun pluginControlDeclarations(controls: Map<String, Float>): String =
     (1..8).joinToString("\n") { index ->
         val value = controls["control$index"]?.takeIf(Float::isFinite) ?: if (index == 1) 1f else 0f

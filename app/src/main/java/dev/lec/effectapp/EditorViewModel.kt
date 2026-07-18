@@ -37,7 +37,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val savedPresets = runCatching {
             if (presetFile.exists()) PresetLibraryJson.decode(presetFile.readText()) else emptyList()
         }.getOrDefault(emptyList())
-        if (savedPresets.isNotEmpty()) _project.value = _project.value.copy(presets = savedPresets)
+        if (savedPresets.isNotEmpty()) {
+            _project.value = _project.value.copy(presets = deduplicatePresets(savedPresets))
+            persistPresets()
+        }
     }
 
     fun addClip(uri: String, displayName: String, durationMs: Long) {
@@ -252,7 +255,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             effectSegments = clip.effectSegments.map { it.copy(id = "") },
             audioSegments = clip.audioSegments.map { it.copy(id = "") },
         )
-        _project.value = _project.value.copy(presets = _project.value.presets + preset)
+        _project.value = _project.value.copy(presets = deduplicatePresets(_project.value.presets + preset))
         persistPresets()
     }
 
@@ -292,14 +295,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun encodePresetLibrary(): String =
         PresetLibraryJson.encode(_project.value.presets.map { it.copy(thumbnailPath = null) })
 
-    fun importPresetLibrary(json: String) {
+    fun importPresetLibrary(json: String): Int {
         val restored = PresetLibraryJson.decode(json).map { it.copy(thumbnailPath = null) }
-        val merged = (_project.value.presets + restored)
-            .associateBy { it.id }
-            .values
-            .toList()
+        val before = _project.value.presets.size
+        val merged = deduplicatePresets(_project.value.presets + restored)
         _project.value = _project.value.copy(presets = merged)
         persistPresets()
+        return (merged.size - before).coerceAtLeast(0)
     }
 
     /**
@@ -312,28 +314,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             runCatching { PresetLibraryJson.decodeFlexible(raw) }.getOrDefault(emptyList())
         }
         if (decoded.isEmpty()) return 0
-        val imported = decoded.map { preset ->
-            preset.copy(
-                id = UUID.randomUUID().toString(),
-                thumbnailPath = null,
-                effectSegments = preset.effectSegments.map { it.copy(id = "") },
-                audioSegments = preset.audioSegments.map { it.copy(id = "") },
-            )
-        }
-        _project.value = _project.value.copy(presets = _project.value.presets + imported)
+        val imported = decoded.map(::prepareImportedPreset)
+        val before = _project.value.presets.size
+        val merged = deduplicatePresets(_project.value.presets + imported)
+        _project.value = _project.value.copy(presets = merged)
         persistPresets()
-        return imported.size
+        return (merged.size - before).coerceAtLeast(0)
     }
 
     fun importPreset(json: String) {
         val decoded = PresetJson.decode(json)
-        val imported = decoded.copy(
-            id = UUID.randomUUID().toString(),
-            thumbnailPath = null,
-            effectSegments = decoded.effectSegments.map { it.copy(id = "") },
-            audioSegments = decoded.audioSegments.map { it.copy(id = "") },
-        )
-        _project.value = _project.value.copy(presets = _project.value.presets + imported)
+        val imported = prepareImportedPreset(decoded)
+        _project.value = _project.value.copy(presets = deduplicatePresets(_project.value.presets + imported))
         persistPresets()
     }
 
@@ -341,10 +333,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     fun load(json: String) {
         val loaded = ProjectJson.decode(json)
-        val mergedPresets = (_project.value.presets + loaded.presets)
-            .associateBy { it.id }
-            .values
-            .toList()
+        val mergedPresets = deduplicatePresets(_project.value.presets + loaded.presets)
         _project.value = loaded.copy(
             presets = mergedPresets,
             clips = loaded.clips.map { importedClip ->
@@ -403,6 +392,27 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun persistPresets() {
         runCatching { presetFile.writeText(PresetLibraryJson.encode(_project.value.presets)) }
     }
+
+    private fun prepareImportedPreset(preset: EffectPreset): EffectPreset = preset.copy(
+        id = UUID.randomUUID().toString(),
+        thumbnailPath = null,
+        effectSegments = preset.effectSegments.map { it.copy(id = "") },
+        audioSegments = preset.audioSegments.map { it.copy(id = "") },
+    )
+
+    /** Keeps the first in-app copy of identical preset content; source documents are never touched. */
+    private fun deduplicatePresets(presets: List<EffectPreset>): List<EffectPreset> =
+        presets.distinctBy { preset ->
+            PresetJson.encode(
+                preset.copy(
+                    id = "",
+                    thumbnailPath = null,
+                    effectSegments = preset.effectSegments.map(TimelineSegment::normalizedForFingerprint),
+                    audioSegments = preset.audioSegments.map(TimelineSegment::normalizedForFingerprint),
+                ),
+            )
+        }
+
 }
 
 /** Keeps the part of an overlay that falls inside [start, end] of the first split half. */
@@ -423,6 +433,15 @@ private fun Overlay.shiftedInto(split: Long, tailDurationMs: Long, clipDurationM
     if (newEnd <= newStart) return null
     return copy(startMs = newStart, endMs = newEnd)
 }
+
+private fun TimelineSegment.normalizedForFingerprint(): TimelineSegment = copy(
+    id = "",
+    params = params.toSortedMap(),
+    stringParams = stringParams.toSortedMap(),
+    keyframes = keyframes.sortedBy { it.timeMs }.map { keyframe ->
+        keyframe.copy(params = keyframe.params.toSortedMap())
+    },
+)
 
 private fun List<TimelineSegment>.moved(segmentId: String, delta: Int): List<TimelineSegment> {
     val source = indexOfFirst { it.id == segmentId }

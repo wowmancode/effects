@@ -34,6 +34,18 @@ class PluginEffectsTest {
     }
 
     @Test
+    fun acceptsTemporaryVariablesDimensionsLogicAndNoise() {
+        val source = """
+            temp1 = noise(x * width + y * height + time);
+            temp2 = select(greater(aspect, 1.0), temp1, 1.0 - temp1);
+            red = mix(red, temp2, control1);
+        """.trimIndent()
+
+        assertNull(validatePluginSource(source, audio = false))
+        assertNull(validatePluginSource("temp1 = tan(time); sample = select(less(temp1, 0.0), -sample, sample);", audio = true))
+    }
+
+    @Test
     fun rejectsControlFlowAndUnknownNativeNames() {
         assertNotNull(validatePluginSource("while = red;", audio = false))
         assertNotNull(validatePluginSource("red = fopen(x);", audio = false))
