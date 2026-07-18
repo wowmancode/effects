@@ -4,14 +4,14 @@ import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.util.UnstableApi
 
-/** General color-model effects. Colorspace values: 0 RGB, 1 HSV, 2 YUV, 3 LAB. */
+/** General color-model effects. Colorspaces: RGB, HSV, HSL, YUV, YCbCr, YCoCg, XYZ, LAB, CMY. */
 @OptIn(UnstableApi::class)
 class ColorspaceHueShiftEffect : LecEffect {
     override val id = "colorspace_hue_shift"
     override val displayName = "Colorspace hue shift"
     override val category = EffectCategory.EFFECTS
     override val params = listOf(
-        EffectParam("colorspace", "Colorspace: RGB 0 · HSV 1 · YUV 2 · LAB 3", 0f, 3f, 1f),
+        EffectParam("colorspace", "Colorspace: RGB 0 · HSV 1 · HSL 2 · YUV 3 · YCbCr 4 · YCoCg 5 · XYZ 6 · LAB 7 · CMY 8", 0f, 8f, 1f),
         EffectParam("degrees", "Hue shift (degrees)", -180f, 180f, 0f),
         EffectParam("mix", "Mix", 0f, 1f, 1f),
     )
@@ -21,7 +21,7 @@ class ColorspaceHueShiftEffect : LecEffect {
         mix = values["mix"] ?: 1f,
         degrees = values["degrees"] ?: 0f,
         channels = floatArrayOf(1f, 1f, 1f),
-        colorspace = (values["colorspace"] ?: 1f).toInt().coerceIn(0, 3),
+        colorspace = (values["colorspace"] ?: 1f).toInt().coerceIn(0, 8),
     )
 }
 
@@ -31,7 +31,7 @@ class ColorspaceInvertEffect : LecEffect {
     override val displayName = "Colorspace invert"
     override val category = EffectCategory.EFFECTS
     override val params = listOf(
-        EffectParam("colorspace", "Colorspace: RGB 0 · HSV 1 · YUV 2 · LAB 3", 0f, 3f, 0f),
+        EffectParam("colorspace", "Colorspace: RGB 0 · HSV 1 · HSL 2 · YUV 3 · YCbCr 4 · YCoCg 5 · XYZ 6 · LAB 7 · CMY 8", 0f, 8f, 0f),
         EffectParam("invert", "Invert level", 0f, 1f, 1f),
     )
 
@@ -40,6 +40,6 @@ class ColorspaceInvertEffect : LecEffect {
         mix = values["invert"] ?: 1f,
         degrees = 0f,
         channels = floatArrayOf(1f, 1f, 1f),
-        colorspace = (values["colorspace"] ?: 0f).toInt().coerceIn(0, 3),
+        colorspace = (values["colorspace"] ?: 0f).toInt().coerceIn(0, 8),
     )
 }
