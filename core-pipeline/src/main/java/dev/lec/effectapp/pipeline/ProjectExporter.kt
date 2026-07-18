@@ -79,20 +79,17 @@ class ProjectExporter(context: Context) {
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int) {
   fun nextProject(previous:File,index:Int):EditProject {
    val stage=index/passes
-   val project=base.fromIhtxPrevious(previous)
-   return if(index%passes==0 && stage>0) project.withIhtxOverlay(overlays[stage-1],stage-1,overlays.size) else project
+   val duration=base.durationMs
+   val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=duration,overlays=emptyList())
+   val project=base.copy(clips=listOf(first))
+      if(index%passes!=0 || stage==0) return project
+   val total=overlays.size; val overlay=overlays[stage-1]
+   val columns=kotlin.math.ceil(kotlin.math.sqrt(total.toDouble())).toInt().coerceAtLeast(1)
+   val rows=kotlin.math.ceil(total.toDouble()/columns).toInt().coerceAtLeast(1)
+   val column=(stage-1)%columns; val row=(stage-1)/columns
+   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=1f/maxOf(columns,rows),offsetX=((column+.5f)/columns)*2f-1f,offsetY=((row+.5f)/rows)*2f-1f)
+   return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
   }
  }
- private fun EditProject.fromIhtxPrevious(previous:File):EditProject {
-  val source=Uri.fromFile(previous).toString(); val duration=durationMs
-  val first=clips.first().copy(sourceUri=source,trimStartMs=0,trimEndMs=duration,overlays=emptyList())
-  return copy(clips=listOf(first))
- }
- private fun EditProject.withIhtxOverlay(overlay:Overlay,index:Int,total:Int):EditProject {
-  val columns=kotlin.math.ceil(kotlin.math.sqrt(total.toDouble())).toInt().coerceAtLeast(1)
-  val rows=kotlin.math.ceil(total.toDouble()/columns).toInt().coerceAtLeast(1)
-  val column=index%columns; val row=index/columns
-  val tile=overlay.copy(startMs=0,endMs=clips.first().durationMs,scale=1f/maxOf(columns,rows),offsetX=((column+.5f)/columns)*2f-1f,offsetY=((row+.5f)/rows)*2f-1f)
-  return copy(clips=clips.mapIndexed { clipIndex,clip -> if(clipIndex==0) clip.copy(overlays=clip.overlays+tile) else clip })
- }
+
 }
