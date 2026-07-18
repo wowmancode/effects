@@ -35,7 +35,7 @@ class ProjectExporter(context: Context) {
    val b=batch
    if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
    b.done++
-   b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
+   b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done, exportResult.approximateDurationMs) }
    if (b.done < b.projects.size) queue.post { if (batch===b) startStage(b,b.done) }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
@@ -77,15 +77,16 @@ class ProjectExporter(context: Context) {
  private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
  private fun EditProject.takeForExport(length:Long):EditProject { var left=length.coerceIn(1,durationMs); return copy(clips=clips.mapNotNull { c -> if(left<=0)null else { val d=c.durationMs.coerceAtMost(left); left-=d; c.copy(trimEndMs=c.trimStartMs+d,effectSegments=c.effectSegments.map{it.forWholeClip(d)},audioSegments=c.audioSegments.map{it.forWholeClip(d)}) } }) }
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int) {
-  fun nextProject(previous:File,index:Int):EditProject {
+  private companion object { const val GRID_COVERAGE = 1.02f }
+  fun nextProject(previous:File,index:Int,previousDurationMs:Long):EditProject {
    val stage=index/passes
-   val duration=base.durationMs
+   val duration=previousDurationMs.takeIf { it > 0 } ?: base.durationMs
    val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=duration,overlays=emptyList())
    val project=base.copy(clips=listOf(first))
    if(index%passes!=0 || stage==0) return project
    val overlay=overlays[stage-1]
    val column=(stage-1)%gridSize; val row=(stage-1)/gridSize
-   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=1.02f/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
+   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=GRID_COVERAGE/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
    return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
   }
  }
