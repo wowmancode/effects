@@ -261,9 +261,15 @@ object ProjectCompositionFactory {
                         .build(),
                 )
                 .build()
+            val videoEffects = if (track.overlay.includeAudio) {
+                listOf(Presentation.createForAspectRatio(1f, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            } else {
+                emptyList()
+            }
             builder.addItem(
                 EditedMediaItem.Builder(mediaItem)
                     .setRemoveAudio(true)
+                    .setEffects(Effects(emptyList(), videoEffects))
                     .build(),
             )
             remainingMs -= pieceDurationMs
