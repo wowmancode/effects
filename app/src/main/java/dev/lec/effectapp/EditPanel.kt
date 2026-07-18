@@ -230,8 +230,7 @@ fun EditPanel(
                                 }
                                 if (effect.id == "vocoder_lab") {
                                     Text(
-                                        "Shape moves sine → saw → square → triangle. Pipe organ, Air, " +
-                                            "Formant shift, Motion, Growl, and Drive make the carrier radically different.",
+                                        "Three oscillators can each have their own shape, level, octave, and fine tune. Add sub, noise, up to seven unison voices with stereo spread, and use the LFO for pitch, filter, amplitude, and pan-style movement.",
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }

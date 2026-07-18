@@ -39,6 +39,7 @@ class FlangerDspState(
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val dry = input / 32768f
+        currentChannel = channel
         val active = timeMs in segment.startMs until segment.endMs
         val rate = segment.params["rate_hz"] ?: 0.35f
         val depth = (segment.params["depth_ms"] ?: 4f).coerceIn(0.1f, 15f)
@@ -103,7 +104,7 @@ class VocoderLabDspState(
     private val sampleRate: Int,
     private val channels: Int,
 ) : AudioDspState {
-    private val bandCount = (segment.params["bands"] ?: 10f).toInt().coerceIn(4, 16)
+    private val bandCount = (segment.params["bands"] ?: 10f).toInt().coerceIn(4, 24)
     private val modLow = Array(channels) { FloatArray(bandCount) }
     private val modHigh = Array(channels) { FloatArray(bandCount) }
     private val carrierLow = Array(channels) { FloatArray(bandCount) }
@@ -111,34 +112,41 @@ class VocoderLabDspState(
     private val envelope = Array(channels) { FloatArray(bandCount) }
     private val lowAlpha = FloatArray(bandCount)
     private val highAlpha = FloatArray(bandCount)
-    private var phase = 0f
-    private var detunePhase = 0f
+    private val oscillatorPhases = FloatArray(3 * MAX_UNISON)
+    private val subPhases = FloatArray(MAX_UNISON)
+    private val filterLow = FloatArray(channels)
+    private val filterBand = FloatArray(channels)
     private var frame = 0L
 
     init {
         val brightness = (segment.params["brightness"] ?: 0.55f).coerceIn(0f, 1f)
         val formant = 2.0.pow((segment.params["formant_shift"] ?: 0f) / 12.0).toFloat()
         val octaves = 3f + brightness * 4f
+        val width = (segment.params["formant_width"] ?: 1f).coerceIn(0.5f, 2.5f)
         repeat(bandCount) { band ->
             val progress = band.toFloat() / (bandCount - 1).coerceAtLeast(1)
             val center = (90f * 2.0.pow((progress * octaves).toDouble()).toFloat() * formant)
                 .coerceIn(45f, sampleRate * 0.36f)
-            lowAlpha[band] = alphaFor((center / 1.38f).coerceAtLeast(25f), sampleRate)
-            highAlpha[band] = alphaFor((center * 1.38f).coerceAtMost(sampleRate * 0.45f), sampleRate)
+            lowAlpha[band] = alphaFor((center / (1.38f * width)).coerceAtLeast(25f), sampleRate)
+            highAlpha[band] = alphaFor((center * 1.38f * width).coerceAtMost(sampleRate * 0.45f), sampleRate)
         }
     }
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val dry = input / 32768f
         val active = timeMs in segment.startMs until segment.endMs
-        val carrier = if (active) carrier() else 0f
+        val carrier = if (active) filterCarrier(carrier(channel, timeMs), channel, timeMs) else 0f
+        val modulatorDrive = (segment.params["modulator_drive"] ?: 0f).coerceIn(0f, 1f)
+        val modulatorGate = (segment.params["modulator_gate"] ?: 0f).coerceIn(0f, 1f)
+        val shapedDry = tanh((dry * (1f + modulatorDrive * 12f)).toDouble()).toFloat()
+        val modulator = if (modulatorGate <= 0f) shapedDry else if (abs(shapedDry) <= modulatorGate) 0f else (abs(shapedDry) - modulatorGate) / (1f - modulatorGate).coerceAtLeast(0.001f) * if (shapedDry < 0f) -1f else 1f
         val response = (segment.params["response"] ?: 0.45f).coerceIn(0f, 1f)
         val attack = 0.025f + response * 0.32f
         val release = 0.0015f + response * 0.045f
         var vocoded = 0f
         repeat(bandCount) { band ->
-            modLow[channel][band] += lowAlpha[band] * (dry - modLow[channel][band])
-            modHigh[channel][band] += highAlpha[band] * (dry - modHigh[channel][band])
+            modLow[channel][band] += lowAlpha[band] * (modulator - modLow[channel][band])
+            modHigh[channel][band] += highAlpha[band] * (modulator - modHigh[channel][band])
             val target = abs(modHigh[channel][band] - modLow[channel][band])
             envelope[channel][band] += if (target > envelope[channel][band]) {
                 attack * (target - envelope[channel][band])
@@ -153,41 +161,98 @@ class VocoderLabDspState(
         if (!active) return input
         val growl = (segment.params["growl"] ?: 0f).coerceIn(0f, 1f)
         val drive = (segment.params["drive"] ?: 0.2f).coerceIn(0f, 1f)
-        val wet = tanh((vocoded * (5f + drive * 12f) + carrier * growl * 0.2f).toDouble()).toFloat()
+        val lfoAmp = (segment.params["lfo_amp"] ?: 0f).coerceIn(0f, 1f)
+        val lfoGain = (1f + lfo(timeMs) * lfoAmp * 0.75f).coerceAtLeast(0f)
+        val wet = tanh((vocoded * (5f + drive * 12f) + carrier * growl * 0.2f).toDouble()).toFloat() * lfoGain
         val dryMix = (segment.params["dry_mix"] ?: 0.1f).coerceIn(0f, 1f)
         val wetMix = (segment.params["wet_mix"] ?: 0.9f).coerceIn(0f, 1f)
         return ((dry * dryMix + wet * wetMix) * 32767f).toInt()
     }
 
-    private fun carrier(): Float {
-        val shape = (segment.params["carrier_shape"] ?: 0.25f).coerceIn(0f, 1f) * 3f
-        val sine = sin(2.0 * PI * phase).toFloat()
-        val saw = phase * 2f - 1f
-        val square = if (phase < 0.5f) 1f else -1f
-        val triangle = 1f - 4f * abs(phase - 0.5f)
-        val base = when {
-            shape < 1f -> blend(sine, saw, shape)
-            shape < 2f -> blend(saw, square, shape - 1f)
-            else -> blend(square, triangle, shape - 2f)
+    private fun carrier(channel: Int, timeMs: Long): Float {
+        val voices = (segment.params["unison_voices"] ?: 1f).toInt().coerceIn(1, MAX_UNISON)
+        val spread = (segment.params["stereo_spread"] ?: 0f).coerceIn(0f, 1f)
+        val lfoPan = lfo(timeMs) * (segment.params["lfo_pan"] ?: 0f).coerceIn(0f, 1f)
+        var output = 0f
+        repeat(3) { oscillator ->
+            val number = oscillator + 1
+            val level = (segment.params["osc" + number + "_level"] ?: if (oscillator == 0) 1f else 0f).coerceIn(0f, 1f)
+            val shape = (segment.params["osc" + number + "_shape"] ?: (segment.params["carrier_shape"] ?: 0.25f) * 3f).coerceIn(0f, 3f)
+            repeat(voices) { voice ->
+                val position = voicePosition(voice, voices)
+                val side = if (channels < 2) 1f else if (channel == 0) 1f - position * spread * 0.5f + lfoPan * 0.5f else 1f + position * spread * 0.5f - lfoPan * 0.5f
+                output += waveform(oscillatorPhases[oscillator * MAX_UNISON + voice], shape) * level * side / voices
+            }
         }
-        val organ = (sine + 0.55f * sin(4.0 * PI * phase).toFloat() + 0.3f * sin(6.0 * PI * phase).toFloat()) / 1.85f
-        val detuned = sin(2.0 * PI * detunePhase).toFloat()
-        val air = (segment.params["air"] ?: 0.15f).coerceIn(0f, 1f)
+        val sub = (segment.params["sub_level"] ?: 0f).coerceIn(0f, 1f)
+        if (sub > 0f) repeat(voices) { voice -> output += sin(2.0 * PI * subPhases[voice]).toFloat() * sub / voices }
+        val phase = oscillatorPhases[0]
+        val organTone = (sin(2.0 * PI * phase).toFloat() + 0.55f * sin(4.0 * PI * phase).toFloat() + 0.3f * sin(6.0 * PI * phase).toFloat()) / 1.85f
+        output = blend(output, organTone, (segment.params["organ"] ?: 0f).coerceIn(0f, 1f))
+        val noiseLevel = ((segment.params["noise_level"] ?: 0.15f) + (segment.params["air"] ?: 0.15f) * 0.35f).coerceIn(0f, 1f)
         val noise = (((frame * 1_103_515_245L + 12_345L) ushr 16 and 0x7fffL).toFloat() / 16_383.5f - 1f)
-        val organMix = (segment.params["organ"] ?: 0f).coerceIn(0f, 1f)
-        val detuneMix = (segment.params["detune_cents"] ?: 8f).coerceIn(0f, 60f) / 120f
-        return blend(blend(base, organ, organMix), detuned, detuneMix) * (1f - air * 0.35f) + noise * air * 0.55f
+        return output * (1f - noiseLevel * 0.35f) + noise * noiseLevel * 0.4f
+    }
+
+    private fun filterCarrier(input: Float, channel: Int, timeMs: Long): Float {
+        val rate = (segment.params["motion_rate"] ?: 0f).coerceIn(0f, 30f)
+        val lfo = lfo(timeMs)
+        val envelopeAmount = envelope[channel].average().toFloat()
+        val modulation = lfo * (segment.params["lfo_filter"] ?: 0f).coerceIn(-1f, 1f) + envelopeAmount * (segment.params["filter_env"] ?: 0f).coerceIn(-1f, 1f)
+        val cutoff = ((segment.params["filter_cutoff"] ?: 8_000f) * 2.0.pow((modulation * 3f).toDouble()).toFloat()).coerceIn(40f, sampleRate * 0.45f)
+        val alpha = alphaFor(cutoff, sampleRate)
+        filterLow[channel] += alpha * (input - filterLow[channel])
+        filterBand[channel] += alpha * (filterLow[channel] - filterBand[channel])
+        val low = filterBand[channel]
+        val high = input - filterLow[channel]
+        val resonance = (segment.params["filter_resonance"] ?: 0f).coerceIn(0f, 1f)
+        return when ((segment.params["filter_mode"] ?: 0f).toInt().coerceIn(0, 2)) {
+            1 -> filterLow[channel] - low + low * resonance * 2f
+            2 -> high + (filterLow[channel] - low) * resonance * 2f
+            else -> low + (filterLow[channel] - low) * resonance
+        }
     }
 
     private fun advance(timeMs: Long, active: Boolean) {
-        val pitch = (segment.params["carrier_pitch"] ?: 110f).coerceIn(30f, 440f)
-        val rate = (segment.params["motion_rate"] ?: 0f).coerceIn(0f, 12f)
+        val pitch = (segment.params["carrier_pitch"] ?: 110f).coerceIn(20f, 2_000f)
         val depth = (segment.params["motion_depth"] ?: 0f).coerceIn(0f, 1f)
-        val motion = 1f + depth * sin(2.0 * PI * rate * timeMs / 1_000.0).toFloat() * 0.5f
-        val detune = 2.0.pow((segment.params["detune_cents"] ?: 8f).coerceIn(0f, 60f) / 1_200.0).toFloat()
-        phase = wrap(phase + pitch * motion / sampleRate)
-        detunePhase = wrap(detunePhase + pitch * motion * detune / sampleRate)
+        val motion = 2.0.pow((lfo(timeMs) * depth * 2f).toDouble()).toFloat()
+        val voices = (segment.params["unison_voices"] ?: 1f).toInt().coerceIn(1, MAX_UNISON)
+        val detune = (segment.params["unison_detune"] ?: segment.params["detune_cents"] ?: 8f).coerceIn(0f, 100f)
+        repeat(3) { oscillator ->
+            val number = oscillator + 1
+            val octave = (segment.params["osc" + number + "_octave"] ?: 0f).coerceIn(-4f, 4f)
+            val fine = (segment.params["osc" + number + "_fine"] ?: 0f).coerceIn(-100f, 100f)
+            repeat(voices) { voice ->
+                val cents = fine + voicePosition(voice, voices) * detune
+                val frequency = pitch * motion * 2.0.pow((octave + cents / 1_200f).toDouble()).toFloat()
+                val index = oscillator * MAX_UNISON + voice
+                oscillatorPhases[index] = wrap(oscillatorPhases[index] + frequency / sampleRate)
+            }
+        }
+        val subOctave = (segment.params["sub_octave"] ?: -1f).coerceIn(-4f, 0f)
+        repeat(voices) { voice ->
+            val frequency = pitch * motion * 2.0.pow((subOctave + voicePosition(voice, voices) * detune / 1_200f).toDouble()).toFloat()
+            subPhases[voice] = wrap(subPhases[voice] + frequency / sampleRate)
+        }
         if (active) frame++
+    }
+
+    private fun lfo(timeMs: Long): Float {
+        val rate = (segment.params["motion_rate"] ?: 0f).coerceIn(0f, 30f)
+        return waveform(wrap(timeMs * rate / 1_000f), (segment.params["lfo_shape"] ?: 0f).coerceIn(0f, 3f))
+    }
+
+    private fun waveform(phase: Float, shape: Float): Float = when {
+        shape < 1f -> blend(sin(2.0 * PI * phase).toFloat(), phase * 2f - 1f, shape)
+        shape < 2f -> blend(phase * 2f - 1f, if (phase < 0.5f) 1f else -1f, shape - 1f)
+        else -> blend(if (phase < 0.5f) 1f else -1f, 1f - 4f * abs(phase - 0.5f), shape - 2f)
+    }
+
+    private fun voicePosition(voice: Int, voices: Int): Float = if (voices <= 1) 0f else (voice * 2f / (voices - 1)) - 1f
+
+    private companion object {
+        const val MAX_UNISON = 7
     }
 }
 
