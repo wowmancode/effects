@@ -37,7 +37,7 @@ internal fun SplitPitchEditor(values: Map<String, Float>, onChange: (Map<String,
                     enabled = voices.size > 1,
                 ) { Text("Remove") }
             }
-            VoiceSlider("Pitch", voice.semitones, -12f..12f, " semitones") { semitones ->
+            VoiceSlider("Pitch", voice.semitones, -48f..48f, " semitones") { semitones ->
                 onChange(SplitPitchEffect.encodeVoices(voices.replaced(index, voice.copy(semitones = semitones)), values))
             }
             VoiceSlider("Level", voice.level, 0f..1f) { level ->
