@@ -44,7 +44,7 @@ object ProjectCompositionFactory {
         project: EditProject,
         resolveBitmap: (String) -> Bitmap? = { null },
         targetFrameRate: Int? = null,
-        overlayPresentationSize: Size? = null,
+        overlayAspectRatio: Float? = null,
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
@@ -71,7 +71,7 @@ object ProjectCompositionFactory {
 
         val videoOverlays = videoOverlayTracks(project)
         if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences).build()
-        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, overlayPresentationSize) }
+        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, overlayAspectRatio) }
         val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
             .map { audioOverlaySequence(it, project.durationMs) }
         return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences)
@@ -252,7 +252,7 @@ object ProjectCompositionFactory {
         }
     }
 
-    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?, overlayPresentationSize: Size?): EditedMediaItemSequence {
+    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?, overlayAspectRatio: Float?): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
 
@@ -269,8 +269,8 @@ object ProjectCompositionFactory {
                         .build(),
                 )
                 .build()
-            val videoEffects = if (track.overlay.includeAudio && overlayPresentationSize != null) {
-                listOf(Presentation.createForWidthAndHeight(overlayPresentationSize.width, overlayPresentationSize.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            val videoEffects = if (track.overlay.includeAudio && overlayAspectRatio != null) {
+                listOf(Presentation.createForAspectRatio(overlayAspectRatio, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             } else {
                 emptyList()
             }
@@ -314,18 +314,29 @@ object ProjectCompositionFactory {
     private class OverlayVideoCompositorSettings(
         private val overlays: List<VideoOverlayTrack>,
     ) : VideoCompositorSettings {
-        override fun getOutputSize(inputSizes: List<Size>): Size =
-            inputSizes.getOrElse(overlays.size) { inputSizes.first() }
+        private var inputSizes: List<Size> = emptyList()
+        private var outputSize: Size? = null
+
+        override fun getOutputSize(inputSizes: List<Size>): Size {
+            this.inputSizes = inputSizes
+            return inputSizes.getOrElse(overlays.size) { inputSizes.first() }.also { outputSize = it }
+        }
 
         override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings {
             val track = overlays.getOrNull(inputId) ?: return StaticOverlaySettings.Builder().build()
             val visible = presentationTimeUs in (track.globalStartMs * 1_000) until (track.globalEndMs * 1_000)
+            val scale = track.overlay.scale.coerceAtLeast(0.01f)
+            val inputSize = inputSizes.getOrNull(inputId)
+            val frameSize = outputSize
+            val scaleX = if (track.overlay.includeAudio && inputSize != null && frameSize != null) {
+                scale * frameSize.width.toFloat() / inputSize.width.toFloat()
+            } else scale
+            val scaleY = if (track.overlay.includeAudio && inputSize != null && frameSize != null) {
+                scale * frameSize.height.toFloat() / inputSize.height.toFloat()
+            } else scale
             return StaticOverlaySettings.Builder()
                 .setAlphaScale(if (visible) track.overlay.alpha.coerceIn(0f, 1f) else 0f)
-                .setScale(
-                    track.overlay.scale.coerceAtLeast(0.01f),
-                    track.overlay.scale.coerceAtLeast(0.01f),
-                )
+                .setScale(scaleX, scaleY)
                 .setBackgroundFrameAnchor(
                     track.overlay.offsetX.coerceIn(-1f, 1f),
                     track.overlay.offsetY.coerceIn(-1f, 1f),
