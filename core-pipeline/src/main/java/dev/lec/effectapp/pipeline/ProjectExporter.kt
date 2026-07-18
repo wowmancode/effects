@@ -5,7 +5,9 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.Composition
@@ -30,7 +32,10 @@ class ProjectExporter(private val context: Context) {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
    val b=batch
    if (b==null) { val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted(); return }
-   b.done++
+   if (!b.concat) {
+    b.durations[b.done] = fileDurationMs(b.files[b.done]) ?: exportResult.approximateDurationMs.takeIf { it > 0 } ?: b.ihtx?.base?.durationMs ?: 1L
+    b.done++
+   }
    b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
@@ -40,7 +45,7 @@ class ProjectExporter(private val context: Context) {
    else if (!b.concat) {
     b.concat=true
     transformer=newTransformer()
-    queue.post { if (batch===b) transformer.start(concatenate(b.files),b.output) }
+    queue.post { if (batch===b) transformer.start(concatenate(b.files,b.durations,b.ihtx?.base?.durationMs),b.output) }
    }
    else { batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted() }
   }
@@ -66,7 +71,7 @@ class ProjectExporter(private val context: Context) {
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
   val plan=IhtxPlan(base,overlays,passes,overlayGridSize.coerceAtLeast(1),videoAspectRatio(base.clips.first().sourceUri))
-  this.callback=callback; batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
+  this.callback=callback; batch=Batch(MutableList(total){base},files,outputPath,durations=MutableList(total){base.durationMs},ihtx=plan); startStage(requireNotNull(batch),0)
  }
  fun ihtxStatus():IhtxStatus? { val b=batch ?: return null; return if(b.concat) IhtxStatus(b.projects.size,b.projects.size,true) else IhtxStatus(b.done+1,b.projects.size,false) }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
@@ -84,9 +89,29 @@ class ProjectExporter(private val context: Context) {
    if(rotation % 180 == 0) width / height else height / width
   } catch (_:RuntimeException) { null } finally { retriever.release() }
  }
- private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() }))).build()
+ private fun fileDurationMs(file:File):Long? {
+  val retriever=MediaMetadataRetriever()
+  return try { retriever.setDataSource(file.absolutePath); retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() }
+  catch (_:RuntimeException) { null } finally { retriever.release() }
+ }
+ private fun concatenate(files:List<File>,durations:List<Long>,targetDurationMs:Long?):Composition {
+  val items=files.mapIndexed { index,file ->
+   val builder=EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(file)))
+   val target=targetDurationMs?.takeIf { it > 0 }
+   val actual=durations.getOrNull(index)?.takeIf { it > 0 }
+   if(target != null && actual != null) {
+    val speed=(actual.toFloat()/target.toFloat()).coerceIn(0.5f,2f)
+    builder.setSpeed(object : SpeedProvider {
+     override fun getSpeed(timeUs:Long):Float=speed
+     override fun getNextSpeedChangeTimeUs(timeUs:Long):Long=C.TIME_UNSET
+    })
+   }
+   builder.build()
+  }
+  return Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(items))).build()
+ }
  data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
- private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
+ private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,val durations:MutableList<Long> = MutableList(files.size){1L},var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
  private fun EditProject.takeForExport(length:Long):EditProject { var left=length.coerceIn(1,durationMs); return copy(clips=clips.mapNotNull { c -> if(left<=0)null else { val d=c.durationMs.coerceAtMost(left); left-=d; c.copy(trimEndMs=c.trimStartMs+d,effectSegments=c.effectSegments.map{it.forWholeClip(d)},audioSegments=c.audioSegments.map{it.forWholeClip(d)}) } }) }
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?) {
   private companion object { const val GRID_COVERAGE = 1.02f }
