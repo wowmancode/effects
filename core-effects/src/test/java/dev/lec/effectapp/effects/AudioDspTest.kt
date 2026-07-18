@@ -42,6 +42,12 @@ class AudioDspTest {
         assertEquals(-3f, decoded.first().semitones)
         assertEquals(0.75f, decoded.last().level)
         assertEquals(0.2f, encoded["dry_mix"])
+
+        val extremes = SplitPitchEffect.decodeVoices(
+            SplitPitchEffect.encodeVoices(listOf(SplitPitchVoice(-48f), SplitPitchVoice(48f)), emptyMap()),
+        )
+        assertEquals(-48f, extremes.first().semitones)
+        assertEquals(48f, extremes.last().semitones)
     }
 
     @Test

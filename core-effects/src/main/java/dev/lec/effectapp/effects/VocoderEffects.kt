@@ -32,7 +32,7 @@ class SplitPitchEffect : LecEffect {
             }
             return List(count) { index ->
                 SplitPitchVoice(
-                    semitones = (values["voice_${index}_semitones"] ?: 0f).coerceIn(-12f, 12f),
+                    semitones = (values["voice_${index}_semitones"] ?: 0f).coerceIn(-48f, 48f),
                     level = (values["voice_${index}_level"] ?: 1f).coerceIn(0f, 1f),
                 )
             }
@@ -45,7 +45,7 @@ class SplitPitchEffect : LecEffect {
             }.toMutableMap()
             result["voice_count"] = safe.size.toFloat()
             safe.forEachIndexed { index, voice ->
-                result["voice_${index}_semitones"] = voice.semitones.coerceIn(-12f, 12f)
+                result["voice_${index}_semitones"] = voice.semitones.coerceIn(-48f, 48f)
                 result["voice_${index}_level"] = voice.level.coerceIn(0f, 1f)
             }
             return result
