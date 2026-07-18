@@ -51,6 +51,7 @@ fun EditPanel(
     onAddVisualEffect: (String) -> Unit,
     onAddAudioEffect: (String) -> Unit,
     onAddOverlay: (String, Boolean) -> Unit,
+    onAddOverlayEffect: (String, String, EffectCategory) -> Unit,
 ) {
     var activeCategory by remember(selection) { mutableStateOf(selection?.category ?: EffectCategory.EFFECTS) }
     var presetsActive by remember { mutableStateOf(false) }
@@ -83,7 +84,9 @@ fun EditPanel(
                 selection == null -> Text("Select a clip to edit its effect stack.")
                 activeCategory == EffectCategory.TRANSFORM && selectedClip != null -> {
                     TransformEditor(viewModel, selectedClip)
-                    OverlaySection(viewModel, selectedClip, onAddOverlay)
+                    val clipStartMs = project.clips.takeWhile { it.id != selectedClip.id }.sumOf { it.durationMs }
+                    val localPlayheadMs = (playerPositionMs - clipStartMs).coerceIn(0, selectedClip.durationMs)
+                    OverlayEditor(viewModel, selectedClip, localPlayheadMs, onAddOverlay, onAddOverlayEffect)
                 }
                 activeCategory == EffectCategory.EFFECTS && selectedClip != null && selection.segmentId == null -> {
                     VisualEffectStack(viewModel, selectedClip, onAddVisualEffect)
@@ -298,70 +301,6 @@ private fun TransformEditor(viewModel: EditorViewModel, clip: Clip) {
     }
 }
 
-@Composable
-private fun OverlaySection(viewModel: EditorViewModel, clip: Clip, onAddOverlay: (String, Boolean) -> Unit) {
-    HorizontalDivider(Modifier.padding(vertical = 12.dp))
-    Text("Overlays", style = MaterialTheme.typography.titleMedium)
-    Text("Composite an image or video on this clip. Adjust position, opacity, and when it appears.")
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { onAddOverlay(clip.id, false) }, modifier = Modifier.weight(1f)) {
-            Text("+ Image")
-        }
-        OutlinedButton(onClick = { onAddOverlay(clip.id, true) }, modifier = Modifier.weight(1f)) {
-            Text("+ Video")
-        }
-    }
-    if (clip.overlays.isEmpty()) {
-        Text("No overlays on this clip yet.")
-    }
-    val maxSeconds = (clip.durationMs / 1000f).coerceAtLeast(0.1f)
-    clip.overlays.forEach { overlay ->
-        val index = clip.overlays.indexOfFirst { it.id == overlay.id }
-        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${if (overlay.isVideo) "🎬" else "🖼"} ${overlay.displayName}",
-                    Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                TextButton(
-                    onClick = { viewModel.moveOverlay(clip.id, overlay.id, -1) },
-                    enabled = index > 0,
-                ) { Text("Up") }
-                TextButton(
-                    onClick = { viewModel.moveOverlay(clip.id, overlay.id, 1) },
-                    enabled = index in 0 until clip.overlays.lastIndex,
-                ) { Text("Down") }
-                TextButton(onClick = { viewModel.removeOverlay(clip.id, overlay.id) }) { Text("Delete") }
-            }
-            if (overlay.isVideo) {
-                Text(
-                    "Video overlays move and loop during export. Preview uses a lightweight poster frame.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            ParameterSlider("Opacity", overlay.alpha, 0f..1f) { newValue ->
-                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(alpha = newValue) }
-            }
-            ParameterSlider("Size", overlay.scale, 0.1f..3f) { newValue ->
-                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(scale = newValue) }
-            }
-            ParameterSlider("Horizontal position", overlay.offsetX, -1f..1f) { newValue ->
-                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(offsetX = newValue) }
-            }
-            ParameterSlider("Vertical position", overlay.offsetY, -1f..1f) { newValue ->
-                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(offsetY = newValue) }
-            }
-            ParameterSlider("Start (seconds)", overlay.startMs / 1000f, 0f..maxSeconds) { newValue ->
-                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(startMs = (newValue * 1000).toLong()) }
-            }
-            ParameterSlider("End (seconds)", overlay.endMs / 1000f, 0f..maxSeconds) { newValue ->
-                viewModel.updateOverlay(clip.id, overlay.id) { it.copy(endMs = (newValue * 1000).toLong()) }
-            }
-        }
-    }
-}
-
 private val TabButtonPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
 
 @Composable
@@ -384,7 +323,7 @@ private fun RowScope.CategoryButton(
 }
 
 @Composable
-private fun EffectParameterControls(
+internal fun EffectParameterControls(
     effect: dev.lec.effectapp.effects.LecEffect,
     values: Map<String, Float>,
     onChange: (Map<String, Float>) -> Unit,
@@ -404,7 +343,7 @@ private fun EffectParameterControls(
 }
 
 @Composable
-private fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+internal fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
     var sliderValue by remember(value, range.start, range.endInclusive) { mutableFloatStateOf(value) }
     var text by remember(value) { mutableStateOf(formatParam(value)) }
     Row(

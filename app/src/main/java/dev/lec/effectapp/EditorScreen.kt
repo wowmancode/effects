@@ -448,6 +448,9 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 pendingReplaceClipId = clipId
                 replaceMedia.launch(arrayOf("video/*"))
             },
+            onAddOverlayEffect = { clipId, overlayId, category ->
+                pendingSegment = PendingSegment(clipId, 0, category, overlayId)
+            },
             onAddOverlay = { clipId, isVideo ->
                 pendingOverlayClipId = clipId
                 if (isVideo) addVideoOverlay.launch(arrayOf("video/*")) else addImageOverlay.launch(arrayOf("image/*"))
@@ -472,8 +475,13 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     pendingSegment?.let { pending ->
         EffectPicker(
             category = pending.category,
+            forOverlay = pending.overlayId != null,
             onDismiss = { pendingSegment = null },
-            onPick = { id -> viewModel.addSegment(pending.clipId, id); pendingSegment = null },
+            onPick = { id ->
+                if (pending.overlayId == null) viewModel.addSegment(pending.clipId, id)
+                else viewModel.addOverlayEffect(pending.clipId, pending.overlayId, id)
+                pendingSegment = null
+            },
         )
     }
 }
@@ -662,15 +670,22 @@ internal fun seekGlobal(player: ExoPlayer, project: EditProject, globalMs: Long)
 }
 
 @Composable
-private fun EffectPicker(category: EffectCategory, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+private fun EffectPicker(
+    category: EffectCategory,
+    forOverlay: Boolean = false,
+    onDismiss: () -> Unit,
+    onPick: (String) -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (category == EffectCategory.AUDIO) "Add audio effect" else "Add visual effect") },
         text = {
             Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                EffectRegistry.byCategory(category).forEach { effect ->
-                    TextButton(onClick = { onPick(effect.id) }, modifier = Modifier.fillMaxWidth()) { Text(effect.displayName) }
-                }
+                EffectRegistry.byCategory(category)
+                    .filterNot { forOverlay && it.id in setOf("reverse_video", "reverse_audio") }
+                    .forEach { effect ->
+                        TextButton(onClick = { onPick(effect.id) }, modifier = Modifier.fillMaxWidth()) { Text(effect.displayName) }
+                    }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
@@ -749,7 +764,12 @@ private fun seekPreview(
 }
 
 
-private data class PendingSegment(val clipId: String, val startMs: Long, val category: EffectCategory)
+private data class PendingSegment(
+    val clipId: String,
+    val startMs: Long,
+    val category: EffectCategory,
+    val overlayId: String? = null,
+)
 
 private fun editorDisplayName(context: Context, uri: Uri): String =
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->

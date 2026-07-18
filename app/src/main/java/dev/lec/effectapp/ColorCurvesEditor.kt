@@ -156,6 +156,31 @@ internal fun ColorCurvesEditor(params: Map<String, Float>, onChange: (Map<String
                 }
             }
         }
+        val selectedPoint = selectedInput.takeUnless(Float::isNaN)?.let { input ->
+            ColorCurvesEffect.decodePoints(params, activeChannels.first()).minByOrNull { point ->
+                kotlin.math.abs(point.input - input)
+            }
+        }
+        if (selectedPoint != null) {
+            ParameterSlider("Selected point input", selectedPoint.input, 0f..1f) { input ->
+                val moved = moveNearestPoint(
+                    ColorCurvesEffect.decodePoints(params, activeChannels.first()),
+                    selectedInput,
+                    input,
+                    selectedPoint.output,
+                )
+                val actualInput = moved.minByOrNull { kotlin.math.abs(it.input - input) }?.input ?: input
+                onChange(updateCurveChannels(params, activeChannels) { points ->
+                    moveNearestPoint(points, selectedInput, actualInput, selectedPoint.output)
+                })
+                selectedInput = actualInput
+            }
+            ParameterSlider("Selected point output", selectedPoint.output, 0f..1f) { output ->
+                onChange(updateCurveChannels(params, activeChannels) { points ->
+                    moveNearestPoint(points, selectedInput, selectedPoint.input, output)
+                })
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = {

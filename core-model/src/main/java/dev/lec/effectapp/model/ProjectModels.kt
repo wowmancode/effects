@@ -69,6 +69,47 @@ data class Overlay(
     val scale: Float = 1f,
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
+    val keyframes: List<OverlayKeyframe> = emptyList(),
+    val effectSegments: List<TimelineSegment> = emptyList(),
+    val audioSegments: List<TimelineSegment> = emptyList(),
+) {
+    fun valuesAt(timeMs: Long): OverlayValues {
+        if (keyframes.isEmpty()) return OverlayValues(alpha, scale, offsetX, offsetY)
+        val ordered = keyframes.sortedBy { it.timeMs }
+        val previous = ordered.lastOrNull { it.timeMs <= timeMs }
+        val next = ordered.firstOrNull { it.timeMs > timeMs }
+            ?: return previous?.values ?: OverlayValues(alpha, scale, offsetX, offsetY)
+        val fromTime = previous?.timeMs ?: 0L
+        val from = previous?.values ?: OverlayValues(alpha, scale, offsetX, offsetY)
+        val duration = next.timeMs - fromTime
+        if (duration <= 0L) return next.values
+        val amount = ((timeMs - fromTime).toFloat() / duration).coerceIn(0f, 1f)
+        return OverlayValues(
+            alpha = from.alpha + (next.alpha - from.alpha) * amount,
+            scale = from.scale + (next.scale - from.scale) * amount,
+            offsetX = from.offsetX + (next.offsetX - from.offsetX) * amount,
+            offsetY = from.offsetY + (next.offsetY - from.offsetY) * amount,
+        )
+    }
+}
+
+
+@Serializable
+data class OverlayKeyframe(
+    val timeMs: Long,
+    val alpha: Float = 1f,
+    val scale: Float = 1f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+) {
+    val values: OverlayValues get() = OverlayValues(alpha, scale, offsetX, offsetY)
+}
+
+data class OverlayValues(
+    val alpha: Float,
+    val scale: Float,
+    val offsetX: Float,
+    val offsetY: Float,
 )
 
 @Serializable

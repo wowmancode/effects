@@ -48,6 +48,7 @@ internal fun EditorWorkspace(
     onEmptyLane: (String, Long, EffectCategory) -> Unit,
     onAddVisualEffect: (String) -> Unit,
     onAddOverlay: (String, Boolean) -> Unit,
+    onAddOverlayEffect: (String, String, EffectCategory) -> Unit,
     onSplitClip: () -> Unit,
     onResetPreview: () -> Unit,
     onPreviousClip: () -> Unit,
@@ -113,6 +114,7 @@ internal fun EditorWorkspace(
                             onAddVisualEffect = onAddVisualEffect,
                             onAddAudioEffect = onAddAudioEffect,
                             onAddOverlay = onAddOverlay,
+                            onAddOverlayEffect = onAddOverlayEffect,
                         )
                     } else {
                         EditorTimeline(
@@ -170,6 +172,7 @@ internal fun EditorWorkspace(
                     onExportPreset = onExportPreset,
                     onAddAudioEffect = onAddAudioEffect,
                     onAddOverlay = onAddOverlay,
+                    onAddOverlayEffect = onAddOverlayEffect,
                 )
             }
         }

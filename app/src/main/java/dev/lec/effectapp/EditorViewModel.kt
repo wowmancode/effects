@@ -12,6 +12,7 @@ import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.EffectKeyframe
 import dev.lec.effectapp.model.EffectPreset
 import dev.lec.effectapp.model.Overlay
+import dev.lec.effectapp.model.OverlayKeyframe
 import dev.lec.effectapp.model.PresetLibraryJson
 import dev.lec.effectapp.model.ProjectJson
 import dev.lec.effectapp.model.PresetJson
@@ -144,6 +145,96 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             copy(overlays = overlays.toMutableList().apply {
                 add(to, removeAt(from))
             })
+        }
+    }
+
+    fun addOverlayKeyframe(clipId: String, overlayId: String, timeMs: Long) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            val time = timeMs.coerceAtLeast(0)
+            val values = overlay.valuesAt(time)
+            overlay.copy(
+                keyframes = (overlay.keyframes.filterNot { it.timeMs == time } + OverlayKeyframe(
+                    timeMs = time,
+                    alpha = values.alpha,
+                    scale = values.scale,
+                    offsetX = values.offsetX,
+                    offsetY = values.offsetY,
+                )).sortedBy { it.timeMs },
+            )
+        }
+    }
+
+    fun updateOverlayKeyframe(
+        clipId: String,
+        overlayId: String,
+        timeMs: Long,
+        transform: (OverlayKeyframe) -> OverlayKeyframe,
+    ) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            overlay.copy(keyframes = overlay.keyframes.map { if (it.timeMs == timeMs) transform(it) else it })
+        }
+    }
+
+    fun removeOverlayKeyframe(clipId: String, overlayId: String, timeMs: Long) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            overlay.copy(keyframes = overlay.keyframes.filterNot { it.timeMs == timeMs })
+        }
+    }
+
+    fun addOverlayEffect(clipId: String, overlayId: String, effectId: String) {
+        val effect = requireNotNull(EffectRegistry.byId(effectId))
+        updateOverlay(clipId, overlayId) { overlay ->
+            val duration = (overlay.endMs - overlay.startMs).coerceAtLeast(1)
+            val segment = TimelineSegment(
+                id = UUID.randomUUID().toString(),
+                effectId = effectId,
+                startMs = 0,
+                endMs = duration,
+                params = effect.params.associate { it.id to it.default },
+                stringParams = when (effectId) {
+                    "plugin_video" -> mapOf("source" to DEFAULT_VIDEO_PLUGIN_SOURCE)
+                    "plugin_audio" -> mapOf("source" to DEFAULT_AUDIO_PLUGIN_SOURCE)
+                    else -> emptyMap()
+                },
+            )
+            if (effect.category == EffectCategory.AUDIO) {
+                overlay.copy(audioSegments = overlay.audioSegments + segment)
+            } else {
+                overlay.copy(effectSegments = overlay.effectSegments + segment)
+            }
+        }
+    }
+
+    fun updateOverlayEffect(
+        clipId: String,
+        overlayId: String,
+        segmentId: String,
+        transform: (TimelineSegment) -> TimelineSegment,
+    ) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            overlay.copy(
+                effectSegments = overlay.effectSegments.map { if (it.id == segmentId) transform(it) else it },
+                audioSegments = overlay.audioSegments.map { if (it.id == segmentId) transform(it) else it },
+            )
+        }
+    }
+
+    fun removeOverlayEffect(clipId: String, overlayId: String, segmentId: String) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            overlay.copy(
+                effectSegments = overlay.effectSegments.filterNot { it.id == segmentId },
+                audioSegments = overlay.audioSegments.filterNot { it.id == segmentId },
+            )
+        }
+    }
+
+    fun moveOverlayEffect(clipId: String, overlayId: String, segmentId: String, delta: Int) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            if (overlay.audioSegments.any { it.id == segmentId }) {
+                overlay.copy(audioSegments = overlay.audioSegments.moved(segmentId, delta))
+            } else {
+                overlay.copy(effectSegments = overlay.effectSegments.moved(segmentId, delta))
+            }
         }
     }
 
@@ -421,7 +512,13 @@ private fun Overlay.clampedToRange(start: Long, end: Long, clipDurationMs: Long)
     val newStart = startMs.coerceIn(start, end)
     val newEnd = effectiveEnd.coerceIn(start, end)
     if (newEnd <= newStart) return null
-    return copy(startMs = newStart, endMs = newEnd)
+    return copy(
+        startMs = newStart,
+        endMs = newEnd,
+        keyframes = keyframes.filter { it.timeMs in start..end },
+        effectSegments = effectSegments.map { it.forWholeClip(end - start) },
+        audioSegments = audioSegments.map { it.forWholeClip(end - start) },
+    )
 }
 
 /** Shifts an overlay into the second split half, dropping it if it ended before the cut. */
@@ -431,7 +528,16 @@ private fun Overlay.shiftedInto(split: Long, tailDurationMs: Long, clipDurationM
     val newStart = (startMs - split).coerceIn(0, tailDurationMs)
     val newEnd = (effectiveEnd - split).coerceIn(0, tailDurationMs)
     if (newEnd <= newStart) return null
-    return copy(startMs = newStart, endMs = newEnd)
+    return copy(
+        startMs = newStart,
+        endMs = newEnd,
+        keyframes = keyframes.mapNotNull { keyframe ->
+            val shifted = keyframe.timeMs - split
+            keyframe.copy(timeMs = shifted).takeIf { shifted in 0..tailDurationMs }
+        },
+        effectSegments = effectSegments.map { it.forWholeClip(tailDurationMs) },
+        audioSegments = audioSegments.map { it.forWholeClip(tailDurationMs) },
+    )
 }
 
 private fun TimelineSegment.normalizedForFingerprint(): TimelineSegment = copy(

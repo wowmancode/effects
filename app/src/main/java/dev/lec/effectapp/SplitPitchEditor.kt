@@ -7,14 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -76,14 +71,7 @@ private fun VoiceSlider(
     suffix: String = "",
     onChange: (Float) -> Unit,
 ) {
-    var local by remember(value, range.start, range.endInclusive) { mutableFloatStateOf(value) }
-    Text("$label: ${"%.2f".format(local)}$suffix")
-    Slider(
-        value = local.coerceIn(range.start, range.endInclusive),
-        onValueChange = { local = it },
-        onValueChangeFinished = { onChange(local) },
-        valueRange = range,
-    )
+    ParameterSlider(if (suffix.isEmpty()) label else "$label (${suffix.trim()})", value, range, onChange)
 }
 
 private fun List<SplitPitchVoice>.replaced(index: Int, value: SplitPitchVoice): List<SplitPitchVoice> =

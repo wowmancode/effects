@@ -12,12 +12,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -102,14 +100,7 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
 
 @Composable
 private fun GradientStopSlider(label: String, value: Float, onChange: (Float) -> Unit) {
-    var sliderValue by remember(value) { mutableFloatStateOf(value) }
-    Text("$label: ${"%.2f".format(sliderValue)}")
-    Slider(
-        value = sliderValue.coerceIn(0f, 1f),
-        onValueChange = { sliderValue = it },
-        onValueChangeFinished = { onChange(sliderValue) },
-        valueRange = 0f..1f,
-    )
+    ParameterSlider(label, value, 0f..1f, onChange)
 }
 
 private fun List<GradientColorStop>.replaced(index: Int, value: GradientColorStop): List<GradientColorStop> =
