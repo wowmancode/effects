@@ -355,6 +355,7 @@ private fun dev.lec.effectapp.effects.LecEffect.withoutControls(hidden: Set<Stri
 }
 
 
+
 private fun ColorspaceEffectPicker(effect: dev.lec.effectapp.effects.LecEffect, values: Map<String, Float>, onChange: (Map<String, Float>) -> Unit) {
     val choices = listOf("RGB", "HSV", "HSL", "YUV", "YCbCr", "YCoCg", "XYZ", "LAB", "CMY")
     val selected = (values["colorspace"] ?: 0f).toInt().coerceIn(0, choices.lastIndex)
@@ -379,6 +380,7 @@ private fun ColorspaceEffectPicker(effect: dev.lec.effectapp.effects.LecEffect, 
         }
     }
 }
+
 
 
 internal fun EffectParameterControls(
