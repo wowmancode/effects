@@ -34,6 +34,7 @@ import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.TimelineSegment
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 @OptIn(UnstableApi::class)
 object ProjectCompositionFactory {
@@ -77,13 +78,14 @@ object ProjectCompositionFactory {
                     .build(),
             )
         } ?: emptyList()
+        val ihtxPresentationSize = overlayAspectRatio?.let(::createIhtxPresentationSize)
         val videoOverlays = videoOverlayTracks(project)
         if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences + durationAnchorSequences).build()
-        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, overlayAspectRatio) }
+        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, ihtxPresentationSize) }
         val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
             .map { audioOverlaySequence(it, project.durationMs) }
         return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences + durationAnchorSequences)
-            .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays))
+            .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays, ihtxPresentationSize))
             .build()
     }
 
@@ -260,7 +262,7 @@ object ProjectCompositionFactory {
         }
     }
 
-    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?, overlayAspectRatio: Float?): EditedMediaItemSequence {
+    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?, ihtxPresentationSize: Size?): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
         if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
 
@@ -277,8 +279,8 @@ object ProjectCompositionFactory {
                         .build(),
                 )
                 .build()
-            val videoEffects = if (track.overlay.ihtxLayout && overlayAspectRatio != null) {
-                listOf(Presentation.createForAspectRatio(overlayAspectRatio, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
+            val videoEffects = if (track.overlay.ihtxLayout && ihtxPresentationSize != null) {
+                listOf(Presentation.createForWidthAndHeight(ihtxPresentationSize.width, ihtxPresentationSize.height, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             } else {
                 emptyList()
             }
@@ -321,6 +323,7 @@ object ProjectCompositionFactory {
 
     private class OverlayVideoCompositorSettings(
         private val overlays: List<VideoOverlayTrack>,
+        private val ihtxPresentationSize: Size?,
     ) : VideoCompositorSettings {
         private var inputSizes: List<Size> = emptyList()
         private var outputSize: Size? = null
@@ -334,7 +337,7 @@ object ProjectCompositionFactory {
             val track = overlays.getOrNull(inputId) ?: return StaticOverlaySettings.Builder().build()
             val visible = presentationTimeUs in (track.globalStartMs * 1_000) until (track.globalEndMs * 1_000)
             val scale = track.overlay.scale.coerceAtLeast(0.01f)
-            val inputSize = inputSizes.getOrNull(inputId)
+            val inputSize = if (track.overlay.ihtxLayout) ihtxPresentationSize else inputSizes.getOrNull(inputId)
             val frameSize = outputSize
             val scaleX = if (track.overlay.ihtxLayout && inputSize != null && frameSize != null) {
                 scale * frameSize.width.toFloat() / inputSize.width.toFloat()
@@ -350,6 +353,16 @@ object ProjectCompositionFactory {
                     track.overlay.offsetY.coerceIn(-1f, 1f),
                 )
                 .build()
+        }
+    }
+
+    private fun createIhtxPresentationSize(aspectRatio: Float): Size {
+        val safeAspect = aspectRatio.coerceIn(0.1f, 10f)
+        fun even(value: Int): Int = ((value.coerceAtLeast(2) + 1) / 2) * 2
+        return if (safeAspect >= 1f) {
+            Size(512, even((512f / safeAspect).roundToInt()))
+        } else {
+            Size(even((512f * safeAspect).roundToInt()), 512)
         }
     }
 
