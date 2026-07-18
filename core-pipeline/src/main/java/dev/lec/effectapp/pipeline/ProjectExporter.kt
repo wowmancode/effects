@@ -82,7 +82,7 @@ class ProjectExporter(context: Context) {
    val duration=base.durationMs
    val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=duration,overlays=emptyList())
    val project=base.copy(clips=listOf(first))
-      if(index%passes!=0 || stage==0) return project
+   if(index%passes!=0 || stage==0) return project
    val total=overlays.size; val overlay=overlays[stage-1]
    val columns=kotlin.math.ceil(kotlin.math.sqrt(total.toDouble())).toInt().coerceAtLeast(1)
    val rows=kotlin.math.ceil(total.toDouble()/columns).toInt().coerceAtLeast(1)
