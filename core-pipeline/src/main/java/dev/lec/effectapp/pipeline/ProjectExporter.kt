@@ -35,6 +35,7 @@ class ProjectExporter(context: Context) {
    val b=batch
    if (b==null) { val c=callback; callback=null; c?.onCompleted(); return }
    b.done++
+   b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
    if (b.done < b.projects.size) queue.post { if (batch===b) startStage(b,b.done) }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
@@ -59,13 +60,11 @@ class ProjectExporter(context: Context) {
   check(this.callback==null) { "An export is already running" }
   failedIhtxStatus=null
   val base=project.takeForExport(lengthMs); require(base.clips.isNotEmpty()) { "Length per export must be greater than zero" }
-  val passes=exports.coerceAtLeast(1)
-  val projects=(0..overlays.size).flatMap { count ->
-   List(passes) { pass -> base.withIhtxOverlays(overlays.take(count)).repeatedEffects(count*passes+pass+1) }
-  }
+  val passes=exports.coerceAtLeast(1); val total=(overlays.size+1)*passes
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
-  val files=List(projects.size) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
-  this.callback=callback; batch=Batch(projects,files,outputPath); startStage(requireNotNull(batch),0)
+  val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
+  val plan=IhtxPlan(base,overlays,passes)
+  this.callback=callback; batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
  }
  fun ihtxStatus():IhtxStatus? { val b=batch ?: return null; return if(b.concat) IhtxStatus(b.projects.size,b.projects.size,true) else IhtxStatus(b.done+1,b.projects.size,false) }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
@@ -75,17 +74,25 @@ class ProjectExporter(context: Context) {
  private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap),b.files[index].absolutePath) }
  private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() }))).build()
  data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
- private data class Batch(val projects:List<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false)
+ private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
  private fun EditProject.takeForExport(length:Long):EditProject { var left=length.coerceIn(1,durationMs); return copy(clips=clips.mapNotNull { c -> if(left<=0)null else { val d=c.durationMs.coerceAtMost(left); left-=d; c.copy(trimEndMs=c.trimStartMs+d,effectSegments=c.effectSegments.map{it.forWholeClip(d)},audioSegments=c.audioSegments.map{it.forWholeClip(d)}) } }) }
- private fun EditProject.repeatedEffects(passes:Int)=copy(clips=clips.map { c -> c.copy(effectSegments=List(passes){c.effectSegments}.flatten(),audioSegments=List(passes){c.audioSegments}.flatten()) })
- private fun EditProject.withIhtxOverlays(overlays:List<Overlay>):EditProject {
-  if(overlays.isEmpty()) return this
-  val columns=kotlin.math.ceil(kotlin.math.sqrt(overlays.size.toDouble())).toInt().coerceAtLeast(1)
-  val rows=kotlin.math.ceil(overlays.size.toDouble()/columns).toInt().coerceAtLeast(1)
-  val size=1f/maxOf(columns,rows)
-  return copy(clips=clips.mapIndexed { clipIndex,clip -> if(clipIndex!=0) clip else clip.copy(overlays=clip.overlays+overlays.mapIndexed { index,overlay ->
-   val column=index%columns; val row=index/columns
-   overlay.copy(startMs=0,endMs=clip.durationMs,scale=size,offsetX=((column+.5f)/columns)*2f-1f,offsetY=((row+.5f)/rows)*2f-1f)
-  }) })
+ private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int) {
+  fun nextProject(previous:File,index:Int):EditProject {
+   val stage=index/passes
+   val project=base.fromIhtxPrevious(previous)
+   return if(index%passes==0 && stage>0) project.withIhtxOverlay(overlays[stage-1],stage-1,overlays.size) else project
+  }
+ }
+ private fun EditProject.fromIhtxPrevious(previous:File):EditProject {
+  val source=Uri.fromFile(previous).toString(); val duration=durationMs
+  val first=clips.first().copy(sourceUri=source,trimStartMs=0,trimEndMs=duration,overlays=emptyList())
+  return copy(clips=listOf(first))
+ }
+ private fun EditProject.withIhtxOverlay(overlay:Overlay,index:Int,total:Int):EditProject {
+  val columns=kotlin.math.ceil(kotlin.math.sqrt(total.toDouble())).toInt().coerceAtLeast(1)
+  val rows=kotlin.math.ceil(total.toDouble()/columns).toInt().coerceAtLeast(1)
+  val column=index%columns; val row=index/columns
+  val tile=overlay.copy(startMs=0,endMs=clips.first().durationMs,scale=1f/maxOf(columns,rows),offsetX=((column+.5f)/columns)*2f-1f,offsetY=((row+.5f)/rows)*2f-1f)
+  return copy(clips=clips.mapIndexed { clipIndex,clip -> if(clipIndex==0) clip.copy(overlays=clip.overlays+tile) else clip })
  }
 }
