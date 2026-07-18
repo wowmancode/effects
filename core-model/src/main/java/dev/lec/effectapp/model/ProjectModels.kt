@@ -62,6 +62,7 @@ data class Overlay(
     val isVideo: Boolean = false,
     val sourceDurationMs: Long = 0,
     val includeAudio: Boolean = false,
+    val ihtxLayout: Boolean = false,
     val startMs: Long = 0,
     val endMs: Long = 0,
     val alpha: Float = 1f,

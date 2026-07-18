@@ -70,19 +70,23 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     val ihtxOverlayPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val added = uris.map { uri ->
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val durationMs = runCatching {
+            val metadata = runCatching {
                 MediaMetadataRetriever().run {
-                    try { setDataSource(context, uri); extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L }
-                    finally { release() }
+                    try {
+                        setDataSource(context, uri)
+                        (extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) to
+                            (extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO).equals("yes", ignoreCase = true))
+                    } finally { release() }
                 }
-            }.getOrDefault(0L)
+            }.getOrDefault(0L to false)
             Overlay(
                 id = UUID.randomUUID().toString(),
                 sourceUri = uri.toString(),
                 displayName = uri.lastPathSegment ?: "Video overlay",
                 isVideo = true,
-                sourceDurationMs = durationMs,
-                includeAudio = true,
+                sourceDurationMs = metadata.first,
+                includeAudio = metadata.second,
+                ihtxLayout = true,
             )
         }
         ihtxOverlays = ihtxOverlays + added

@@ -269,7 +269,7 @@ object ProjectCompositionFactory {
                         .build(),
                 )
                 .build()
-            val videoEffects = if (track.overlay.includeAudio && overlayAspectRatio != null) {
+            val videoEffects = if (track.overlay.ihtxLayout && overlayAspectRatio != null) {
                 listOf(Presentation.createForAspectRatio(overlayAspectRatio, Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP))
             } else {
                 emptyList()
@@ -328,10 +328,10 @@ object ProjectCompositionFactory {
             val scale = track.overlay.scale.coerceAtLeast(0.01f)
             val inputSize = inputSizes.getOrNull(inputId)
             val frameSize = outputSize
-            val scaleX = if (track.overlay.includeAudio && inputSize != null && frameSize != null) {
+            val scaleX = if (track.overlay.ihtxLayout && inputSize != null && frameSize != null) {
                 scale * frameSize.width.toFloat() / inputSize.width.toFloat()
             } else scale
-            val scaleY = if (track.overlay.includeAudio && inputSize != null && frameSize != null) {
+            val scaleY = if (track.overlay.ihtxLayout && inputSize != null && frameSize != null) {
                 scale * frameSize.height.toFloat() / inputSize.height.toFloat()
             } else scale
             return StaticOverlaySettings.Builder()
