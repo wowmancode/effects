@@ -47,6 +47,7 @@ object ProjectCompositionFactory {
         targetFrameRate: Int? = null,
         overlayAspectRatio: Float? = null,
         durationAnchorMs: Long? = null,
+        ihtxOutputSize: Size? = null,
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
@@ -85,7 +86,7 @@ object ProjectCompositionFactory {
         val overlayAudioSequences = videoOverlays.filter { it.overlay.includeAudio }
             .map { audioOverlaySequence(it, project.durationMs) }
         return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences + durationAnchorSequences)
-            .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays, ihtxPresentationSize))
+            .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays, ihtxPresentationSize, ihtxOutputSize))
             .build()
     }
 
@@ -324,6 +325,7 @@ object ProjectCompositionFactory {
     private class OverlayVideoCompositorSettings(
         private val overlays: List<VideoOverlayTrack>,
         private val ihtxPresentationSize: Size?,
+        private val ihtxOutputSize: Size?,
     ) : VideoCompositorSettings {
         private var inputSizes: List<Size> = emptyList()
         private var outputSize: Size? = null
@@ -338,7 +340,7 @@ object ProjectCompositionFactory {
             val visible = presentationTimeUs in (track.globalStartMs * 1_000) until (track.globalEndMs * 1_000)
             val scale = track.overlay.scale.coerceAtLeast(0.01f)
             val inputSize = if (track.overlay.ihtxLayout) ihtxPresentationSize else inputSizes.getOrNull(inputId)
-            val frameSize = outputSize
+            val frameSize = if (track.overlay.ihtxLayout) ihtxOutputSize ?: outputSize else outputSize
             val scaleX = if (track.overlay.ihtxLayout && inputSize != null && frameSize != null) {
                 scale * frameSize.width.toFloat() / inputSize.width.toFloat()
             } else scale
