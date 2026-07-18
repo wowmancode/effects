@@ -72,7 +72,7 @@ class ProjectExporter(context: Context) {
  fun cancel(){ transformer.cancel(); batch?.files?.forEach(File::delete); batch=null; callback=null }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
  private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,if (b.ihtx != null) 30 else null),b.files[index].absolutePath) }
- private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() }))).build()
+ private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).setFrameRate(30).build() }))).build()
  data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
  private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
  private fun EditProject.takeForExport(length:Long):EditProject { var left=length.coerceIn(1,durationMs); return copy(clips=clips.mapNotNull { c -> if(left<=0)null else { val d=c.durationMs.coerceAtMost(left); left-=d; c.copy(trimEndMs=c.trimStartMs+d,effectSegments=c.effectSegments.map{it.forWholeClip(d)},audioSegments=c.audioSegments.map{it.forWholeClip(d)}) } }) }
@@ -85,7 +85,7 @@ class ProjectExporter(context: Context) {
    if(index%passes!=0 || stage==0) return project
    val overlay=overlays[stage-1]
    val column=(stage-1)%gridSize; val row=(stage-1)/gridSize
-   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=1f/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
+   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=1.02f/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
    return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
   }
  }
