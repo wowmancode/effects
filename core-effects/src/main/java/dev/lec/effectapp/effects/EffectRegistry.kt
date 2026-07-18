@@ -7,6 +7,8 @@ object EffectRegistry {
         SelectiveHueEffect(),
         LabInvertEffect(),
         LabHueShiftEffect(),
+        ColorspaceHueShiftEffect(),
+        ColorspaceInvertEffect(),
         ColorCurvesEffect(),
         DisplacementMapEffect(),
         CustomLutEffect(),

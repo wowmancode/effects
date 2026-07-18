@@ -44,15 +44,15 @@ class LabHueShiftEffect : LecEffect {
 }
 
 @OptIn(UnstableApi::class)
-private data class LabColorEffect(val mode: Int, val mix: Float, val degrees: Float, val channels: FloatArray) : GlEffect {
+internal data class LabColorEffect(val mode: Int, val mix: Float, val degrees: Float, val channels: FloatArray, val colorspace: Int = 3) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        LabColorShaderProgram(useHdr, mode, mix, degrees, channels)
+        LabColorShaderProgram(useHdr, mode, mix, degrees, channels, colorspace)
 }
 
 @OptIn(UnstableApi::class)
-private class LabColorShaderProgram(useHdr: Boolean, mode: Int, mix: Float, degrees: Float, private val channels: FloatArray) : BaseGlShaderProgram(useHdr, 1) {
+private class LabColorShaderProgram(useHdr: Boolean, mode: Int, mix: Float, degrees: Float, private val channels: FloatArray, colorspace: Int) : BaseGlShaderProgram(useHdr, 1) {
     private val program = try { GlProgram(LAB_VERTEX, LAB_FRAGMENT) } catch (error: GlUtil.GlException) { throw VideoFrameProcessingException(error) }
-    private val settings = floatArrayOf(mode.toFloat(), mix.coerceIn(0f, 1f), degrees * Math.PI.toFloat() / 180f, 0f)
+    private val settings = floatArrayOf(mode.toFloat(), mix.coerceIn(0f, 1f), degrees * Math.PI.toFloat() / 180f, colorspace.toFloat())
     override fun configure(inputWidth: Int, inputHeight: Int): Size = Size(inputWidth, inputHeight)
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
@@ -93,15 +93,26 @@ private const val LAB_FRAGMENT = """
    vec3 c=vec3(3.2406*xyz.x-1.5372*xyz.y-.4986*xyz.z,-.9689*xyz.x+1.8758*xyz.y+.0415*xyz.z,.0557*xyz.x-.2040*xyz.y+1.0570*xyz.z);
    return clamp(vec3(srgb(max(c.r,0.0)),srgb(max(c.g,0.0)),srgb(max(c.b,0.0))),0.0,1.0);
  }
+ vec3 rgbHsv(vec3 c){
+   float hi=max(c.r,max(c.g,c.b)),lo=min(c.r,min(c.g,c.b)),d=hi-lo; float h=0.0;
+   if(d>.00001){if(hi==c.r)h=mod((c.g-c.b)/d,6.0);else if(hi==c.g)h=(c.b-c.r)/d+2.0;else h=(c.r-c.g)/d+4.0;h/=6.0;if(h<0.0)h+=1.0;}
+   return vec3(h,hi<.00001?0.0:d/hi,hi);
+ }
+ vec3 hsvRgb(vec3 c){float h=c.x*6.0;float x=c.z*(1.0-abs(mod(h,2.0)-1.0));vec3 p=vec3(0.0);if(h<1.0)p=vec3(c.z,x,0.0);else if(h<2.0)p=vec3(x,c.z,0.0);else if(h<3.0)p=vec3(0.0,c.z,x);else if(h<4.0)p=vec3(0.0,x,c.z);else if(h<5.0)p=vec3(x,0.0,c.z);else p=vec3(c.z,0.0,x);return p*c.y+vec3(c.z*(1.0-c.y));}
+ vec3 rgbYuv(vec3 c){return vec3(dot(c,vec3(.299,.587,.114)),dot(c,vec3(-.14713,-.28886,.436)),dot(c,vec3(.615,-.51499,-.10001)));}
+ vec3 yuvRgb(vec3 c){return clamp(vec3(c.x+1.13983*c.z,c.x-.39465*c.y-.58060*c.z,c.x+2.03211*c.y),0.0,1.0);}
  void main(){
-   vec4 source=texture2D(uTexSampler,vTexSamplingCoord); vec3 lab=rgbLab(source.rgb);
-   if(uSettings.x<.5){
-     if(uChannels.r>.5) lab.x=100.0-lab.x;
-     if(uChannels.g>.5) lab.y=-lab.y;
-     if(uChannels.b>.5) lab.z=-lab.z;
+   vec4 source=texture2D(uTexSampler,vTexSamplingCoord); vec3 changed=source.rgb; float cs=cos(uSettings.z),sn=sin(uSettings.z);
+   if(uSettings.w<.5){
+     if(uSettings.x<.5) changed=vec3(1.0)-source.rgb;
+     else {vec3 h=rgbHsv(source.rgb);h.x=fract(h.x+uSettings.z/6.2831853);changed=hsvRgb(h);}
+   } else if(uSettings.w<1.5){
+     vec3 h=rgbHsv(source.rgb); if(uSettings.x<.5)h=vec3(1.0)-h;else h.x=fract(h.x+uSettings.z/6.2831853); changed=hsvRgb(h);
+   } else if(uSettings.w<2.5){
+     vec3 y=rgbYuv(source.rgb); if(uSettings.x<.5)y=vec3(1.0-y.x,-y.y,-y.z);else y.yz=vec2(y.y*cs-y.z*sn,y.y*sn+y.z*cs); changed=yuvRgb(y);
+   } else {
+     vec3 lab=rgbLab(source.rgb); if(uSettings.x<.5){lab.x=100.0-lab.x;lab.y=-lab.y;lab.z=-lab.z;}else lab.yz=vec2(lab.y*cs-lab.z*sn,lab.y*sn+lab.z*cs);changed=labRgb(lab);
    }
-   else { float cs=cos(uSettings.z),sn=sin(uSettings.z); lab.yz=vec2(lab.y*cs-lab.z*sn,lab.y*sn+lab.z*cs); }
-   vec3 changed=mix(source.rgb,labRgb(lab),uSettings.y);
-   gl_FragColor=vec4(changed,source.a);
+   gl_FragColor=vec4(mix(source.rgb,changed,uSettings.y),source.a);
  }
 """
