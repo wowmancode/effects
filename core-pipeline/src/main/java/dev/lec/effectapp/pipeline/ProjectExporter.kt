@@ -31,9 +31,10 @@ class ProjectExporter(private val context: Context) {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
    val b=batch
    if (b==null) { val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted(); return }
+   b.retries=0
    b.done++
    b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
-   if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
+   if (b.done < b.projects.size) { transformer=newTransformer(); queue.postDelayed({ if (batch===b) startStage(b,b.done) }, STAGE_COOLDOWN_MS) }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
     batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted()
@@ -46,6 +47,14 @@ class ProjectExporter(private val context: Context) {
    else { batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted() }
   }
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+   val b=batch
+   if (b != null && !b.concat && b.done < b.projects.size && b.retries < MAX_STAGE_RETRIES) {
+    b.retries++
+    b.files.getOrNull(b.done)?.delete()
+    transformer=newTransformer()
+    queue.postDelayed({ if (batch===b) startStage(b,b.done) }, RETRY_COOLDOWN_MS)
+    return
+   }
    failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; val c=callback; callback=null; transformer=newTransformer(); c?.onError(exportException)
   }
  }
@@ -88,7 +97,7 @@ class ProjectExporter(private val context: Context) {
  }
  private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() }))).build()
  data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
- private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null)
+ private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0)
  private fun EditProject.takeForExport(length:Long):EditProject { var left=length.coerceIn(1,durationMs); return copy(clips=clips.mapNotNull { c -> if(left<=0)null else { val d=c.durationMs.coerceAtMost(left); left-=d; c.copy(trimEndMs=c.trimStartMs+d,effectSegments=c.effectSegments.map{it.forWholeClip(d)},audioSegments=c.audioSegments.map{it.forWholeClip(d)}) } }) }
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?,val outputSize:Size?) {
   private companion object { const val GRID_COVERAGE = 1.02f }
@@ -102,6 +111,12 @@ class ProjectExporter(private val context: Context) {
    val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=GRID_COVERAGE/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
    return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
   }
+ }
+
+ private companion object {
+  const val MAX_STAGE_RETRIES = 2
+  const val STAGE_COOLDOWN_MS = 50L
+  const val RETRY_COOLDOWN_MS = 500L
  }
 
 }
