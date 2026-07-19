@@ -44,7 +44,7 @@ class LabHueShiftEffect : LecEffect {
 }
 
 @OptIn(UnstableApi::class)
-internal data class LabColorEffect(val mode: Int, val mix: Float, val degrees: Float, val channels: FloatArray, val colorspace: Int = 3) : GlEffect {
+internal data class LabColorEffect(val mode: Int, val mix: Float, val degrees: Float, val channels: FloatArray, val colorspace: Int = 7) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
         LabColorShaderProgram(useHdr, mode, mix, degrees, channels, colorspace)
 }
