@@ -34,7 +34,7 @@ class ProjectExporter(private val context: Context) {
    b.retries=0
    b.done++
    b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
-   if (b.done < b.projects.size) { transformer=newTransformer(); queue.postDelayed({ if (batch===b) startStage(b,b.done) }, STAGE_COOLDOWN_MS) }
+   if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
     batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted()
@@ -115,8 +115,7 @@ class ProjectExporter(private val context: Context) {
 
  private companion object {
   const val MAX_STAGE_RETRIES = 2
-  const val STAGE_COOLDOWN_MS = 50L
-  const val RETRY_COOLDOWN_MS = 500L
+  const val RETRY_COOLDOWN_MS = 150L
  }
 
 }
