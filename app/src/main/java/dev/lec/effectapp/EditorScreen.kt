@@ -702,7 +702,7 @@ private fun buildPreviewEntries(project: EditProject): List<PreviewEntry> = buil
     project.clips.forEachIndexed { clipIndex, clip ->
         if (clip.mediaMissing) return@forEachIndexed
         val reversed = clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" }
-        val sliceMs = maxOf(100L, (clip.durationMs + 299L) / 300L)
+        val sliceMs = 34L // One frame at the export/preview baseline of 30 fps.
         val sourceSlices = if (reversed) {
             buildList {
                 var start = 0L

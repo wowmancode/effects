@@ -56,13 +56,13 @@ object ProjectCompositionFactory {
             listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map { editedItem(it, resolveBitmap, targetFrameRate) }))
         } else {
             val videoItems = project.clips.flatMap { clip ->
-                sourceSlices(clip, clip.reversesVideo(), clip.effectSegments).map { slice ->
+                sourceSlices(clip, clip.reversesVideo(), clip.effectSegments, targetFrameRate).map { slice ->
                     editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
                 }
             }
             val audioItems = project.clips.flatMap { clip ->
                 // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
-                sourceSlices(clip, clip.reversesAudio(), clip.audioSegments).map { slice ->
+                sourceSlices(clip, clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
                     editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
                 }
             }
@@ -209,7 +209,7 @@ object ProjectCompositionFactory {
         return builder.build()
     }
 
-    private fun sourceSlices(clip: Clip, reversed: Boolean, segments: List<TimelineSegment>): List<SourceSlice> {
+    private fun sourceSlices(clip: Clip, reversed: Boolean, segments: List<TimelineSegment>, targetFrameRate: Int?): List<SourceSlice> {
         val keyframedSegments = segments.filter { it.keyframes.isNotEmpty() }
         val keyframeTimes = keyframedSegments
             .flatMap { it.keyframes }
@@ -229,7 +229,7 @@ object ProjectCompositionFactory {
             val boundaries = listOf(0L) + animatedTimes + clip.durationMs
             return boundaries.zipWithNext(::SourceSlice)
         }
-        val sliceMs = max(MIN_REVERSE_SLICE_MS, ceil(clip.durationMs / MAX_REVERSE_SLICES.toDouble()).toLong())
+        val sliceMs = ceil(1_000.0 / (targetFrameRate ?: 30).coerceIn(1, 120)).toLong().coerceAtLeast(1L)
         val slices = buildList {
             var start = 0L
             while (start < clip.durationMs) {
