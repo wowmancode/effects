@@ -48,12 +48,17 @@ object ProjectCompositionFactory {
         overlayAspectRatio: Float? = null,
         durationAnchorMs: Long? = null,
         ihtxOutputSize: Size? = null,
+        muteBaseAudio: Boolean = false,
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
         val hasKeyframes = project.clips.any { clip -> (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() } }
         val baseSequences = if (!hasReverse && !hasKeyframes) {
-            listOf(EditedMediaItemSequence.withAudioAndVideoFrom(project.clips.map { editedItem(it, resolveBitmap, targetFrameRate) }))
+            val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, includeAudio = !muteBaseAudio) }
+            listOf(
+                if (muteBaseAudio) EditedMediaItemSequence.withVideoFrom(items)
+                else EditedMediaItemSequence.withAudioAndVideoFrom(items),
+            )
         } else {
             val videoItems = project.clips.flatMap { clip ->
                 sourceSlices(clip, clip.reversesVideo(), clip.effectSegments, targetFrameRate).map { slice ->
@@ -66,10 +71,10 @@ object ProjectCompositionFactory {
                     editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
                 }
             }
-            listOf(
-                EditedMediaItemSequence.withVideoFrom(videoItems),
-                EditedMediaItemSequence.withAudioFrom(audioItems),
-            )
+            buildList {
+                add(EditedMediaItemSequence.withVideoFrom(videoItems))
+                if (!muteBaseAudio) add(EditedMediaItemSequence.withAudioFrom(audioItems))
+            }
         }
 
         val durationAnchorSequences = durationAnchorMs?.takeIf { it > 0 }?.let { durationMs ->
@@ -155,12 +160,17 @@ object ProjectCompositionFactory {
         addAll(videoEffects(clip, timeMs, resolveBitmap))
     }
 
-    private fun editedItem(clip: Clip, resolveBitmap: (String) -> Bitmap?, targetFrameRate: Int?): EditedMediaItem =
+    private fun editedItem(
+        clip: Clip,
+        resolveBitmap: (String) -> Bitmap?,
+        targetFrameRate: Int?,
+        includeAudio: Boolean = true,
+    ): EditedMediaItem =
         editedItem(
             clip = clip,
             slice = SourceSlice(0, clip.durationMs),
             includeVideo = true,
-            includeAudio = true,
+            includeAudio = includeAudio,
             resolveBitmap = resolveBitmap,
             targetFrameRate = targetFrameRate,
         )
