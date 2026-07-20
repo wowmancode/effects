@@ -361,8 +361,11 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         if (appliedPreviewStructure != previewStructureKey) return@LaunchedEffect
         // Coalesce slider drags and keyframe ticks, and never overlap a structural rebuild.
         delay(if (animationFrame >= 0) 24 else 100)
-        if (appliedPreviewStructure == previewStructureKey && player.playbackState != Player.STATE_IDLE) {
-            runCatching { player.setVideoEffects(ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs, overlayResolver)) }
+        if (appliedPreviewStructure == previewStructureKey) {
+            runCatching {
+                val effects = ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs, overlayResolver)
+                if (animationFrame >= 0) player.setVideoEffects(effects) else updatePreviewEffects(player, effects)
+            }
         }
     }
     val seekToClip: (Int) -> Unit = { requestedIndex ->
@@ -484,6 +487,21 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             },
         )
     }
+}
+
+@OptIn(UnstableApi::class)
+private fun updatePreviewEffects(player: ExoPlayer, effects: List<androidx.media3.common.Effect>) {
+    if (player.mediaItemCount == 0) {
+        player.setVideoEffects(effects)
+        return
+    }
+    val itemIndex = player.currentMediaItemIndex.coerceIn(0, player.mediaItemCount - 1)
+    val position = player.currentPosition.coerceAtLeast(0)
+    val resumePlayback = player.playWhenReady
+    player.setVideoEffects(effects)
+    player.seekTo(itemIndex, position)
+    if (player.playbackState == Player.STATE_IDLE) player.prepare()
+    player.playWhenReady = resumePlayback
 }
 
 @OptIn(UnstableApi::class)
