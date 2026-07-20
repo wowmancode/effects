@@ -20,6 +20,7 @@ class SplitPitchEffect : LecEffect {
 
     companion object {
         const val MAX_VOICES = 12
+        private val indexedVoiceParam = Regex("""voice_\d+_(semitones|level)""")
         val defaultVoices = listOf(SplitPitchVoice(-1f), SplitPitchVoice(1f))
 
         fun decodeVoices(values: Map<String, Float>): List<SplitPitchVoice> {
@@ -41,7 +42,10 @@ class SplitPitchEffect : LecEffect {
         fun encodeVoices(voices: List<SplitPitchVoice>, existing: Map<String, Float>): Map<String, Float> {
             val safe = voices.take(MAX_VOICES).ifEmpty { listOf(SplitPitchVoice(0f)) }
             val result = existing.filterKeys { key ->
-                !key.startsWith("voice_") && key != "lower_semitones" && key != "upper_semitones"
+                key != "voice_count" &&
+                    !indexedVoiceParam.matches(key) &&
+                    key != "lower_semitones" &&
+                    key != "upper_semitones"
             }.toMutableMap()
             result["voice_count"] = safe.size.toFloat()
             safe.forEachIndexed { index, voice ->

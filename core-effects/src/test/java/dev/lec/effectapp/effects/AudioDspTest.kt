@@ -35,13 +35,14 @@ class AudioDspTest {
     fun splitPitchSupportsAResizableVoiceList() {
         assertEquals(listOf(-1f, 1f), SplitPitchEffect.decodeVoices(emptyMap()).map { it.semitones })
         val voices = List(6) { index -> SplitPitchVoice(index.toFloat() - 3f, level = 0.75f) }
-        val encoded = SplitPitchEffect.encodeVoices(voices, mapOf("dry_mix" to 0.2f))
+        val encoded = SplitPitchEffect.encodeVoices(voices, mapOf("dry_mix" to 0.2f, "voice_mix" to 0.9f))
         val decoded = SplitPitchEffect.decodeVoices(encoded)
 
         assertEquals(6, decoded.size)
         assertEquals(-3f, decoded.first().semitones)
         assertEquals(0.75f, decoded.last().level)
         assertEquals(0.2f, encoded["dry_mix"])
+        assertEquals(0.9f, encoded["voice_mix"])
 
         val extremes = SplitPitchEffect.decodeVoices(
             SplitPitchEffect.encodeVoices(listOf(SplitPitchVoice(-48f), SplitPitchVoice(48f)), emptyMap()),
