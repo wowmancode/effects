@@ -65,7 +65,7 @@ class AudioDspTest {
         val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
 
         var rendered = 0
-        repeat(1_300) { frame -> rendered = state.process(10_000 + frame, frame / 48, 0) }
+        repeat(1_300) { frame -> rendered = state.process(10_000 + frame, frame.toLong() / 48, 0) }
 
         assertTrue(rendered in 11_296..11_300)
     }
