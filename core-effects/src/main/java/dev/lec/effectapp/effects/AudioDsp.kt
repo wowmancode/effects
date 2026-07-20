@@ -298,7 +298,6 @@ private class PitchDspState(
     private val voices: List<SplitPitchVoice>,
     private val dryMix: Float,
     private val wetMix: Float,
-    private val alignVoices: Boolean,
 ) : AudioDspState {
     private val windowFrames = (sampleRate * 0.05f).toInt().coerceIn(1024, 4096)
     private val buffers = Array(channels) { FloatArray(windowFrames) }
@@ -328,7 +327,9 @@ private class PitchDspState(
     }
 
     private fun shiftedSample(channel: Int, phase: Float, ratio: Float): Float {
-        if (abs(ratio - 1f) < 0.0001f) return if (alignVoices) readDelayed(channel, (windowFrames - 2) * 0.5f) else buffers[channel][writeIndex]
+        // An unshifted voice must remain sample-aligned with the input. Sending it through the
+        // pitch window adds latency and makes split pitch sound like a short echo at startup.
+        if (abs(ratio - 1f) < 0.0001f) return buffers[channel][writeIndex]
         val secondPhase = wrapUnit(phase + 0.5f)
         val first = readDelayed(channel, phase * (windowFrames - 2)) * hann(phase)
         val second = readDelayed(channel, secondPhase * (windowFrames - 2)) * hann(secondPhase)
@@ -353,7 +354,6 @@ private class PitchDspState(
             voices = listOf(SplitPitchVoice(segment.params["semitones"] ?: 0f)),
             dryMix = 1f - (segment.params["mix"] ?: 1f),
             wetMix = segment.params["mix"] ?: 1f,
-            alignVoices = false,
         )
 
         fun split(segment: TimelineSegment, sampleRate: Int, channels: Int) = PitchDspState(
@@ -363,7 +363,6 @@ private class PitchDspState(
             voices = SplitPitchEffect.decodeVoices(segment.params),
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
-            alignVoices = true,
         )
     }
 }

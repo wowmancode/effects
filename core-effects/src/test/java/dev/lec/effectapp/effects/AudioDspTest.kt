@@ -51,6 +51,26 @@ class AudioDspTest {
     }
 
     @Test
+    fun splitPitchZeroVoiceStaysAlignedWithInput() {
+        val segment = TimelineSegment(
+            id = "split",
+            effectId = "split_pitch",
+            startMs = 0,
+            endMs = 1_000,
+            params = SplitPitchEffect.encodeVoices(
+                listOf(SplitPitchVoice(0f)),
+                mapOf("dry_mix" to 0f, "voice_mix" to 1f),
+            ),
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+
+        var rendered = 0
+        repeat(1_300) { frame -> rendered = state.process(10_000 + frame, frame / 48, 0) }
+
+        assertTrue(rendered in 11_296..11_300)
+    }
+
+    @Test
     fun allRequestedVocoderCarriersAreRegistered() {
         val ids = EffectRegistry.byCategory(EffectCategory.AUDIO).map { it.id }.toSet()
 
