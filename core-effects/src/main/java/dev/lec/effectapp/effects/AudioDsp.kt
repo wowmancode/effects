@@ -298,12 +298,14 @@ private class PitchDspState(
     private val voices: List<SplitPitchVoice>,
     private val dryMix: Float,
     private val wetMix: Float,
+    private val alignVoices: Boolean,
 ) : AudioDspState {
     private val windowFrames = (sampleRate * 0.05f).toInt().coerceIn(1024, 4096)
     private val buffers = Array(channels) { FloatArray(windowFrames) }
     private val ratios = voices.map { 2.0.pow(it.semitones.toDouble() / 12.0).toFloat() }
     private val phases = FloatArray(voices.size) { 0.25f }
     private var writeIndex = 0
+    private var framesWritten = 0
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
@@ -317,6 +319,7 @@ private class PitchDspState(
 
         if (channel == channels - 1) {
             writeIndex = (writeIndex + 1) % windowFrames
+            framesWritten = (framesWritten + 1).coerceAtMost(windowFrames)
             ratios.forEachIndexed { index, ratio ->
                 phases[index] = wrapUnit(phases[index] + (1f - ratio) / windowFrames)
             }
@@ -325,7 +328,7 @@ private class PitchDspState(
     }
 
     private fun shiftedSample(channel: Int, phase: Float, ratio: Float): Float {
-        if (abs(ratio - 1f) < 0.0001f) return buffers[channel][writeIndex]
+        if (abs(ratio - 1f) < 0.0001f) return if (alignVoices) readDelayed(channel, (windowFrames - 2) * 0.5f) else buffers[channel][writeIndex]
         val secondPhase = wrapUnit(phase + 0.5f)
         val first = readDelayed(channel, phase * (windowFrames - 2)) * hann(phase)
         val second = readDelayed(channel, secondPhase * (windowFrames - 2)) * hann(secondPhase)
@@ -333,6 +336,7 @@ private class PitchDspState(
     }
 
     private fun readDelayed(channel: Int, delay: Float): Float {
+        if (delay > framesWritten) return buffers[channel][writeIndex]
         var read = writeIndex - delay
         while (read < 0f) read += windowFrames
         val first = read.toInt() % windowFrames
@@ -349,6 +353,7 @@ private class PitchDspState(
             voices = listOf(SplitPitchVoice(segment.params["semitones"] ?: 0f)),
             dryMix = 1f - (segment.params["mix"] ?: 1f),
             wetMix = segment.params["mix"] ?: 1f,
+            alignVoices = false,
         )
 
         fun split(segment: TimelineSegment, sampleRate: Int, channels: Int) = PitchDspState(
@@ -358,6 +363,7 @@ private class PitchDspState(
             voices = SplitPitchEffect.decodeVoices(segment.params),
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
+            alignVoices = true,
         )
     }
 }
