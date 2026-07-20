@@ -52,7 +52,7 @@ class AudioDspTest {
     }
 
     @Test
-    fun splitPitchZeroVoiceStaysAlignedWithInput() {
+    fun splitPitchDryAndZeroVoiceShareLowLatencyAlignment() {
         val segment = TimelineSegment(
             id = "split",
             effectId = "split_pitch",
@@ -60,7 +60,7 @@ class AudioDspTest {
             endMs = 1_000,
             params = SplitPitchEffect.encodeVoices(
                 listOf(SplitPitchVoice(0f)),
-                mapOf("dry_mix" to 0f, "voice_mix" to 1f),
+                mapOf("dry_mix" to 0.5f, "voice_mix" to 0.5f),
             ),
         )
         val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
@@ -68,7 +68,7 @@ class AudioDspTest {
         var rendered = 0
         repeat(1_300) { frame -> rendered = state.process(10_000 + frame, frame.toLong() / 48, 0) }
 
-        assertTrue(rendered in 11_296..11_300)
+        assertTrue(rendered in 11_153..11_157)
     }
 
     @Test
