@@ -298,8 +298,9 @@ private class PitchDspState(
     private val voices: List<SplitPitchVoice>,
     private val dryMix: Float,
     private val wetMix: Float,
+    windowMs: Float,
 ) : AudioDspState {
-    private val windowFrames = (sampleRate * 0.05f).toInt().coerceIn(1024, 4096)
+    private val windowFrames = (sampleRate * windowMs / 1_000f).toInt().coerceIn(128, 4096)
     private val buffers = Array(channels) { FloatArray(windowFrames) }
     private val ratios = voices.map { 2.0.pow(it.semitones.toDouble() / 12.0).toFloat() }
     private val phases = FloatArray(voices.size) { 0.25f }
@@ -354,6 +355,7 @@ private class PitchDspState(
             voices = listOf(SplitPitchVoice(segment.params["semitones"] ?: 0f)),
             dryMix = 1f - (segment.params["mix"] ?: 1f),
             wetMix = segment.params["mix"] ?: 1f,
+            windowMs = 50f,
         )
 
         fun split(segment: TimelineSegment, sampleRate: Int, channels: Int) = PitchDspState(
@@ -363,6 +365,7 @@ private class PitchDspState(
             voices = SplitPitchEffect.decodeVoices(segment.params),
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
+            windowMs = 6f,
         )
     }
 }
