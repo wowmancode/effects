@@ -1,4 +1,5 @@
 package dev.lec.effectapp.effects
+import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_GLSL
 
 import dev.lec.effectapp.model.TimelineSegment
 import org.junit.Assert.assertEquals
@@ -43,6 +44,24 @@ class PluginEffectsTest {
 
         assertNull(validatePluginSource(source, audio = false))
         assertNull(validatePluginSource("temp1 = tan(time); sample = select(less(temp1, 0.0), -sample, sample);", audio = true))
+    }
+
+    @Test
+    fun acceptsCompleteGlslVideoShaders() {
+        val source = """
+            precision highp float;
+            uniform sampler2D uTexSampler;
+            uniform float uTime;
+            varying vec2 vTexSamplingCoord;
+            void main() {
+                vec2 uv = vTexSamplingCoord;
+                uv.x += sin(uv.y * 20.0 + uTime) * 0.02;
+                gl_FragColor = texture2D(uTexSampler, uv);
+            }
+        """.trimIndent()
+
+        assertNull(validatePluginSource(source, audio = false, language = PLUGIN_LANGUAGE_GLSL))
+        assertNotNull(validatePluginSource(source, audio = true, language = PLUGIN_LANGUAGE_GLSL))
     }
 
     @Test

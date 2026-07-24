@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_C_STYLE
 import dev.lec.effectapp.effects.ParamKind
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
@@ -178,11 +179,12 @@ fun EditPanel(
                                 PluginSourceEditor(
                                     source = segment.stringParams["source"].orEmpty(),
                                     audio = effect.id == "plugin_audio",
+                                    language = segment.stringParams["language"] ?: PLUGIN_LANGUAGE_C_STYLE,
                                     controls = segment.params,
-                                ) { source, controls ->
+                                ) { source, controls, language ->
                                     viewModel.updateSegment(selectedClip.id, segment.id) {
                                         it.copy(
-                                            stringParams = it.stringParams + ("source" to source),
+                                            stringParams = it.stringParams + mapOf("source" to source, "language" to language),
                                             params = it.params + controls,
                                         )
                                     }

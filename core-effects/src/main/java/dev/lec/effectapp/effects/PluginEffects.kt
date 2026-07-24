@@ -28,6 +28,8 @@ import kotlin.math.tan
 
 const val DEFAULT_VIDEO_PLUGIN_SOURCE = "red = 1.0 - red;\nblue = 1.0 - blue;"
 const val DEFAULT_AUDIO_PLUGIN_SOURCE = "sample = sample * (0.65 + 0.35 * sin(time * 12.0));"
+const val PLUGIN_LANGUAGE_C_STYLE = "c_style"
+const val PLUGIN_LANGUAGE_GLSL = "glsl"
 
 class VideoPluginEffect : LecEffect {
     override val id = "plugin_video"
@@ -52,15 +54,37 @@ private fun pluginControlParams(): List<EffectParam> = (1..8).map { index ->
     EffectParam("control$index", "Control $index", -2f, 2f, if (index == 1) 1f else 0f)
 }
 
-fun validatePluginSource(source: String, audio: Boolean): String? =
-    compilePlugin(source, audio).exceptionOrNull()?.message
+fun validatePluginSource(
+    source: String,
+    audio: Boolean,
+    language: String = PLUGIN_LANGUAGE_C_STYLE,
+): String? = when (language) {
+    PLUGIN_LANGUAGE_C_STYLE -> compilePlugin(source, audio).exceptionOrNull()?.message
+    PLUGIN_LANGUAGE_GLSL -> validateGlslFragment(source, audio)
+    else -> "Unknown plug-in language."
+}
 
 @OptIn(UnstableApi::class)
-fun videoPluginEffect(source: String, controls: Map<String, Float> = emptyMap()): Effect {
+fun videoPluginEffect(
+    source: String,
+    controls: Map<String, Float> = emptyMap(),
+    language: String = PLUGIN_LANGUAGE_C_STYLE,
+): Effect {
+    if (language == PLUGIN_LANGUAGE_GLSL && validateGlslFragment(source, audio = false) == null) {
+        return RawGlslVideoGlEffect(source, controls)
+    }
     val program = compilePlugin(source, audio = false).getOrElse {
         compilePlugin("red = red;", audio = false).getOrThrow()
     }
     return PluginVideoGlEffect(program, controls)
+}
+
+private fun validateGlslFragment(source: String, audio: Boolean): String? = when {
+    audio -> "GLSL is available for video plug-ins only."
+    source.length > 48_000 -> "GLSL source is limited to 48,000 characters."
+    source.isBlank() -> "Add a complete GLSL fragment shader."
+    !Regex("\\bvoid\\s+main\\s*\\(").containsMatchIn(source) -> "GLSL plug-ins need a void main() function."
+    else -> null
 }
 
 internal fun compileAudioPlugin(source: String): PluginProgram =
@@ -430,6 +454,70 @@ private class PluginVideoShaderProgram(
         try { program.delete() } catch (exception: GlUtil.GlException) { throw VideoFrameProcessingException(exception) }
     }
 }
+
+@OptIn(UnstableApi::class)
+private data class RawGlslVideoGlEffect(
+    val fragmentShader: String,
+    val controls: Map<String, Float>,
+) : GlEffect {
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
+        RawGlslVideoShaderProgram(useHdr, fragmentShader, controls)
+}
+
+@OptIn(UnstableApi::class)
+private class RawGlslVideoShaderProgram(
+    useHdr: Boolean,
+    private val fragmentShader: String,
+    private val controls: Map<String, Float>,
+) : BaseGlShaderProgram(useHdr, 1) {
+    private val usesTexture = fragmentShader.contains(Regex("\\buTexSampler\\b"))
+    private val usesTime = fragmentShader.contains(Regex("\\buTime\\b"))
+    private val usesWidth = fragmentShader.contains(Regex("\\buWidth\\b"))
+    private val usesHeight = fragmentShader.contains(Regex("\\buHeight\\b"))
+    private val usedControls = (1..8).filter { index ->
+        fragmentShader.contains(Regex("\\buControl" + index + "\\b"))
+    }
+    private var inputWidth = 1f
+    private var inputHeight = 1f
+    private val program = try {
+        GlProgram(VERTEX_SHADER, fragmentShader)
+    } catch (exception: GlUtil.GlException) {
+        throw VideoFrameProcessingException(exception)
+    }
+
+    override fun configure(inputWidth: Int, inputHeight: Int): Size {
+        this.inputWidth = inputWidth.toFloat()
+        this.inputHeight = inputHeight.toFloat()
+        return Size(inputWidth, inputHeight)
+    }
+
+    override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
+        try {
+            program.use()
+            if (usesTexture) program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
+            if (usesTime) program.setFloatUniform("uTime", presentationTimeUs / 1_000_000f)
+            if (usesWidth) program.setFloatUniform("uWidth", inputWidth)
+            if (usesHeight) program.setFloatUniform("uHeight", inputHeight)
+            usedControls.forEach { index ->
+                program.setFloatUniform("uControl" + index, pluginControlValue(controls, index))
+            }
+            program.setBufferAttribute("aFramePosition", FRAME_VERTICES, 4)
+            program.bindAttributesAndUniforms()
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, 4)
+            GlUtil.checkGlError()
+        } catch (exception: GlUtil.GlException) {
+            throw VideoFrameProcessingException(exception, presentationTimeUs)
+        }
+    }
+
+    override fun release() {
+        super.release()
+        try { program.delete() } catch (exception: GlUtil.GlException) { throw VideoFrameProcessingException(exception) }
+    }
+}
+
+private fun pluginControlValue(controls: Map<String, Float>, index: Int): Float =
+    controls["control" + index]?.takeIf(Float::isFinite) ?: if (index == 1) 1f else 0f
 
 private fun fragmentShader(plugin: PluginProgram, controls: Map<String, Float>): String = """
     precision highp float;

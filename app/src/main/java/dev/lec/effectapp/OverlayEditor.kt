@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.lec.effectapp.effects.EffectCategory
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_C_STYLE
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.OverlayKeyframe
 import dev.lec.effectapp.model.OverlayValues
@@ -196,10 +197,11 @@ private fun OverlayEffectControls(viewModel: EditorViewModel, clipId: String, ov
             PluginSourceEditor(
                 source = segment.stringParams["source"].orEmpty(),
                 audio = effect.category == EffectCategory.AUDIO,
+                language = segment.stringParams["language"] ?: PLUGIN_LANGUAGE_C_STYLE,
                 controls = segment.params,
-            ) { source, controls ->
+            ) { source, controls, language ->
                 viewModel.updateOverlayEffect(clipId, overlayId, segmentId) {
-                    it.copy(stringParams = it.stringParams + ("source" to source), params = it.params + controls)
+                    it.copy(stringParams = it.stringParams + mapOf("source" to source, "language" to language), params = it.params + controls)
                 }
             }
             EffectParameterControls(effect, segment.params, updateParams)

@@ -23,6 +23,7 @@ import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
 import dev.lec.effectapp.effects.DEFAULT_VIDEO_PLUGIN_SOURCE
+import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_C_STYLE
 import dev.lec.effectapp.effects.displacementMapMediaEffect
 import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.effects.audioProcessorFor
@@ -130,6 +131,7 @@ object ProjectCompositionFactory {
         "plugin_video" -> videoPluginEffect(
             segment.stringParams["source"] ?: DEFAULT_VIDEO_PLUGIN_SOURCE,
             segment.paramsAt(timeMs),
+            segment.stringParams["language"] ?: PLUGIN_LANGUAGE_C_STYLE,
         )
         "custom_lut" -> customLutMediaEffect(
             segment.stringParams["lut_uri"],
