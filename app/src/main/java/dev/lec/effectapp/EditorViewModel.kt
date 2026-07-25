@@ -55,6 +55,30 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _project.value = _project.value.copy(clips = _project.value.clips + clip)
     }
 
+    fun duplicateClip(id: String): String? {
+        val clips = _project.value.clips
+        val index = clips.indexOfFirst { it.id == id }
+        if (index == -1) return null
+        recordUndo()
+        val original = clips[index]
+        val duplicate = original.copy(
+            id = UUID.randomUUID().toString(),
+            displayName = original.displayName + " copy",
+            effectSegments = original.effectSegments.map { it.copy(id = UUID.randomUUID().toString()) },
+            audioSegments = original.audioSegments.map { it.copy(id = UUID.randomUUID().toString()) },
+            overlays = original.overlays.map { overlay ->
+                overlay.copy(
+                    id = UUID.randomUUID().toString(),
+                    effectSegments = overlay.effectSegments.map { it.copy(id = UUID.randomUUID().toString()) },
+                    audioSegments = overlay.audioSegments.map { it.copy(id = UUID.randomUUID().toString()) },
+                )
+            },
+        )
+        _project.value = _project.value.copy(clips = clips.toMutableList().apply { add(index + 1, duplicate) })
+        _selection.value = null
+        return duplicate.id
+    }
+
     fun moveClip(index: Int, delta: Int) {
         val clips = _project.value.clips.toMutableList()
         val destination = (index + delta).coerceIn(clips.indices)

@@ -18,6 +18,7 @@ import kotlin.math.sin
 import kotlin.math.tanh
 
 private val DSP_EFFECT_IDS = setOf(
+    "volume",
     "audio_echo",
     "chorus",
     "tremolo",
@@ -55,6 +56,7 @@ internal fun createAudioDspState(
     sampleRate: Int,
     channels: Int,
 ): AudioDspState? = when (segment.effectId) {
+    "volume" -> VolumeDspState(segment)
     "audio_echo" -> DelayDspState(segment, sampleRate, channels, chorus = false)
     "chorus" -> DelayDspState(segment, sampleRate, channels, chorus = true)
     "tremolo" -> TremoloDspState(segment)
@@ -74,6 +76,15 @@ internal fun createAudioDspState(
         VocoderDspState(segment, sampleRate, channels)
     else -> null
 }
+
+private class VolumeDspState(private val segment: TimelineSegment) : AudioDspState {
+    override fun process(input: Int, timeMs: Long, channel: Int): Int {
+        val gainDb = segment.params["gain_db"] ?: 0f
+        val gain = 10.0.pow((gainDb.coerceIn(-60f, 12f) / 20f).toDouble()).toFloat()
+        return (input * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+    }
+}
+
 
 @OptIn(UnstableApi::class)
 private class SegmentedDspProcessor(

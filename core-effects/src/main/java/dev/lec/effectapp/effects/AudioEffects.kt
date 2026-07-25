@@ -3,6 +3,16 @@ package dev.lec.effectapp.effects
 import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.util.UnstableApi
+class VolumeEffect : LecEffect {
+    override val id = "volume"
+    override val displayName = "Volume"
+    override val category = EffectCategory.AUDIO
+    override val params = listOf(EffectParam("gain_db", "Gain (dB)", -60f, 12f, 0f))
+
+    @OptIn(UnstableApi::class)
+    override fun toMediaEffect(values: Map<String, Float>): Effect? = null
+}
+
 
 class AudioEchoEffect : LecEffect {
     override val id = "audio_echo"

@@ -22,6 +22,20 @@ class AudioDspTest {
             assertNotNull(effect.id, audioProcessorFor(segment))
         }
     }
+    @Test
+    fun volumeEffectAppliesDecibelGain() {
+        val segment = TimelineSegment(
+            id = "volume",
+            effectId = "volume",
+            startMs = 0,
+            endMs = 1_000,
+            params = mapOf("gain_db" to 6.0206f),
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+
+        assertTrue(state.process(10_000, 0, 0) in 19_995..20_005)
+    }
+
 
     @Test
     fun pitchIsDurationPreservingSemitoneControl() {
