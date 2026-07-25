@@ -310,6 +310,7 @@ private class PitchDspState(
     private val dryMix: Float,
     private val wetMix: Float,
     private val alignVoices: Boolean,
+    private val preserveTransients: Boolean,
     windowMs: Float,
 ) : AudioDspState {
     private val windowFrames = (sampleRate * windowMs / 1_000f).toInt().coerceIn(128, 4096)
@@ -318,10 +319,13 @@ private class PitchDspState(
     private val phases = FloatArray(voices.size) { 0.25f }
     private var writeIndex = 0
     private var framesWritten = 0
+    private var frameEnergy = 0f
+    private var smoothedEnergy = 0.01f
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
         buffers[channel][writeIndex] = normalized
+        frameEnergy += abs(normalized)
         var wet = 0f
         voices.forEachIndexed { index, voice ->
             wet += shiftedSample(channel, phases[index], ratios[index]) * voice.level
@@ -331,6 +335,12 @@ private class PitchDspState(
         val rendered = if (active) dry * dryMix + wet * wetMix else normalized
 
         if (channel == channels - 1) {
+            val energy = frameEnergy / channels
+            if (preserveTransients && framesWritten >= windowFrames && energy > max(0.08f, smoothedEnergy * 3f)) {
+                phases.fill(0.25f)
+            }
+            smoothedEnergy = smoothedEnergy * 0.995f + energy * 0.005f
+            frameEnergy = 0f
             writeIndex = (writeIndex + 1) % windowFrames
             framesWritten = (framesWritten + 1).coerceAtMost(windowFrames)
             ratios.forEachIndexed { index, ratio ->
@@ -370,7 +380,8 @@ private class PitchDspState(
             dryMix = 1f - (segment.params["mix"] ?: 1f),
             wetMix = segment.params["mix"] ?: 1f,
             alignVoices = false,
-            windowMs = 50f,
+            preserveTransients = true,
+            windowMs = 80f,
         )
 
         fun split(segment: TimelineSegment, sampleRate: Int, channels: Int) = PitchDspState(
@@ -381,6 +392,7 @@ private class PitchDspState(
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
             alignVoices = true,
+            preserveTransients = false,
             windowMs = 6f,
         )
     }

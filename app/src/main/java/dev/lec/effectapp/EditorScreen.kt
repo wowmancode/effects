@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -58,6 +59,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -388,18 +390,18 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 title = {
                     if (portrait) {
                         Row {
-                            TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo()) { Text("Undo") }
-                            TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo()) { Text("Redo") }
+                            TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↶", fontSize = 18.sp) }
+                            TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↷", fontSize = 18.sp) }
                         }
                     }
                 },
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
                 actions = {
                     if (!portrait) {
-                        TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo()) { Text("Undo") }
-                        TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo()) { Text("Redo") }
+                        TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↶", fontSize = 18.sp) }
+                        TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↷", fontSize = 18.sp) }
                     }
-                    TextButton(onClick = { loadProject.launch(arrayOf("application/json")) }) { Text("Load") }
+                    TextButton(onClick = { loadProject.launch(arrayOf("application/json")) }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Load", fontSize = 10.sp) }
                     TextButton(
                         onClick = {
                             project.clips.getOrNull(currentClipIndex)?.let { clip ->
@@ -407,11 +409,12 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                             }
                         },
                         enabled = project.clips.isNotEmpty(),
-                    ) { Text("Duplicate") }
+                        contentPadding = PaddingValues(horizontal = 3.dp),
+                    ) { Text("Copy", fontSize = 10.sp) }
 
-                    TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } }, enabled = project.clips.isNotEmpty()) { Text("Delete") }
-                    TextButton(onClick = { saveProject.launch("effect-project.json") }) { Text("Save") }
-                    TextButton(onClick = onExport, enabled = project.clips.isNotEmpty()) { Text("Export") }
+                    TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } }, enabled = project.clips.isNotEmpty(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Del", fontSize = 10.sp) }
+                    TextButton(onClick = { saveProject.launch("effect-project.json") }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Save", fontSize = 10.sp) }
+                    TextButton(onClick = onExport, enabled = project.clips.isNotEmpty(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Export", fontSize = 10.sp) }
                 },
             )
         },
