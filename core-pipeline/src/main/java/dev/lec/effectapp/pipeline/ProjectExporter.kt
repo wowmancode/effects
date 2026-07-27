@@ -99,9 +99,9 @@ class ProjectExporter(private val context: Context) {
  private fun outputSizeForAspect(source:Size?,aspectRatio:Float?):Size? {
   if(source==null || aspectRatio==null) return source
   val targetAspect=aspectRatio.coerceIn(0.1f,10f)
-  val sourceAspect=source.width.toFloat()/source.height.toFloat()
+  val longestEdge=maxOf(source.width,source.height).toFloat()
   fun even(value:Float):Int = (((value.roundToInt().coerceAtLeast(2)+1)/2)*2)
-  return if(targetAspect < sourceAspect) Size(source.width,even(source.width/targetAspect)) else Size(even(source.height*targetAspect),source.height)
+  return if(targetAspect >= 1f) Size(even(longestEdge),even(longestEdge/targetAspect)) else Size(even(longestEdge*targetAspect),even(longestEdge))
  }
  private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() })))
   .setTransmuxAudio(true)
