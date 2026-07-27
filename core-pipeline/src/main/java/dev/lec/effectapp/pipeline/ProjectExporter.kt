@@ -20,6 +20,7 @@ import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.Overlay
 import java.io.File
 import java.util.UUID
+import kotlin.math.roundToInt
 @OptIn(UnstableApi::class)
 class ProjectExporter(private val context: Context) {
  private var callback: Callback? = null
@@ -68,14 +69,14 @@ class ProjectExporter(private val context: Context) {
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   transformer.start(ProjectCompositionFactory.create(project,resolveBitmap),outputPath)
  }
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2) {
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null) {
   check(this.callback==null) { "An export is already running" }
   failedIhtxStatus=null
   val base=project.takeForExport(lengthMs); require(base.clips.isNotEmpty()) { "Length per export must be greater than zero" }
   val passes=exports.coerceAtLeast(1); val total=(overlays.size+1)*passes
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
-  val outputSize=videoSize(base.clips.first().sourceUri)
+  val outputSize=outputSizeForAspect(videoSize(base.clips.first().sourceUri),exportAspectRatio)
   val plan=IhtxPlan(base,overlays,passes,overlayGridSize.coerceAtLeast(1),outputSize?.let { it.width.toFloat() / it.height.toFloat() },outputSize)
   this.callback=callback; batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
  }
@@ -84,7 +85,7 @@ class ProjectExporter(private val context: Context) {
  fun progress():Int? { val h=ProgressHolder(); if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE)return null; val b=batch?:return h.progress; return ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100) }
  fun cancel(){ transformer.cancel(); batch?.files?.forEach(File::delete); batch=null; callback=null }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
- private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.ihtx?.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
+ private fun startStage(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.ihtx?.outputSize,outputPresentationSize=b.ihtx?.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
  private fun videoSize(sourceUri:String):Size? {
   val retriever=MediaMetadataRetriever()
   return try {
@@ -94,6 +95,13 @@ class ProjectExporter(private val context: Context) {
    val rotation=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
    if(rotation % 180 == 0) Size(width,height) else Size(height,width)
   } catch (_:RuntimeException) { null } finally { retriever.release() }
+ }
+ private fun outputSizeForAspect(source:Size?,aspectRatio:Float?):Size? {
+  if(source==null || aspectRatio==null) return source
+  val targetAspect=aspectRatio.coerceIn(0.1f,10f)
+  val sourceAspect=source.width.toFloat()/source.height.toFloat()
+  fun even(value:Float):Int = (((value.roundToInt().coerceAtLeast(2)+1)/2)*2)
+  return if(targetAspect < sourceAspect) Size(source.width,even(source.width/targetAspect)) else Size(even(source.height*targetAspect),source.height)
  }
  private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() })))
   .setTransmuxAudio(true)

@@ -9,9 +9,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
@@ -48,6 +50,15 @@ import kotlinx.coroutines.withContext
 
 private enum class ExportState { IDLE, RUNNING, DONE, ERROR }
 
+private enum class ExportAspectRatio(val label: String, val ratio: Float?) {
+    ORIGINAL("Original", null),
+    LANDSCAPE("16:9", 16f / 9f),
+    PORTRAIT("9:16", 9f / 16f),
+    SQUARE("1:1", 1f),
+    CLASSIC("4:3", 4f / 3f),
+    TALL("3:4", 3f / 4f),
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
@@ -63,6 +74,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }
     var overlayGridSizeText by remember { mutableStateOf("2") }
+    var exportAspectRatio by remember { mutableStateOf(ExportAspectRatio.ORIGINAL) }
     val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
     var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
@@ -147,6 +159,22 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text("Export " + project.clips.size + " clips with hard cuts and all enabled effects.")
+                    Text("Aspect ratio")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf(ExportAspectRatio.ORIGINAL, ExportAspectRatio.LANDSCAPE, ExportAspectRatio.PORTRAIT).forEach { option ->
+                            OutlinedButton(onClick = { exportAspectRatio = option }, modifier = Modifier.weight(1f)) {
+                                Text(if (exportAspectRatio == option) "✓ ${option.label}" else option.label)
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        listOf(ExportAspectRatio.SQUARE, ExportAspectRatio.CLASSIC, ExportAspectRatio.TALL).forEach { option ->
+                            OutlinedButton(onClick = { exportAspectRatio = option }, modifier = Modifier.weight(1f)) {
+                                Text(if (exportAspectRatio == option) "✓ ${option.label}" else option.label)
+                            }
+                        }
+                    }
+                    Text("Keeps the video proportional and fills unused space with black bars.")
                     Text("IHTX animated overlays")
                     OutlinedTextField(
                         value = overlayGridSizeText,
@@ -197,6 +225,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 },
                                 overlays = ihtxOverlays,
                                 overlayGridSize = overlayGridSize,
+                                exportAspectRatio = exportAspectRatio.ratio,
                             )
                         },
                         enabled = project.clips.isNotEmpty() && carriersReady,

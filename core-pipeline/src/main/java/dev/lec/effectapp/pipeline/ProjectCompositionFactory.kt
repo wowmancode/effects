@@ -49,13 +49,14 @@ object ProjectCompositionFactory {
         overlayAspectRatio: Float? = null,
         durationAnchorMs: Long? = null,
         ihtxOutputSize: Size? = null,
+        outputPresentationSize: Size? = null,
         muteBaseAudio: Boolean = false,
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
         val hasKeyframes = project.clips.any { clip -> (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() } }
         val baseSequences = if (!hasReverse && !hasKeyframes) {
-            val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, includeAudio = !muteBaseAudio) }
+            val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, outputPresentationSize, includeAudio = !muteBaseAudio) }
             listOf(
                 if (muteBaseAudio) EditedMediaItemSequence.withVideoFrom(items)
                 else EditedMediaItemSequence.withAudioAndVideoFrom(items),
@@ -63,13 +64,13 @@ object ProjectCompositionFactory {
         } else {
             val videoItems = project.clips.flatMap { clip ->
                 sourceSlices(clip, clip.reversesVideo(), clip.effectSegments, targetFrameRate).map { slice ->
-                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
+                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize)
                 }
             }
             val audioItems = project.clips.flatMap { clip ->
                 // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
                 sourceSlices(clip, clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
-                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate)
+                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize)
                 }
             }
             buildList {
@@ -166,6 +167,7 @@ object ProjectCompositionFactory {
         clip: Clip,
         resolveBitmap: (String) -> Bitmap?,
         targetFrameRate: Int?,
+        outputPresentationSize: Size?,
         includeAudio: Boolean = true,
     ): EditedMediaItem =
         editedItem(
@@ -175,6 +177,7 @@ object ProjectCompositionFactory {
             includeAudio = includeAudio,
             resolveBitmap = resolveBitmap,
             targetFrameRate = targetFrameRate,
+            outputPresentationSize = outputPresentationSize,
         )
 
     private fun editedItem(
@@ -184,6 +187,7 @@ object ProjectCompositionFactory {
         includeAudio: Boolean,
         resolveBitmap: (String) -> Bitmap?,
         targetFrameRate: Int?,
+        outputPresentationSize: Size?,
     ): EditedMediaItem {
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(clip.sourceUri))
@@ -210,7 +214,13 @@ object ProjectCompositionFactory {
                     resolveBitmap,
                     includeVideoOverlayPosters = false,
                     waitForVideoMapFrames = true,
-                )
+                ) + outputPresentationSize?.let { size ->
+                    Presentation.createForWidthAndHeight(
+                        size.width,
+                        size.height,
+                        Presentation.LAYOUT_SCALE_TO_FIT,
+                    )
+                }.orEmpty()
             } else emptyList(),
         )
         val builder = EditedMediaItem.Builder(mediaItem)
