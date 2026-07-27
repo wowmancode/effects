@@ -207,20 +207,21 @@ object ProjectCompositionFactory {
         }
         val effects = Effects(
             audioProcessors,
-            if (includeVideo) {
-                videoEffects(
+            if (includeVideo) buildList<Effect> {
+                addAll(videoEffects(
                     clip,
                     slice.startMs,
                     resolveBitmap,
                     includeVideoOverlayPosters = false,
                     waitForVideoMapFrames = true,
-                ) + (outputPresentationSize?.let { size ->
-                    Presentation.createForWidthAndHeight(
+                ))
+                outputPresentationSize?.let { size ->
+                    add(Presentation.createForWidthAndHeight(
                         size.width,
                         size.height,
                         Presentation.LAYOUT_SCALE_TO_FIT,
-                    )
-                } ?: emptyList<Effect>())
+                    ))
+                }
             } else emptyList(),
         )
         val builder = EditedMediaItem.Builder(mediaItem)
