@@ -214,13 +214,13 @@ object ProjectCompositionFactory {
                     resolveBitmap,
                     includeVideoOverlayPosters = false,
                     waitForVideoMapFrames = true,
-                ) + outputPresentationSize?.let { size ->
+                ) + (outputPresentationSize?.let { size ->
                     Presentation.createForWidthAndHeight(
                         size.width,
                         size.height,
                         Presentation.LAYOUT_SCALE_TO_FIT,
                     )
-                }.orEmpty()
+                } ?: emptyList())
             } else emptyList(),
         )
         val builder = EditedMediaItem.Builder(mediaItem)
