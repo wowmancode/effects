@@ -220,7 +220,7 @@ object ProjectCompositionFactory {
                         size.height,
                         Presentation.LAYOUT_SCALE_TO_FIT,
                     )
-                } ?: emptyList())
+                } ?: emptyList<Effect>())
             } else emptyList(),
         )
         val builder = EditedMediaItem.Builder(mediaItem)
