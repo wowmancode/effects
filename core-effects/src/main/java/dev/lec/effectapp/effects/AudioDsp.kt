@@ -318,8 +318,9 @@ private class PitchDspState(
 ) : AudioDspState {
     private val windowFrames = (sampleRate * windowMs / 1_000f).toInt().coerceIn(128, 4096)
     private val buffers = Array(channels) { FloatArray(windowFrames) }
+    private val channelInitialized = BooleanArray(channels)
     private val ratios = voices.map { 2.0.pow(it.semitones.toDouble() / 12.0).toFloat() }
-    private val phases = FloatArray(voices.size) { 0.25f }
+    private val phases = FloatArray(voices.size) { if (alignVoices) 0f else 0.25f }
     private var writeIndex = 0
     private var framesWritten = 0
     private var frameEnergy = 0f
@@ -327,6 +328,10 @@ private class PitchDspState(
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
+        if (!channelInitialized[channel]) {
+            buffers[channel].fill(normalized)
+            channelInitialized[channel] = true
+        }
         buffers[channel][writeIndex] = normalized
         frameEnergy += abs(normalized)
         var wet = 0f
@@ -340,7 +345,7 @@ private class PitchDspState(
         if (channel == channels - 1) {
             val energy = frameEnergy / channels
             if (preserveTransients && framesWritten >= windowFrames && energy > max(0.08f, smoothedEnergy * 3f)) {
-                phases.fill(0.25f)
+                phases.fill(if (alignVoices) 0f else 0.25f)
             }
             smoothedEnergy = smoothedEnergy * 0.995f + energy * 0.005f
             frameEnergy = 0f
@@ -365,7 +370,7 @@ private class PitchDspState(
     }
 
     private fun readDelayed(channel: Int, delay: Float): Float {
-        if (delay + 1f > framesWritten) return buffers[channel][writeIndex]
+        if (!alignVoices && delay + 1f > framesWritten) return buffers[channel][writeIndex]
         var read = writeIndex - delay
         while (read < 0f) read += windowFrames
         val center = floor(read).toInt() % windowFrames
