@@ -42,6 +42,8 @@ private val DSP_EFFECT_IDS = setOf(
     "vocoder_custom",
 )
 
+internal const val SPLIT_PITCH_WINDOW_MS = 24f
+
 internal fun isAudioDspEffect(effectId: String): Boolean = effectId in DSP_EFFECT_IDS
 
 @OptIn(UnstableApi::class)
@@ -363,13 +365,23 @@ private class PitchDspState(
     }
 
     private fun readDelayed(channel: Int, delay: Float): Float {
-        if (delay > framesWritten) return buffers[channel][writeIndex]
+        if (delay + 1f > framesWritten) return buffers[channel][writeIndex]
         var read = writeIndex - delay
         while (read < 0f) read += windowFrames
-        val first = read.toInt() % windowFrames
-        val second = (first + 1) % windowFrames
-        val fraction = read - read.toInt()
-        return buffers[channel][first] * (1f - fraction) + buffers[channel][second] * fraction
+        val center = floor(read).toInt() % windowFrames
+        val fraction = read - floor(read)
+        val previous = buffers[channel][(center - 1 + windowFrames) % windowFrames]
+        val current = buffers[channel][center]
+        val next = buffers[channel][(center + 1) % windowFrames]
+        val following = buffers[channel][(center + 2) % windowFrames]
+        if (delay < 1f) return (current * (1f - fraction) + next * fraction).coerceIn(-1f, 1f)
+        val firstOrder = next - previous
+        val secondOrder = 2f * previous - 5f * current + 4f * next - following
+        val thirdOrder = 3f * (current - next) + following - previous
+        val interpolated = current + 0.5f * fraction * (
+            firstOrder + fraction * (secondOrder + fraction * thirdOrder)
+        )
+        return interpolated.coerceIn(-1f, 1f)
     }
 
     companion object {
@@ -393,8 +405,8 @@ private class PitchDspState(
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
             alignVoices = true,
-            preserveTransients = false,
-            windowMs = 6f,
+            preserveTransients = true,
+            windowMs = SPLIT_PITCH_WINDOW_MS,
         )
     }
 }

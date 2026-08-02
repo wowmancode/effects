@@ -79,10 +79,14 @@ class AudioDspTest {
         )
         val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
 
+        val windowFrames = (48_000 * SPLIT_PITCH_WINDOW_MS / 1_000f).toInt().coerceIn(128, 4_096)
+        val processedFrames = windowFrames + 100
         var rendered = 0
-        repeat(1_300) { frame -> rendered = state.process(10_000 + frame, frame.toLong() / 48, 0) }
+        repeat(processedFrames) { frame -> rendered = state.process(10_000 + frame, frame.toLong() / 48, 0) }
+        val alignmentDelay = (windowFrames - 2) / 2
+        val expected = 10_000 + processedFrames - 1 - alignmentDelay
 
-        assertTrue(rendered in 11_153..11_157)
+        assertTrue(rendered in (expected - 2)..(expected + 2))
     }
 
     @Test
