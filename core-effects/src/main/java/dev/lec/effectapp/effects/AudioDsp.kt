@@ -42,7 +42,7 @@ private val DSP_EFFECT_IDS = setOf(
     "vocoder_custom",
 )
 
-internal const val SPLIT_PITCH_WINDOW_MS = 24f
+internal const val SPLIT_PITCH_WINDOW_MS = 20f
 
 internal fun isAudioDspEffect(effectId: String): Boolean = effectId in DSP_EFFECT_IDS
 
@@ -405,7 +405,7 @@ private class PitchDspState(
             dryMix = segment.params["dry_mix"] ?: 0.2f,
             wetMix = segment.params["voice_mix"] ?: 0.8f,
             alignVoices = true,
-            preserveTransients = true,
+            preserveTransients = false,
             windowMs = SPLIT_PITCH_WINDOW_MS,
         )
     }
