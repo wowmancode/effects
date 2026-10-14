@@ -1,5 +1,6 @@
 package dev.lec.effectapp
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Handler
 import androidx.media3.common.util.UnstableApi
@@ -18,7 +19,12 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
  * Without this, showing an effect change while paused means seeking, which re-decodes from the
  * previous keyframe and takes a noticeable moment. With it, a paused slider drag redraws the
  * current frame straight away.
+ *
+ * PlaybackVideoGraphWrapper is marked library-internal, but overriding
+ * createPlaybackVideoGraphWrapper is the only way to turn the cache on for ExoPlayer (Media3 has
+ * a TODO for a public switch). Re-check this when upgrading Media3.
  */
+@SuppressLint("RestrictedApi")
 @UnstableApi
 private class ReplayableVideoRenderer(builder: Builder) : MediaCodecVideoRenderer(builder) {
     override fun createPlaybackVideoGraphWrapper(
