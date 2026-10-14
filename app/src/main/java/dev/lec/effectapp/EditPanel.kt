@@ -20,11 +20,13 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -430,13 +432,47 @@ internal fun ParameterSlider(label: String, value: Float, range: ClosedFloatingP
             modifier = Modifier.width(104.dp),
         )
     }
+    // Push every drag step so the preview follows the thumb in real time; the gesture makes the
+    // whole drag a single undo step instead of one per pixel.
+    val gesture = LocalSliderGesture.current
+    val dragging = remember { booleanArrayOf(false) }
+    DisposableEffect(gesture) {
+        onDispose {
+            if (dragging[0]) {
+                dragging[0] = false
+                gesture?.endGesture()
+            }
+        }
+    }
     Slider(
         value = sliderValue.coerceIn(range.start, range.endInclusive),
-        onValueChange = { sliderValue = it; text = formatParam(it) },
-        onValueChangeFinished = { onChange(sliderValue) },
+        onValueChange = {
+            if (!dragging[0]) {
+                dragging[0] = true
+                gesture?.beginGesture()
+            }
+            sliderValue = it
+            text = formatParam(it)
+            onChange(it)
+        },
+        onValueChangeFinished = {
+            onChange(sliderValue)
+            if (dragging[0]) {
+                dragging[0] = false
+                gesture?.endGesture()
+            }
+        },
         valueRange = range,
     )
 }
+
+/** Groups the many edits of one slider drag into a single undo step. */
+interface SliderGesture {
+    fun beginGesture()
+    fun endGesture()
+}
+
+internal val LocalSliderGesture = staticCompositionLocalOf<SliderGesture?> { null }
 
 /** Formats a slider value for the type-in field: whole numbers stay clean, decimals keep 3 places. */
 internal fun formatParam(value: Float): String =

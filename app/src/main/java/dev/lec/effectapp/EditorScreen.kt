@@ -2,6 +2,7 @@ package dev.lec.effectapp
 
 import android.content.res.Configuration
 import android.content.Context
+import android.os.Handler
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -48,6 +49,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,9 +67,13 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoFrameProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.lifecycle.Lifecycle
@@ -78,9 +86,11 @@ import dev.lec.effectapp.effects.PreviewAudioProcessor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.TimelineSegment
+import dev.lec.effectapp.pipeline.LivePreviewEffects
 import dev.lec.effectapp.pipeline.OverlayBitmapCache
-import dev.lec.effectapp.pipeline.ProjectCompositionFactory
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -239,6 +249,26 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
                 .setAudioProcessors(arrayOf(previewAudioProcessor))
                 .build()
+
+            override fun buildVideoRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                eventHandler: Handler,
+                eventListener: VideoRendererEventListener,
+                allowedVideoJoiningTimeMs: Long,
+                out: ArrayList<Renderer>,
+            ) {
+                super.buildVideoRenderers(
+                    context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback,
+                    eventHandler, eventListener, allowedVideoJoiningTimeMs, out,
+                )
+                replaceWithReplayableVideoRenderer(
+                    context, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener,
+                    allowedVideoJoiningTimeMs, codecAdapterFactory, out,
+                )
+            }
         }
     }
     val player = remember(renderersFactory, playerResetKey) {
@@ -299,6 +329,27 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     // Recover from a silently wedged effect pipeline automatically, exactly like the Reset
     // button does, but keeping playback going. Rate-limited so a clip whose effects can never
     // render can't trap the preview in a reset loop.
+    val liveEffects = remember(player) { LivePreviewEffects() }
+    // Paused edits redraw the current frame through the effects. Requests are conflated so a fast
+    // slider drag never queues more than one redraw behind the one in progress.
+    val redrawRequests = remember(player) {
+        MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    }
+    LaunchedEffect(player, freezeWatchdog) {
+        redrawRequests.collect {
+            if (player.isPlaying || player.mediaItemCount == 0 || player.playbackState != Player.STATE_READY) {
+                return@collect // While playing, the next decoded frame already uses the new values.
+            }
+            val before = freezeWatchdog.frameCount
+            player.setVideoEffects(VideoFrameProcessor.REDRAW)
+            freezeWatchdog.awaitFrameAfter(before, timeoutMs = 250)
+            if (freezeWatchdog.frameCount == before && !player.isPlaying) {
+                // Nothing cached to replay (e.g. right after a seek): re-decode the frame instead.
+                player.seekTo(player.currentMediaItemIndex, player.currentPosition)
+                freezeWatchdog.awaitFrameAfter(before, timeoutMs = 500)
+            }
+        }
+    }
     val autoResetTimes = remember { ArrayDeque<Long>() }
     LaunchedEffect(freezeWatchdog) {
         while (true) {
@@ -362,19 +413,19 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     val previewClipStartMs = project.clips.take(currentClipIndex).sumOf { it.durationMs }
     val previewLocalMs = (playerPositionMs - previewClipStartMs).coerceAtLeast(0)
+    // Only the stack's shape needs a pipeline rebuild; parameter values flow in live.
     val previewStructureKey = previewClip?.let { clip ->
-        val transformEnabled = clip.transform.run {
-            scale != 1f || rotationDegrees != 0f || offsetX != 0f || offsetY != 0f
-        }
         listOf<Any?>(
             clip.id,
-            transformEnabled,
-            clip.effectSegments.filter { it.enabled }.map { it.effectId },
+            clip.effectSegments.filter { it.enabled }.map { it.id to it.effectId },
             clip.overlays.map { it.id to it.sourceUri },
         )
     }
-    val animationFrame = if (previewClip?.effectSegments.orEmpty().any { it.keyframes.isNotEmpty() }) previewLocalMs / 160 else -1L
-    val previewParameterKey = previewClip?.let { listOf(it.transform, it.effectSegments, it.overlays, animationFrame) }
+    val latestPreviewClip by rememberUpdatedState(previewClip)
+    // Keyframes on live effects are evaluated from this on the GL thread.
+    SideEffect { liveEffects.timeMs = previewLocalMs }
+    // Effects that can't update live still animate their keyframes by periodic rebuilds.
+    val staticAnimationFrame = if (previewClip != null && liveEffects.hasStaticKeyframes(previewClip)) previewLocalMs / 160 else -1L
     var appliedPreviewStructure by remember(player) { mutableStateOf<List<Any?>?>(null) }
     // Frame count at the last effect reconfiguration; the next live update waits for a newer frame.
     var lastReconfigureFrame by remember(player) { mutableLongStateOf(-1L) }
@@ -383,28 +434,39 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         // Only stack shape changes tear down the decoder/GL pipeline.
         delay(160)
         freezeWatchdog.expectFrame()
-        rebuildPreviewPipeline(player, ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs, overlayResolver))
+        // Build from the newest edit: values changed during the delay must not be lost.
+        rebuildPreviewPipeline(player, liveEffects.build(latestPreviewClip ?: clip, previewLocalMs, overlayResolver))
         lastReconfigureFrame = freezeWatchdog.frameCount
         appliedPreviewStructure = previewStructureKey
     }
 
-    LaunchedEffect(player, currentClipIndex, previewStructureKey, previewParameterKey) {
+    LaunchedEffect(player, currentClipIndex, previewStructureKey, previewClip) {
         val clip = previewClip ?: return@LaunchedEffect
         if (appliedPreviewStructure != previewStructureKey) return@LaunchedEffect
-        // Coalesce slider drags and keyframe ticks, and never overlap a structural rebuild.
-        delay(if (animationFrame >= 0) 24 else 100)
-        // Each live effect change re-registers Media3's effect stream. Issuing the next one before
-        // the previous config has drawn a frame stacks registrations on frames still in flight,
-        // which is what wedges the GL chain, so wait for proof the pipeline caught up first.
+        if (liveEffects.update(clip)) {
+            // Applied on the next frame; when paused, redraw the current frame right away.
+            redrawRequests.tryEmit(Unit)
+            return@LaunchedEffect
+        }
+        // Overlays and the few effects that can't swap live fall back to a pipeline update.
+        // Coalesce rapid edits, and wait until the last update drew before issuing another so
+        // reconfigurations can't stack up on frames still in flight and wedge the GL chain.
+        delay(100)
         freezeWatchdog.awaitFrameAfter(lastReconfigureFrame, timeoutMs = 750)
         if (appliedPreviewStructure == previewStructureKey) {
             runCatching {
-                val effects = ProjectCompositionFactory.previewVideoEffects(clip, previewLocalMs, overlayResolver)
+                val effects = liveEffects.build(latestPreviewClip ?: clip, previewLocalMs, overlayResolver)
                 freezeWatchdog.expectFrame()
-                if (animationFrame >= 0) player.setVideoEffects(effects) else updatePreviewEffects(player, effects)
+                updatePreviewEffects(player, effects)
                 lastReconfigureFrame = freezeWatchdog.frameCount
             }
         }
+    }
+    LaunchedEffect(player, staticAnimationFrame) {
+        val clip = previewClip ?: return@LaunchedEffect
+        if (staticAnimationFrame < 0 || appliedPreviewStructure != previewStructureKey) return@LaunchedEffect
+        delay(24)
+        runCatching { player.setVideoEffects(liveEffects.build(clip, previewLocalMs, overlayResolver)) }
     }
     val seekToClip: (Int) -> Unit = { requestedIndex ->
         if (project.clips.isNotEmpty()) {
@@ -412,6 +474,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             val position = project.clips.take(targetIndex).sumOf { it.durationMs }
             currentClipIndex = targetIndex
             playerPositionMs = position
+            liveEffects.timeMs = 0
             if (project.clips[targetIndex].mediaMissing) {
                 player.pause()
             } else {
@@ -420,6 +483,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             }
         }
     }
+    CompositionLocalProvider(LocalSliderGesture provides viewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -468,6 +532,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 val targetIndex = clipIndexAt(project, position)
                 currentClipIndex = targetIndex
                 playerPositionMs = position
+                liveEffects.timeMs = position - project.clips.take(targetIndex).sumOf { it.durationMs }
                 if (project.clips.getOrNull(targetIndex)?.mediaMissing == true) {
                     player.pause()
                 } else {
@@ -524,6 +589,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             },
             onPlayerView = { playerView = it },
         )
+    }
     }
 
     pendingSegment?.let { pending ->

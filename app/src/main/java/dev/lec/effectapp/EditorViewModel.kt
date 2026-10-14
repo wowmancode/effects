@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class EditorViewModel(application: Application) : AndroidViewModel(application) {
+class EditorViewModel(application: Application) : AndroidViewModel(application), SliderGesture {
     private val undoStack = ArrayDeque<EditProject>()
     private val redoStack = ArrayDeque<EditProject>()
     private val maxHistory = 80
@@ -485,7 +485,23 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _selection.value = null
     }
 
+    // While a slider is being dragged, the whole drag is one undo step.
+    private var gestureDepth = 0
+    private var gestureRecorded = false
+
+    override fun beginGesture() {
+        if (gestureDepth++ == 0) gestureRecorded = false
+    }
+
+    override fun endGesture() {
+        gestureDepth = (gestureDepth - 1).coerceAtLeast(0)
+    }
+
     private fun recordUndo() {
+        if (gestureDepth > 0) {
+            if (gestureRecorded) return
+            gestureRecorded = true
+        }
         undoStack.addLast(_project.value); while (undoStack.size > maxHistory) undoStack.removeFirst(); redoStack.clear()
     }
 

@@ -33,6 +33,7 @@ import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.TimelineSegment
+import dev.lec.effectapp.model.TransformSettings
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -107,13 +108,7 @@ object ProjectCompositionFactory {
         val result = mutableListOf<Effect>()
         val transform = clip.transform
         if (transform.scale != 1f || transform.rotationDegrees != 0f || transform.offsetX != 0f || transform.offsetY != 0f) {
-            result += object : MatrixTransformation {
-                override fun getMatrix(presentationTimeUs: Long): Matrix = Matrix().apply {
-                    setScale(transform.scale, transform.scale)
-                    postRotate(transform.rotationDegrees)
-                    postTranslate(transform.offsetX, transform.offsetY)
-                }
-            }
+            result += transformEffect(transform)
         }
         // Visual effects are deliberately clip-wide. List order is stack order and is unbounded.
         clip.effectSegments.filter { it.enabled }.forEach { segment ->
@@ -124,7 +119,15 @@ object ProjectCompositionFactory {
         return result
     }
 
-    private fun segmentVideoEffect(
+    internal fun transformEffect(transform: TransformSettings): Effect = object : MatrixTransformation {
+        override fun getMatrix(presentationTimeUs: Long): Matrix = Matrix().apply {
+            setScale(transform.scale, transform.scale)
+            postRotate(transform.rotationDegrees)
+            postTranslate(transform.offsetX, transform.offsetY)
+        }
+    }
+
+    internal fun segmentVideoEffect(
         segment: TimelineSegment,
         timeMs: Long,
         waitForVideoMapFrames: Boolean,
@@ -146,7 +149,7 @@ object ProjectCompositionFactory {
         else -> EffectRegistry.byId(segment.effectId)?.toMediaEffect(segment.paramsAt(timeMs))
     }
 
-    private fun overlayEffect(clip: Clip, resolveBitmap: (String) -> Bitmap?, includeVideoPosters: Boolean): Effect? {
+    internal fun overlayEffect(clip: Clip, resolveBitmap: (String) -> Bitmap?, includeVideoPosters: Boolean): Effect? {
         if (clip.overlays.isEmpty()) return null
         val overlays: List<TextureOverlay> = clip.overlays.asReversed().mapNotNull { overlay ->
             if (!includeVideoPosters) return@mapNotNull null
