@@ -3,8 +3,22 @@ package dev.lec.effectapp.effects
 import androidx.annotation.OptIn
 import androidx.media3.common.Effect
 import androidx.media3.common.util.UnstableApi
+import kotlin.math.roundToInt
 
 data class SplitPitchVoice(val semitones: Float, val level: Float = 1f)
+
+enum class SplitPitchAlgorithm(val storedValue: Float) {
+    ORIGINAL(0f),
+    ELASTIQUE(1f),
+    A17_DRUMS(2f);
+
+    companion object {
+        fun from(values: Map<String, Float>): SplitPitchAlgorithm =
+            entries.firstOrNull {
+                it.storedValue.toInt() == values["pitch_algorithm"]?.roundToInt()
+            } ?: ORIGINAL
+    }
+}
 
 class SplitPitchEffect : LecEffect {
     override val id = "split_pitch"
@@ -13,6 +27,7 @@ class SplitPitchEffect : LecEffect {
     override val params = listOf(
         EffectParam("dry_mix", "Original voice", 0f, 1f, 0.2f),
         EffectParam("voice_mix", "Split voices", 0f, 1f, 0.8f),
+        EffectParam("pitch_algorithm", "Pitch method", 0f, 2f, 0f),
     )
 
     @OptIn(UnstableApi::class)

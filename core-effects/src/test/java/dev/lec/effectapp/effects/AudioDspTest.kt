@@ -66,6 +66,34 @@ class AudioDspTest {
     }
 
     @Test
+    fun splitPitchMethodsPersistAndChangeTheProcessedAudio() {
+        assertEquals(SplitPitchAlgorithm.ORIGINAL, SplitPitchAlgorithm.from(emptyMap()))
+        val source = IntArray(8_000) { frame ->
+            val tone = kotlin.math.sin(frame * 2.0 * kotlin.math.PI * 440.0 / 48_000.0)
+            ((tone * 9_000.0) + if (frame % 1_200 == 0) 12_000.0 else 0.0).toInt()
+        }
+        val outputs = SplitPitchAlgorithm.entries.map { algorithm ->
+            val segment = TimelineSegment(
+                id = "split",
+                effectId = "split_pitch",
+                startMs = 0,
+                endMs = 1_000,
+                params = SplitPitchEffect.encodeVoices(
+                    listOf(SplitPitchVoice(7f)),
+                    mapOf("dry_mix" to 0f, "voice_mix" to 1f,
+                          "pitch_algorithm" to algorithm.storedValue),
+                ),
+            )
+            assertEquals(algorithm, SplitPitchAlgorithm.from(segment.params))
+            val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+            source.mapIndexed { frame, sample -> state.process(sample, frame.toLong() / 48, 0) }
+        }
+
+        assertTrue(outputs[0].zip(outputs[1]).any { (a, b) -> a != b })
+        assertTrue(outputs[0].zip(outputs[2]).any { (a, b) -> a != b })
+    }
+
+    @Test
     fun splitPitchDryAndZeroVoiceShareLowLatencyAlignment() {
         val segment = TimelineSegment(
             id = "split",

@@ -95,29 +95,59 @@ private class SegmentedDspProcessor(
     private val timeOffsetMs: Long,
 ) : BaseAudioProcessor() {
     private var state: AudioDspState? = null
+    private var nativePitchHandle = 0L
     private var sampleIndex = 0L
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
-        val resolved = segment.copy(params = segment.paramsAt(timeOffsetMs), keyframes = emptyList())
-        state = createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
-        sampleIndex = 0
+        configureState(inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         return inputAudioFormat
     }
 
     override fun onFlush() {
         sampleIndex = 0
         if (inputAudioFormat != AudioProcessor.AudioFormat.NOT_SET) {
-            val resolved = segment.copy(params = segment.paramsAt(timeOffsetMs), keyframes = emptyList())
-            state = createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
+            configureState(inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         }
+    }
+
+    override fun onReset() {
+        SplitPitchNativeBridge.destroy(nativePitchHandle)
+        nativePitchHandle = 0L
+        state = null
+        sampleIndex = 0L
+    }
+
+    private fun configureState(sampleRate: Int, channels: Int) {
+        SplitPitchNativeBridge.destroy(nativePitchHandle)
+        val resolved = segment.copy(params = segment.paramsAt(timeOffsetMs), keyframes = emptyList())
+        nativePitchHandle = if (resolved.effectId == "split_pitch") {
+            SplitPitchNativeBridge.create(sampleRate, channels, resolved.params)
+        } else 0L
+        state = if (nativePitchHandle == 0L) createAudioDspState(resolved, sampleRate, channels) else null
+        sampleIndex = 0L
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
+        if (nativePitchHandle != 0L) {
+            val inputSamples = ShortArray(inputBuffer.remaining() / 2) { inputBuffer.short }
+            val outputSamples = inputSamples.copyOf()
+            SplitPitchNativeBridge.process(nativePitchHandle, inputSamples, outputSamples,
+                                           inputSamples.size / channels)
+            outputSamples.forEachIndexed { index, sample ->
+                val timeMs = timeOffsetMs + ((sampleIndex + index) / channels) * 1_000 /
+                    inputAudioFormat.sampleRate
+                output.putShort(if (timeMs in segment.startMs until segment.endMs) sample
+                                else inputSamples[index])
+            }
+            sampleIndex += inputSamples.size
+            output.flip()
+            return
+        }
         while (inputBuffer.remaining() >= 2) {
             val channel = (sampleIndex % channels).toInt()
             val timeMs = timeOffsetMs + (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
@@ -402,17 +432,24 @@ private class PitchDspState(
             windowMs = 80f,
         )
 
-        fun split(segment: TimelineSegment, sampleRate: Int, channels: Int) = PitchDspState(
-            segment = segment,
-            sampleRate = sampleRate,
-            channels = channels,
-            voices = SplitPitchEffect.decodeVoices(segment.params),
-            dryMix = segment.params["dry_mix"] ?: 0.2f,
-            wetMix = segment.params["voice_mix"] ?: 0.8f,
-            alignVoices = true,
-            preserveTransients = false,
-            windowMs = SPLIT_PITCH_WINDOW_MS,
-        )
+        fun split(segment: TimelineSegment, sampleRate: Int, channels: Int): PitchDspState {
+            val algorithm = SplitPitchAlgorithm.from(segment.params)
+            return PitchDspState(
+                segment = segment,
+                sampleRate = sampleRate,
+                channels = channels,
+                voices = SplitPitchEffect.decodeVoices(segment.params),
+                dryMix = segment.params["dry_mix"] ?: 0.2f,
+                wetMix = segment.params["voice_mix"] ?: 0.8f,
+                alignVoices = true,
+                preserveTransients = algorithm != SplitPitchAlgorithm.ORIGINAL,
+                windowMs = when (algorithm) {
+                    SplitPitchAlgorithm.ORIGINAL -> SPLIT_PITCH_WINDOW_MS
+                    SplitPitchAlgorithm.ELASTIQUE -> 60f
+                    SplitPitchAlgorithm.A17_DRUMS -> 12f
+                },
+            )
+        }
     }
 }
 

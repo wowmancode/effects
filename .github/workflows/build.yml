@@ -18,12 +18,20 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
       - name: Install Android SDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.11.1"
       - name: Build, lint, and test
         run: gradle --no-daemon assembleDebug lint test
+      - name: Test portable split-pitch C processor
+        run: |
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -Icore-effects/src/main/c \
+            core-effects/src/main/c/split_pitch_modes.c \
+            core-effects/src/test/c/split_pitch_modes_test.c \
+            -lm -o /tmp/split_pitch_modes_test
+          /tmp/split_pitch_modes_test
       - uses: actions/upload-artifact@v4
         with:
           name: effect-app-debug

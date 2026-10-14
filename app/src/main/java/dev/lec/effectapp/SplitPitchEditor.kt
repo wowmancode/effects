@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -14,11 +15,39 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.lec.effectapp.effects.SplitPitchEffect
+import dev.lec.effectapp.effects.SplitPitchAlgorithm
 import dev.lec.effectapp.effects.SplitPitchVoice
 
 @Composable
 internal fun SplitPitchEditor(values: Map<String, Float>, onChange: (Map<String, Float>) -> Unit) {
     val voices = SplitPitchEffect.decodeVoices(values)
+    val algorithm = SplitPitchAlgorithm.from(values)
+    Text("Pitch method", style = MaterialTheme.typography.titleSmall)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SplitPitchAlgorithm.entries.forEach { option ->
+            val label = when (option) {
+                SplitPitchAlgorithm.ORIGINAL -> "Original"
+                SplitPitchAlgorithm.ELASTIQUE -> "Elastique"
+                SplitPitchAlgorithm.A17_DRUMS -> "a17 drums"
+            }
+            if (option == algorithm) {
+                Button(
+                    onClick = { onChange(values + ("pitch_algorithm" to option.storedValue)) },
+                    modifier = Modifier.weight(1f),
+                ) { Text(label) }
+            } else {
+                OutlinedButton(
+                    onClick = { onChange(values + ("pitch_algorithm" to option.storedValue)) },
+                    modifier = Modifier.weight(1f),
+                ) { Text(label) }
+            }
+        }
+    }
+    Text(when (algorithm) {
+        SplitPitchAlgorithm.ORIGINAL -> "The existing split-pitch sound."
+        SplitPitchAlgorithm.ELASTIQUE -> "Longer grains for smoother tonal audio; an approximation, not zplane élastique."
+        SplitPitchAlgorithm.A17_DRUMS -> "Shorter grains and transient resets for drums; adjustable voice pitches below."
+    })
     Text("Pitch voices", style = MaterialTheme.typography.titleSmall)
     Text("Each voice is a separate copy of the clip audio. Add intervals to build chords.")
 

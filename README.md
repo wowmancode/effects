@@ -10,6 +10,7 @@ A free and open-source Android video editor focused on stacking time-ranged visu
 - Generic effect registry and parameter editor designed for gradual expansion.
 - Media3 Transformer export without FFmpeg wrappers.
 - JSON project save/load for shareable edits and presets.
+- Split-pitch harmonizer with Original, Elastique approximation, and a17 drums profiles. The two new profiles use [portable C DSP](core-effects/src/main/c/README.md) on Android; all modes keep the same voice pitch settings.
 
 ## Project status
 

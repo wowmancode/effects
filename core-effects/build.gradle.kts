@@ -6,7 +6,11 @@ plugins {
 android {
     namespace = "dev.lec.effectapp.effects"
     compileSdk = 36
+    ndkVersion = "27.0.12077973"
     defaultConfig { minSdk = 24 }
+    externalNativeBuild {
+        cmake { path = file("src/main/c/CMakeLists.txt") }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
