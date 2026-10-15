@@ -398,7 +398,14 @@ object ProjectCompositionFactory {
                 val effects = Effects(emptyList(), overlayTrackEffects(track, piece.startMs, ihtxPresentationSize))
                 val pieceMs = piece.endMs - piece.startMs
                 val item = if (!overlay.isVideo) {
-                    EditedMediaItem.Builder(MediaItem.fromUri(Uri.parse(overlay.sourceUri)))
+                    // The image duration on the MediaItem is what routes it to Media3's image loader;
+                    // without it the image is opened as a video with no duration, which only works
+                    // as the last item of a sequence.
+                    val imageItem = MediaItem.Builder()
+                        .setUri(Uri.parse(overlay.sourceUri))
+                        .setImageDurationMs(pieceMs.coerceAtLeast(1))
+                        .build()
+                    EditedMediaItem.Builder(imageItem)
                         .setDurationUs(pieceMs * 1_000)
                         .setFrameRate(targetFrameRate ?: 30)
                         .setRemoveAudio(true)
