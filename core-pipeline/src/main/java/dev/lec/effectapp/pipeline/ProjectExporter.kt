@@ -40,6 +40,7 @@ class ProjectExporter(private val context: Context) {
  @Volatile private var failedIhtxStatus: IhtxStatus? = null
  @Volatile private var lastProgress: Int? = null
  @Volatile private var videoMimeType: String = MimeTypes.VIDEO_H264
+ @Volatile private var veryFast: Boolean = false
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
  private val progressPoll = object : Runnable {
   override fun run() {
@@ -98,6 +99,7 @@ class ProjectExporter(private val context: Context) {
   .setLooper(exportThread.looper)
   .setVideoMimeType(videoMimeType)
   .setAudioMimeType(MimeTypes.AUDIO_AAC)
+  .apply { if (veryFast) setEncoderFactory(veryFastEncoderFactory()) }
   .addListener(transformerListener)
   .build()
  fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264) {
@@ -122,9 +124,14 @@ class ProjectExporter(private val context: Context) {
   * Exports [lengthMs] of the project beginning [startMs] into it, [exports] times cumulatively.
   * Reversed media is rendered first, on a background thread; the call returns immediately.
   */
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264) {
+ /**
+  * [veryFast]: every pass is rendered at up to 720p and encoded at a modest bitrate with fewer
+  * keyframes, so effects, encoder and disk all have far less to push through per pass.
+  */
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true) {
   check(this.callback==null) { "An export is already running" }
   videoMimeType=codec.mimeType
+  this.veryFast=veryFast
   failedIhtxStatus=null
   this.callback=callback
   preparing=true
@@ -150,7 +157,8 @@ class ProjectExporter(private val context: Context) {
   val passes=exports.coerceAtLeast(1); val total=(overlays.size+1)*passes
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
-  val outputSize=outputSizeForAspect(videoSize(base.clips.first().sourceUri),exportAspectRatio)
+  val fullSize=outputSizeForAspect(videoSize(base.clips.first().sourceUri),exportAspectRatio)
+  val outputSize=if(veryFast) fullSize?.let(::capForVeryFast) else fullSize
   val plan=IhtxPlan(base,overlays,passes,overlayGridSize.coerceAtLeast(1),outputSize?.let { it.width.toFloat() / it.height.toFloat() },outputSize)
   batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
  }
@@ -218,6 +226,24 @@ class ProjectExporter(private val context: Context) {
    if(rotation % 180 == 0) Size(width,height) else Size(height,width)
   } catch (_:RuntimeException) { null } finally { retriever.release() }
  }
+ /** Fits [size] within 1280 px on its long edge (even dimensions); smaller sizes are kept. */
+ private fun capForVeryFast(size:Size):Size {
+  val longest=maxOf(size.width,size.height)
+  if(longest<=VERY_FAST_LONG_EDGE) return size
+  val scale=VERY_FAST_LONG_EDGE.toFloat()/longest
+  fun even(value:Float):Int = (((value.roundToInt().coerceAtLeast(2)+1)/2)*2)
+  return Size(even(size.width*scale),even(size.height*scale))
+ }
+ /** Encoder settings for Very fast: modest bitrate, a keyframe every few seconds, no B-frames. */
+ private fun veryFastEncoderFactory()=androidx.media3.transformer.DefaultEncoderFactory.Builder(context)
+  .setRequestedVideoEncoderSettings(
+   androidx.media3.transformer.VideoEncoderSettings.Builder()
+    .setBitrate(VERY_FAST_BITRATE)
+    .setiFrameIntervalSeconds(VERY_FAST_KEYFRAME_SECONDS)
+    .build(),
+  )
+  .setEnableFallback(true)
+  .build()
  private fun outputSizeForAspect(source:Size?,aspectRatio:Float?):Size? {
   if(source==null || aspectRatio==null) return source
   val targetAspect=aspectRatio.coerceIn(0.1f,10f)
@@ -337,6 +363,9 @@ class ProjectExporter(private val context: Context) {
  private companion object {
   const val PROGRESS_POLL_MS = 200L
   const val MAX_AUDIO_LEAD_MS = 250L
+  const val VERY_FAST_LONG_EDGE = 1280
+  const val VERY_FAST_BITRATE = 4_000_000
+  const val VERY_FAST_KEYFRAME_SECONDS = 5f
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
  }

@@ -72,6 +72,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         value = withContext(Dispatchers.IO) { ExportCodec.available() }
     }
     var codec by remember { mutableStateOf(ExportCodec.H264) }
+    var veryFast by remember { mutableStateOf(true) }
     LaunchedEffect(project) { viewModel.checkMedia() }
     val exporter = remember { ProjectExporter(context.applicationContext) }
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
@@ -203,6 +204,16 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         }
                     }
                     Text("Saved as .mp4 with AAC sound. Codecs this phone can't encode aren't shown.")
+                    Text("Speed")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { veryFast = true }, modifier = Modifier.weight(1f)) {
+                            Text(if (veryFast) "✓ Very fast" else "Very fast", maxLines = 1)
+                        }
+                        OutlinedButton(onClick = { veryFast = false }, modifier = Modifier.weight(1f)) {
+                            Text(if (!veryFast) "✓ Normal" else "Normal", maxLines = 1)
+                        }
+                    }
+                    Text(if (veryFast) "Up to 720p at a lighter bitrate: much quicker, slightly softer." else "Full resolution and quality.")
                     Text("IHTX animated overlays")
                     OutlinedTextField(
                         value = overlayGridSizeText,
@@ -266,6 +277,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 exportAspectRatio = exportAspectRatio.ratio,
                                 startMs = startMs,
                                 codec = codec,
+                                veryFast = veryFast,
                             )
                         },
                         enabled = project.clips.isNotEmpty() && carriersReady && missingMedia.isEmpty(),

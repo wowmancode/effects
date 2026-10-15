@@ -53,6 +53,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   file and keeps their in-points, instead of resetting the clip to the whole new file.
 - Export video codec choice: H264, H265 (HEVC), VP9 or AV1, in an .mp4 with AAC sound.
   Only the codecs the phone can encode are offered.
+- Export speed setting, Very fast by default: IHTX passes render at up to 720p with a lighter
+  bitrate and fewer keyframes, so each pass takes far less time. Normal keeps full resolution.
 
 - Moving video overlays during export, with timeline positioning, opacity, scale,
   position, automatic looping, and reorderable layer priority. The editor preview
