@@ -199,6 +199,26 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    /**
+     * Moves an overlay from the preview. Without animation keyframes this sets its position;
+     * with keyframes it sets (adding if needed) the keyframe at [timeMs].
+     */
+    fun moveOverlayTo(clipId: String, overlayId: String, timeMs: Long, offsetX: Float, offsetY: Float) {
+        updateOverlay(clipId, overlayId) { overlay ->
+            val x = offsetX.coerceIn(-1f, 1f)
+            val y = offsetY.coerceIn(-1f, 1f)
+            if (overlay.keyframes.isEmpty()) return@updateOverlay overlay.copy(offsetX = x, offsetY = y)
+            val time = timeMs.coerceAtLeast(0)
+            val values = overlay.valuesAt(time)
+            val existing = overlay.keyframes.find { it.timeMs == time }
+                ?: OverlayKeyframe(time, values.alpha, values.scale, values.offsetX, values.offsetY)
+            overlay.copy(
+                keyframes = (overlay.keyframes.filterNot { it.timeMs == time } +
+                    existing.copy(offsetX = x, offsetY = y)).sortedBy { it.timeMs },
+            )
+        }
+    }
+
     fun removeOverlayKeyframe(clipId: String, overlayId: String, timeMs: Long) {
         updateOverlay(clipId, overlayId) { overlay ->
             overlay.copy(keyframes = overlay.keyframes.filterNot { it.timeMs == timeMs })

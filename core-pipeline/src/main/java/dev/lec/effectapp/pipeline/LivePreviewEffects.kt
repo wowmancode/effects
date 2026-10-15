@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap
  * The transform and every enabled effect segment become a [LiveGlEffect] slot that reads its
  * current values from here on the GL thread. The UI pushes edits with [update]; only changes to
  * the stack's shape (adding, removing, reordering or toggling effects) or to parts that can't be
- * swapped live (overlays and a few multi-pass effects) still need [build] + setVideoEffects.
+ * swapped live (a few multi-pass effects) still need [build] + setVideoEffects.
  */
 @UnstableApi
 class LivePreviewEffects {
@@ -61,7 +61,8 @@ class LivePreviewEffects {
                     )
                 }
             }
-            ProjectCompositionFactory.overlayEffect(clip, resolveBitmap, includeVideoPosters = true)?.let(::add)
+            // Overlays are drawn by the editor over the player (PreviewOverlayLayer), so video
+            // overlays play and can be dragged without rebuilding this pipeline.
         }
     }
 
@@ -93,7 +94,6 @@ class LivePreviewEffects {
         clip.effectSegments.filter { it.enabled && (it.effectId in STATIC_ONLY || it.id in notLive) }
 
     private fun staticContent(clip: Clip): List<Any?> = listOf(
-        clip.overlays,
         staticSegments(clip),
         if (TRANSFORM_SLOT in notLive) clip.transform else null,
     )

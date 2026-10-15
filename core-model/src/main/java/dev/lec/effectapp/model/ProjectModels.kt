@@ -1,6 +1,7 @@
 package dev.lec.effectapp.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 @Serializable
 data class EditProject(
@@ -33,6 +34,10 @@ data class Clip(
     val audioSegments: List<TimelineSegment> = emptyList(),
     val overlays: List<Overlay> = emptyList(),
     val mediaMissing: Boolean = false,
+    /** Pre-reversed video for this clip's range (see ReverseMediaCache). Never saved. */
+    @Transient val videoOverride: SourceOverride? = null,
+    /** Pre-reversed audio for this clip's range (see ReverseMediaCache). Never saved. */
+    @Transient val audioOverride: SourceOverride? = null,
 ) {
     val durationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0)
 
@@ -49,6 +54,12 @@ data class Clip(
         )
     }
 }
+
+/**
+ * Replacement media for a clip's range: the clip's local time t plays [uri] at [startMs] + t.
+ * Used for reversed media, which is rendered once up front.
+ */
+data class SourceOverride(val uri: String, val startMs: Long = 0)
 
 /**
  * An image composited on top of a clip. Times are local to the clip. Position anchors and scale
@@ -72,6 +83,8 @@ data class Overlay(
     val keyframes: List<OverlayKeyframe> = emptyList(),
     val effectSegments: List<TimelineSegment> = emptyList(),
     val audioSegments: List<TimelineSegment> = emptyList(),
+    /** How far into the source an overlay video starts playing (export start trimming). Never saved. */
+    @Transient val sourceOffsetMs: Long = 0,
 ) {
     fun valuesAt(timeMs: Long): OverlayValues {
         if (keyframes.isEmpty()) return OverlayValues(alpha, scale, offsetX, offsetY)

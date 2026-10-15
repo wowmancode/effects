@@ -69,6 +69,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var progress by remember { mutableIntStateOf(0) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportsText by remember { mutableStateOf("1") }
+    var startText by remember { mutableStateOf("1") }
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }
@@ -121,9 +122,10 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     LaunchedEffect(state) {
         while (state == ExportState.RUNNING) {
             exporter.progress()?.let { progress = it }
-            exporter.ihtxStatus()?.let { status ->
-                exportStatus = if (status.concatenating) "Concatenating…" else "Export " + status.current + "/" + status.total
+            exportStatus = exporter.ihtxStatus()?.let { status ->
+                if (status.concatenating) "Concatenating…" else "Export " + status.current + "/" + status.total
             }
+            if (exporter.preparing()) exportStatus = listOfNotNull(exportStatus, "Reversing clips…").joinToString(" · ")
             delay(200)
         }
     }
@@ -148,6 +150,14 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         onValueChange = { value -> if (value.all(Char::isDigit)) exportsText = value },
                         label = { Text("Exports") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = startText,
+                        onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) startText = value },
+                        label = { Text("Start at (seconds)") },
+                        supportingText = { Text("The export begins this far into the project.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth(),
                     )
                     OutlinedTextField(
@@ -203,6 +213,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                             exportStatus = null
                             val exports = exportsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
                             val lengthMs = ((lengthText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(1)
+                            val startMs = ((startText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(0)
                             val overlayGridSize = overlayGridSizeText.toIntOrNull()?.coerceAtLeast(1) ?: 2
                             exporter.startIhtx(
                                 project,
@@ -225,6 +236,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 overlays = ihtxOverlays,
                                 overlayGridSize = overlayGridSize,
                                 exportAspectRatio = exportAspectRatio.ratio,
+                                startMs = startMs,
                             )
                         },
                         enabled = project.clips.isNotEmpty() && carriersReady,

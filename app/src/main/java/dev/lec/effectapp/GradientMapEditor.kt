@@ -21,6 +21,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -41,14 +42,25 @@ import kotlin.math.abs
 @Composable
 internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String, Float>) -> Unit) {
     val stops = GradientMapEffect.decodeStops(values)
-    var expandedPoint by remember { mutableIntStateOf(-1) }
+    // Only the tapped point's settings are shown; -1 shows none.
+    var selectedPoint by remember { mutableIntStateOf(-1) }
+    var pickerOpen by remember { mutableStateOf(false) }
     Text("Color points", style = MaterialTheme.typography.titleSmall)
-    GradientStopCanvas(stops, onChange)
-    Text("Drag a numbered point to move it. Double-tap the gradient to add a point there.")
+    GradientStopCanvas(
+        stops = stops,
+        selectedIndex = selectedPoint,
+        onSelect = { index ->
+            if (index != selectedPoint) pickerOpen = false
+            selectedPoint = index
+        },
+        onChange = onChange,
+    )
+    Text("Tap a point to edit it. Drag a point to move it. Double-tap the gradient to add a point there.")
     Text("Maps the darkest pixels on the left to the brightest pixels on the right.")
     Text("Alpha controls the mapped color's opacity without making the video frame transparent.")
 
-    stops.forEachIndexed { index, stop ->
+    stops.getOrNull(selectedPoint)?.let { stop ->
+        val index = selectedPoint
         Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
             Row(
                 Modifier.fillMaxWidth(),
@@ -57,19 +69,27 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
             ) {
                 Box(
                     Modifier.size(32.dp).background(Color(stop.red, stop.green, stop.blue, stop.alpha)).clickable {
-                        expandedPoint = if (expandedPoint == index) -1 else index
+                        pickerOpen = !pickerOpen
                     },
                 )
                 Text("Point ${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                TextButton(onClick = { expandedPoint = if (expandedPoint == index) -1 else index }) {
-                    Text(if (expandedPoint == index) "Close picker" else "Pick color")
+                TextButton(onClick = { pickerOpen = !pickerOpen }) {
+                    Text(if (pickerOpen) "Close picker" else "Pick color")
                 }
                 TextButton(
-                    onClick = { onChange(GradientMapEffect.encodeStops(stops.filterIndexed { i, _ -> i != index })) },
+                    onClick = {
+                        selectedPoint = -1
+                        pickerOpen = false
+                        onChange(GradientMapEffect.encodeStops(stops.filterIndexed { i, _ -> i != index }))
+                    },
                     enabled = stops.size > 2,
                 ) { Text("Remove") }
+                TextButton(onClick = {
+                    selectedPoint = -1
+                    pickerOpen = false
+                }) { Text("Done") }
             }
-            if (expandedPoint == index) {
+            if (pickerOpen) {
                 HsvColorPicker(Color(stop.red, stop.green, stop.blue)) { color ->
                     onChange(
                         GradientMapEffect.encodeStops(
@@ -97,7 +117,14 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
     }
 
     OutlinedButton(
-        onClick = { onChange(GradientMapEffect.encodeStops(addGradientStop(stops))) },
+        onClick = {
+            val added = addGradientStop(stops)
+            if (added.size > stops.size) {
+                selectedPoint = added.indices.firstOrNull { i -> stops.none { it == added[i] } } ?: -1
+                pickerOpen = false
+            }
+            onChange(GradientMapEffect.encodeStops(added))
+        },
         enabled = stops.size < GradientMapEffect.MAX_STOPS,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
     ) { Text("+ Add color point (${stops.size}/${GradientMapEffect.MAX_STOPS})") }
@@ -106,10 +133,13 @@ internal fun GradientMapEditor(values: Map<String, Float>, onChange: (Map<String
 @Composable
 private fun GradientStopCanvas(
     stops: List<GradientColorStop>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
     onChange: (Map<String, Float>) -> Unit,
 ) {
     val latestStops by rememberUpdatedState(stops)
     val latestOnChange by rememberUpdatedState(onChange)
+    val latestOnSelect by rememberUpdatedState(onSelect)
     val gradientColors = stops.map { stop ->
         stop.position to Color(stop.red, stop.green, stop.blue, stop.alpha)
     }.toTypedArray()
@@ -120,11 +150,20 @@ private fun GradientStopCanvas(
             .height(62.dp)
             .pointerInput(Unit) {
                 detectTapGestures(
+                    onTap = { offset ->
+                        val current = latestStops
+                        val width = size.width.toFloat().coerceAtLeast(1f)
+                        val nearest = current.indices.minByOrNull { abs(current[it].position * width - offset.x) }
+                        val hit = nearest?.takeIf { abs(current[it].position * width - offset.x) <= 24.dp.toPx() }
+                        latestOnSelect(hit ?: -1)
+                    },
                     onDoubleTap = { offset ->
                         val current = latestStops
                         if (current.size < GradientMapEffect.MAX_STOPS) {
                             val position = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
-                            latestOnChange(GradientMapEffect.encodeStops(addGradientStopAt(current, position)))
+                            val added = addGradientStopAt(current, position)
+                            latestOnChange(GradientMapEffect.encodeStops(added))
+                            latestOnSelect(added.indices.firstOrNull { i -> current.none { it == added[i] } } ?: -1)
                         }
                     },
                 )
@@ -139,6 +178,7 @@ private fun GradientStopCanvas(
                         draggedPosition = nearest?.takeIf {
                             abs(it.position * width - offset.x) <= 24.dp.toPx()
                         }?.position ?: Float.NaN
+                        if (!draggedPosition.isNaN()) latestOnSelect(current.indexOf(nearest))
                     },
                     onDragEnd = { draggedPosition = Float.NaN },
                     onDragCancel = { draggedPosition = Float.NaN },
@@ -186,7 +226,13 @@ private fun GradientStopCanvas(
                 markerRadius - 2.dp.toPx(),
                 Offset(markerX, markerY),
             )
-            drawCircle(Color.White, markerRadius, Offset(markerX, markerY), style = Stroke(1.dp.toPx()))
+            val selected = index == selectedIndex
+            drawCircle(
+                if (selected) Color.Yellow else Color.White,
+                markerRadius,
+                Offset(markerX, markerY),
+                style = Stroke(if (selected) 3.dp.toPx() else 1.dp.toPx()),
+            )
             drawContext.canvas.nativeCanvas.drawText(
                 (index + 1).toString(),
                 markerX,

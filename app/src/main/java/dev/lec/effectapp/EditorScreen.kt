@@ -64,7 +64,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.FilteringMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoFrameProcessor
@@ -88,6 +93,7 @@ import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.TimelineSegment
 import dev.lec.effectapp.pipeline.LivePreviewEffects
 import dev.lec.effectapp.pipeline.OverlayBitmapCache
+import dev.lec.effectapp.pipeline.ReverseMediaCache
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -116,6 +122,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
 
     val scope = rememberCoroutineScope()
     var previewEntries by remember { mutableStateOf<List<PreviewEntry>>(emptyList()) }
+    var reversePreparing by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<androidx.media3.ui.PlayerView?>(null) }
 
     val addClip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -370,18 +377,29 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             clip.trimStartMs,
             clip.trimEndMs,
             clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" },
+            clip.audioSegments.any { it.enabled && it.effectId == "reverse_audio" },
         )
     }
     LaunchedEffect(player, playlistKey) {
+        // Reversed clips are rendered once (and cached); the current playlist keeps playing meanwhile.
+        val needsReverse = project.clips.any { clip ->
+            !clip.mediaMissing && (clip.effectSegments + clip.audioSegments)
+                .any { it.enabled && it.effectId in setOf("reverse_video", "reverse_audio") }
+        }
+        reversePreparing = needsReverse
+        val entries = try {
+            buildPreviewEntries(context.applicationContext, project)
+        } finally {
+            reversePreparing = false
+        }
         val previousGlobalPosition = playerPositionMs
         val resumePlayback = player.playWhenReady || resumeAfterReset
         resumeAfterReset = false
-        val entries = buildPreviewEntries(project)
         previewEntries = entries
         if (entries.isEmpty()) {
             player.clearMediaItems()
         } else {
-            player.setMediaItems(entries.map { it.mediaItem })
+            player.setMediaSources(entries.map { it.mediaSource })
             seekPreview(player, project, entries, previousGlobalPosition)
             freezeWatchdog.expectFrame()
             player.prepare()
@@ -418,7 +436,6 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
         listOf<Any?>(
             clip.id,
             clip.effectSegments.filter { it.enabled }.map { it.id to it.effectId },
-            clip.overlays.map { it.id to it.sourceUri },
         )
     }
     val latestPreviewClip by rememberUpdatedState(previewClip)
@@ -588,6 +605,30 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                 }
             },
             onPlayerView = { playerView = it },
+            previewOverlay = {
+                PreviewOverlayLayer(
+                    clip = previewClip,
+                    mainPlayer = player,
+                    localTimeMs = {
+                        val entry = previewEntries.getOrNull(player.currentMediaItemIndex)
+                        if (entry != null && entry.clipIndex == currentClipIndex) {
+                            entry.outputStartMs + player.currentPosition.coerceIn(0, entry.durationMs)
+                        } else previewLocalMs
+                    },
+                    onDragStart = viewModel::beginGesture,
+                    onMove = { overlayId, timeMs, x, y ->
+                        previewClip?.let { viewModel.moveOverlayTo(it.id, overlayId, timeMs, x, y) }
+                    },
+                    onDragEnd = viewModel::endGesture,
+                )
+                if (reversePreparing) {
+                    Text(
+                        "Preparing reversed clip…",
+                        color = Color.White,
+                        modifier = Modifier.align(Alignment.TopCenter).background(Color.Black.copy(alpha = 0.6f)).padding(6.dp),
+                    )
+                }
+            },
         )
     }
     }
@@ -826,46 +867,71 @@ private fun EffectPicker(
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+@OptIn(UnstableApi::class)
 private data class PreviewEntry(
-    val mediaItem: MediaItem,
+    val mediaSource: MediaSource,
     val clipIndex: Int,
     val outputStartMs: Long,
     val durationMs: Long,
 )
 
-private fun buildPreviewEntries(project: EditProject): List<PreviewEntry> = buildList {
-    project.clips.forEachIndexed { clipIndex, clip ->
-        if (clip.mediaMissing) return@forEachIndexed
-        val reversed = clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" }
-        val sliceMs = 34L // One frame at the export/preview baseline of 30 fps.
-        val sourceSlices = if (reversed) {
-            buildList {
-                var start = 0L
-                while (start < clip.durationMs) {
-                    val end = (start + sliceMs).coerceAtMost(clip.durationMs)
-                    add(start until end)
-                    start = end
-                }
-            }.asReversed()
-        } else {
-            listOf(0L until clip.durationMs)
-        }
-        var outputStart = 0L
-        sourceSlices.forEach { slice ->
-            val duration = slice.last - slice.first + 1
-            val item = MediaItem.Builder()
-                .setUri(clip.sourceUri)
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(clip.trimStartMs + slice.first)
-                        .setEndPositionMs(clip.trimStartMs + slice.last + 1)
-                        .build(),
+@OptIn(UnstableApi::class)
+private suspend fun buildPreviewEntries(context: Context, project: EditProject): List<PreviewEntry> {
+    val factory = DefaultMediaSourceFactory(context)
+    fun source(uri: String, startMs: Long, endMs: Long): MediaSource = factory.createMediaSource(
+        MediaItem.Builder()
+            .setUri(uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(startMs)
+                    .setEndPositionMs(endMs)
+                    .build(),
+            )
+            .build(),
+    )
+    val entries = mutableListOf<PreviewEntry>()
+    project.clips.forEachIndexed { clipIndex, original ->
+        if (original.mediaMissing) return@forEachIndexed
+        val reverseVideo = original.effectSegments.any { it.enabled && it.effectId == "reverse_video" }
+        val reverseAudio = original.audioSegments.any { it.enabled && it.effectId == "reverse_audio" }
+        val clip = if (reverseVideo || reverseAudio) {
+            withContext(Dispatchers.IO) { ReverseMediaCache.prepare(context, original) }
+        } else original
+        val duration = clip.durationMs
+        val videoOverride = clip.videoOverride
+        val audioOverride = clip.audioOverride
+        if (reverseVideo && videoOverride == null) {
+            // The reversed render failed: fall back to one-frame slices played in reverse order.
+            val sliceMs = 34L
+            var outputStart = 0L
+            generateSequence(0L) { (it + sliceMs).takeIf { next -> next < duration } }.toList().asReversed().forEach { start ->
+                val end = (start + sliceMs).coerceAtMost(duration)
+                entries += PreviewEntry(
+                    source(clip.sourceUri, clip.trimStartMs + start, clip.trimStartMs + end),
+                    clipIndex,
+                    outputStart,
+                    end - start,
                 )
-                .build()
-            add(PreviewEntry(item, clipIndex, outputStart, duration))
-            outputStart += duration
+                outputStart += end - start
+            }
+            return@forEachIndexed
         }
+        val plain = source(clip.sourceUri, clip.trimStartMs, clip.trimEndMs)
+        val mediaSource = if (videoOverride == null && audioOverride == null) {
+            plain
+        } else {
+            // Video and audio come from different files; each contributes only its own track.
+            val video = videoOverride?.let { source(it.uri, it.startMs, it.startMs + duration) } ?: plain
+            val audio = audioOverride?.let { source(it.uri, it.startMs, it.startMs + duration) }
+                ?: source(clip.sourceUri, clip.trimStartMs, clip.trimEndMs)
+            MergingMediaSource(
+                FilteringMediaSource(video, C.TRACK_TYPE_VIDEO),
+                FilteringMediaSource(audio, C.TRACK_TYPE_AUDIO),
+            )
+        }
+        entries += PreviewEntry(mediaSource, clipIndex, 0, duration)
     }
+    return entries
 }
 private fun clipIndexAt(project: EditProject, globalMs: Long): Int {
     var elapsed = 0L

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -64,6 +65,7 @@ internal fun EditorWorkspace(
     onPlayerView: (PlayerView) -> Unit,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    previewOverlay: @Composable BoxScope.() -> Unit = {},
 ) {
     var landscapeTab by remember { mutableIntStateOf(0) }
     BoxWithConstraints(modifier) {
@@ -81,6 +83,7 @@ internal fun EditorWorkspace(
                     onSplitClip = onSplitClip,
                     onResetPreview = onResetPreview,
                     onPlayerView = onPlayerView,
+                    previewOverlay = previewOverlay,
                     modifier = Modifier.weight(0.6f).fillMaxHeight(),
                 )
                 Box(Modifier.fillMaxHeight().width(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
@@ -144,6 +147,7 @@ internal fun EditorWorkspace(
                     onResetPreview = onResetPreview,
                     modifier = Modifier.fillMaxWidth().weight(0.5f),
                     onPlayerView = onPlayerView,
+                    previewOverlay = previewOverlay,
                 )
                 EditorTimeline(
                     viewModel = viewModel,
@@ -219,6 +223,7 @@ private fun PreviewPane(
     onResetPreview: () -> Unit,
     onPlayerView: (PlayerView) -> Unit,
     modifier: Modifier = Modifier,
+    previewOverlay: @Composable BoxScope.() -> Unit = {},
 ) {
     Column(modifier) {
         val currentClip = project.clips.getOrNull(currentClipIndex)
@@ -254,6 +259,7 @@ private fun PreviewPane(
                         update = { it.player = player },
                     )
                 }
+                previewOverlay()
             }
         }
         Row(

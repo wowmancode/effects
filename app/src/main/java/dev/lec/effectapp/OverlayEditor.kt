@@ -36,7 +36,7 @@ internal fun OverlayEditor(
 ) {
     HorizontalDivider(Modifier.padding(vertical = 12.dp))
     Text("Overlays", style = MaterialTheme.typography.titleMedium)
-    Text("Image and video overlays can animate position, size, and opacity and have their own effect stacks.")
+    Text("Image and video overlays can animate position, size, and opacity and have their own effect stacks. Drag an overlay in the preview to move it; with keyframes, this sets the keyframe at the playhead.")
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = { onAddOverlay(clip.id, false) }, modifier = Modifier.weight(1f)) {
             Text("+ Image")
@@ -70,7 +70,7 @@ internal fun OverlayEditor(
                 TextButton(onClick = { viewModel.removeOverlay(clip.id, overlay.id) }) { Text("Delete") }
             }
             if (overlay.isVideo) {
-                Text("The source video animates and loops during export. Preview uses its poster frame.", style = MaterialTheme.typography.bodySmall)
+                Text("The source video loops in the preview and export.", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(
                     onClick = { viewModel.updateOverlay(clip.id, overlay.id) { it.copy(includeAudio = !it.includeAudio) } },
                     modifier = Modifier.fillMaxWidth(),

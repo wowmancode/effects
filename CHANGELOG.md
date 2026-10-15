@@ -9,6 +9,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Reverse video and reverse audio are now truly reversed. Each reversed clip is
+  rendered once (cached) — video through an all-keyframe intermediate remuxed back
+  to front, audio decoded and written back to front — so the preview plays it
+  smoothly and the export is frame-accurate, instead of stitching one-frame slices.
+  If a device can't produce the intermediate, the old slicing is used as a fallback.
+- Overlays are drawn over the preview player in their export positions. Video
+  overlays now play (and loop) in sync with the preview, with their video effects,
+  and any overlay can be dragged on the preview to move it (sets the keyframe at
+  the playhead when the overlay is animated).
+- Gradient map: tap a color point to edit just that point; the settings list for
+  every point is gone.
+- Export has a "Start at (seconds)" setting, default 1, so the export can begin
+  part-way into the project.
 - Split pitch: the Elastique and a17 drums pitch methods are replaced by a single
   Drums unpitched method (expressfx_drums stretch-and-resample). Original is
   unchanged. Projects saved with either retired method open as Drums unpitched.

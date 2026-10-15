@@ -32,6 +32,7 @@ import dev.lec.effectapp.effects.videoPluginEffect
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.Overlay
+import dev.lec.effectapp.model.SourceOverride
 import dev.lec.effectapp.model.TimelineSegment
 import dev.lec.effectapp.model.TransformSettings
 import kotlin.math.ceil
@@ -63,15 +64,19 @@ object ProjectCompositionFactory {
                 else EditedMediaItemSequence.withAudioAndVideoFrom(items),
             )
         } else {
+            // A pre-reversed source (ReverseMediaCache) plays forward; without one, reverse falls
+            // back to one-frame slices in reverse order.
             val videoItems = project.clips.flatMap { clip ->
-                sourceSlices(clip, clip.reversesVideo(), clip.effectSegments, targetFrameRate).map { slice ->
-                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize)
+                val source = clip.videoOverride
+                sourceSlices(clip, source == null && clip.reversesVideo(), clip.effectSegments, targetFrameRate).map { slice ->
+                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source)
                 }
             }
             val audioItems = project.clips.flatMap { clip ->
                 // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
-                sourceSlices(clip, clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
-                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize)
+                val source = clip.audioOverride
+                sourceSlices(clip, source == null && clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
+                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source)
                 }
             }
             buildList {
@@ -191,13 +196,15 @@ object ProjectCompositionFactory {
         resolveBitmap: (String) -> Bitmap?,
         targetFrameRate: Int?,
         outputPresentationSize: Size?,
+        source: SourceOverride? = null,
     ): EditedMediaItem {
+        val sourceStartMs = source?.startMs ?: clip.trimStartMs
         val mediaItem = MediaItem.Builder()
-            .setUri(Uri.parse(clip.sourceUri))
+            .setUri(Uri.parse(source?.uri ?: clip.sourceUri))
             .setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(clip.trimStartMs + slice.startMs)
-                    .setEndPositionMs(clip.trimStartMs + slice.endMs)
+                    .setStartPositionMs(sourceStartMs + slice.startMs)
+                    .setEndPositionMs(sourceStartMs + slice.endMs)
                     .build(),
             )
             .build()
@@ -309,17 +316,20 @@ object ProjectCompositionFactory {
 
         var remainingMs = track.globalEndMs - track.globalStartMs
         val sourceDurationMs = track.overlay.sourceDurationMs.takeIf { it >= 100 } ?: remainingMs
+        // Loops the source; the first piece may start part-way in (export start trimming).
+        var pieceStartMs = track.overlay.sourceOffsetMs.coerceAtLeast(0) % sourceDurationMs.coerceAtLeast(1)
         while (remainingMs > 0) {
-            val pieceDurationMs = minOf(sourceDurationMs, remainingMs)
+            val pieceDurationMs = minOf(sourceDurationMs - pieceStartMs, remainingMs)
             val mediaItem = MediaItem.Builder()
                 .setUri(Uri.parse(track.overlay.sourceUri))
                 .setClippingConfiguration(
                     MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(0)
-                        .setEndPositionMs(pieceDurationMs)
+                        .setStartPositionMs(pieceStartMs)
+                        .setEndPositionMs(pieceStartMs + pieceDurationMs)
                         .build(),
                 )
                 .build()
+            pieceStartMs = 0
             val videoEffects = overlayTrackEffects(track, ihtxPresentationSize)
             val itemBuilder = EditedMediaItem.Builder(mediaItem)
                 .setRemoveAudio(true)
@@ -352,17 +362,20 @@ object ProjectCompositionFactory {
         if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
         var remainingMs = track.globalEndMs - track.globalStartMs
         val sourceDurationMs = track.overlay.sourceDurationMs.takeIf { it >= 100 } ?: remainingMs
+        // Loops the source; the first piece may start part-way in (export start trimming).
+        var pieceStartMs = track.overlay.sourceOffsetMs.coerceAtLeast(0) % sourceDurationMs.coerceAtLeast(1)
         while (remainingMs > 0) {
-            val pieceDurationMs = minOf(sourceDurationMs, remainingMs)
+            val pieceDurationMs = minOf(sourceDurationMs - pieceStartMs, remainingMs)
             val mediaItem = MediaItem.Builder()
                 .setUri(Uri.parse(track.overlay.sourceUri))
                 .setClippingConfiguration(
                     MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(0)
-                        .setEndPositionMs(pieceDurationMs)
+                        .setStartPositionMs(pieceStartMs)
+                        .setEndPositionMs(pieceStartMs + pieceDurationMs)
                         .build(),
                 )
                 .build()
+            pieceStartMs = 0
             val audioProcessors = track.overlay.audioSegments
                 .filter { it.enabled && it.effectId != "reverse_audio" }
                 .mapNotNull { audioProcessorFor(it, 0) }
