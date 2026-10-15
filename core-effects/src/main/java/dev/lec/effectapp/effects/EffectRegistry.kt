@@ -33,6 +33,7 @@ object EffectRegistry {
         FreezeFrameEffect(),
         MirrorFlipEffect(),
         MirrorEffect(),
+        FramePlacementEffect(),
         VolumeEffect(),
         AudioEchoEffect(),
         ChorusEffect(),

@@ -134,8 +134,34 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     val saveProject = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(viewModel.encode()) } }
     }
+    var opening by remember { mutableStateOf(false) }
     val loadProject = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> viewModel.load(reader.readText()) } }
+        uri ?: return@rememberLauncherForActivityResult
+        opening = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { ProjectOpener.open(context.applicationContext, uri) }
+            opening = false
+            when (result) {
+                is ProjectOpener.Result.Json -> runCatching { viewModel.load(result.text) }.onFailure {
+                    android.widget.Toast.makeText(context, "That file isn't a project effect-app can open.", android.widget.Toast.LENGTH_LONG).show()
+                }
+                is ProjectOpener.Result.Converted -> viewModel.loadProject(result.project, result.notes)
+                is ProjectOpener.Result.Failed ->
+                    android.widget.Toast.makeText(context, result.message, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    var pendingRelinkUri by remember { mutableStateOf<String?>(null) }
+    val locateMedia = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val oldUri = pendingRelinkUri
+        pendingRelinkUri = null
+        if (uri != null && oldUri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val metadata = editorMetadata(context, uri)
+            viewModel.relinkMedia(oldUri, uri.toString(), metadata.first, metadata.second)
+        }
     }
     val importPreset = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
@@ -376,6 +402,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             clip.sourceUri,
             clip.trimStartMs,
             clip.trimEndMs,
+            clip.speed,
             clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" },
             clip.audioSegments.any { it.enabled && it.effectId == "reverse_audio" },
         )
@@ -412,10 +439,28 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             if (entry != null && project.clips.getOrNull(currentClipIndex)?.mediaMissing != true) {
                 currentClipIndex = entry.clipIndex
                 playerPositionMs = project.clips.take(entry.clipIndex).sumOf { it.durationMs } +
-                    entry.outputStartMs + player.currentPosition.coerceIn(0, entry.durationMs)
+                    entry.outputStartMs + entry.timelineMs(player.currentPosition)
             }
             delay(80)
         }
+    }
+    // Each playlist item plays at its clip's speed.
+    val latestEntries by rememberUpdatedState(previewEntries)
+    DisposableEffect(player) {
+        fun applySpeed() {
+            val speed = latestEntries.getOrNull(player.currentMediaItemIndex)?.speed ?: 1f
+            if (player.playbackParameters.speed != speed) player.setPlaybackSpeed(speed)
+        }
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = applySpeed()
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) = applySpeed()
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+    LaunchedEffect(player, previewEntries) {
+        val speed = previewEntries.getOrNull(player.currentMediaItemIndex)?.speed ?: 1f
+        if (player.playbackParameters.speed != speed) player.setPlaybackSpeed(speed)
     }
     val previewClip = project.clips.getOrNull(currentClipIndex)
     LaunchedEffect(previewAudioProcessor, previewClip?.audioSegments) {
@@ -518,7 +563,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                         TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↶", fontSize = 18.sp) }
                         TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↷", fontSize = 18.sp) }
                     }
-                    TextButton(onClick = { loadProject.launch(arrayOf("application/json")) }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Load", fontSize = 10.sp) }
+                    TextButton(onClick = { loadProject.launch(arrayOf("*/*")) }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Load", fontSize = 10.sp) }
                     TextButton(
                         onClick = {
                             project.clips.getOrNull(currentClipIndex)?.let { clip ->
@@ -612,7 +657,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                     localTimeMs = {
                         val entry = previewEntries.getOrNull(player.currentMediaItemIndex)
                         if (entry != null && entry.clipIndex == currentClipIndex) {
-                            entry.outputStartMs + player.currentPosition.coerceIn(0, entry.durationMs)
+                            entry.outputStartMs + entry.timelineMs(player.currentPosition)
                         } else previewLocalMs
                     },
                     onDragStart = viewModel::beginGesture,
@@ -631,6 +676,33 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             },
         )
     }
+    }
+
+    val missingMedia by viewModel.missingMedia.collectAsState()
+    val openNotes by viewModel.openNotes.collectAsState()
+    val missingPrompt by viewModel.missingPrompt.collectAsState()
+    var dismissedPrompt by remember { mutableIntStateOf(-1) }
+    if ((missingMedia.isNotEmpty() || openNotes.isNotEmpty()) && dismissedPrompt != missingPrompt) {
+        MissingMediaDialog(
+            missing = missingMedia,
+            notes = openNotes,
+            onLocate = { media ->
+                pendingRelinkUri = media.uri
+                locateMedia.launch(arrayOf("video/*", "audio/*", "image/*"))
+            },
+            onDismiss = {
+                dismissedPrompt = missingPrompt
+                viewModel.dismissOpenNotes()
+            },
+        )
+    }
+    if (opening) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Opening project…") },
+            text = { Text("This can take a moment for large projects.") },
+            confirmButton = {},
+        )
     }
 
     pendingSegment?.let { pending ->
@@ -838,7 +910,8 @@ internal fun seekGlobal(player: ExoPlayer, project: EditProject, globalMs: Long)
     var cursor = 0L
     project.clips.forEachIndexed { index, clip ->
         if (globalMs < cursor + clip.durationMs || index == project.clips.lastIndex) {
-            player.seekTo(index, (globalMs - cursor).coerceIn(0, clip.durationMs))
+            val localMs = (globalMs - cursor).coerceIn(0, clip.durationMs)
+            player.seekTo(index, (localMs * clip.playbackSpeed.toDouble()).toLong())
             return
         }
         cursor += clip.durationMs
@@ -873,7 +946,15 @@ private data class PreviewEntry(
     val clipIndex: Int,
     val outputStartMs: Long,
     val durationMs: Long,
-)
+    /** Playback speed; the player's position runs speed× faster than the timeline. */
+    val speed: Float = 1f,
+) {
+    /** Timeline ms into this entry for a player position (media time). */
+    fun timelineMs(playerPositionMs: Long): Long = (playerPositionMs / speed).toLong().coerceIn(0, durationMs)
+
+    /** Player position (media time) for [timelineMs] into this entry. */
+    fun playerMs(timelineMs: Long): Long = (timelineMs.coerceAtLeast(0) * speed).toLong()
+}
 
 @OptIn(UnstableApi::class)
 private suspend fun buildPreviewEntries(context: Context, project: EditProject): List<PreviewEntry> {
@@ -916,7 +997,7 @@ private suspend fun buildPreviewEntries(context: Context, project: EditProject):
             }
             return@forEachIndexed
         }
-        val plain = source(clip.sourceUri, clip.trimStartMs, clip.trimEndMs)
+        val plain = source(clip.sourceUri, clip.trimStartMs, clip.sourceEndMs)
         val mediaSource = if (videoOverride == null && audioOverride == null) {
             plain
         } else {
@@ -929,7 +1010,9 @@ private suspend fun buildPreviewEntries(context: Context, project: EditProject):
                 FilteringMediaSource(audio, C.TRACK_TYPE_AUDIO),
             )
         }
-        entries += PreviewEntry(mediaSource, clipIndex, 0, duration)
+        // Reversed renders play at normal speed (see ProjectCompositionFactory).
+        val speed = if (videoOverride == null && audioOverride == null) clip.playbackSpeed else 1f
+        entries += PreviewEntry(mediaSource, clipIndex, 0, duration, speed)
     }
     return entries
 }
@@ -961,7 +1044,7 @@ private fun seekPreview(
     val indexedEntry = entries.withIndex().firstOrNull { (_, entry) ->
         entry.clipIndex == clipIndex && localMs < entry.outputStartMs + entry.durationMs
     } ?: entries.withIndex().lastOrNull { it.value.clipIndex == clipIndex } ?: return
-    player.seekTo(indexedEntry.index, (localMs - indexedEntry.value.outputStartMs).coerceAtLeast(0))
+    player.seekTo(indexedEntry.index, indexedEntry.value.playerMs(localMs - indexedEntry.value.outputStartMs))
 }
 
 
@@ -1027,4 +1110,39 @@ private suspend fun capturePresetThumbnail(context: Context, playerView: android
         bitmap.recycle()
         file.absolutePath
     }
+}
+
+/** Lists media the project needs that this device can't open, each with a button to find it. */
+@Composable
+private fun MissingMediaDialog(
+    missing: List<MissingMedia>,
+    notes: List<String>,
+    onLocate: (MissingMedia) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (missing.isNotEmpty()) "Find media" else "Project opened") },
+        text = {
+            Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                notes.forEach { note -> Text("• $note", style = MaterialTheme.typography.bodySmall) }
+                if (notes.isNotEmpty() && missing.isNotEmpty()) Spacer(Modifier.height(12.dp))
+                if (missing.isNotEmpty()) {
+                    Text(
+                        "These files aren't on this device yet. Pick each one; every part of the project " +
+                            "that uses it is updated and keeps its timing.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                missing.forEach { media ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(media.name, modifier = Modifier.weight(1f), maxLines = 2)
+                        TextButton(onClick = { onLocate(media) }) { Text("Find") }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(if (missing.isEmpty()) "OK" else "Later") } },
+    )
 }

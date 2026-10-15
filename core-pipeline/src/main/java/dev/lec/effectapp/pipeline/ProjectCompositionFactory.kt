@@ -9,6 +9,7 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.OverlaySettings
 import androidx.media3.common.VideoCompositorSettings
+import androidx.media3.common.audio.SpeedProvider
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BitmapOverlay
@@ -38,11 +39,21 @@ import dev.lec.effectapp.model.TransformSettings
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 @OptIn(UnstableApi::class)
 object ProjectCompositionFactory {
     private const val MIN_REVERSE_SLICE_MS = 80L
     private const val MAX_REVERSE_SLICES = 600L
+
+    /** Size every frame-filling overlay is normalised to before it is stretched over the frame. */
+    private val FILL_FRAME_SIZE = Size(1280, 720)
+
+    private fun constantSpeed(speed: Float): SpeedProvider = object : SpeedProvider {
+        override fun getSpeed(timeUs: Long): Float = speed
+
+        override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
+    }
 
     fun create(
         project: EditProject,
@@ -93,14 +104,21 @@ object ProjectCompositionFactory {
             )
         } ?: emptyList()
         val ihtxPresentationSize = overlayAspectRatio?.let(::createIhtxPresentationSize)
-        val videoOverlays = videoOverlayTracks(project)
-        if (videoOverlays.isEmpty()) return Composition.Builder(baseSequences + durationAnchorSequences).build()
-        val overlaySequences = videoOverlays.map { videoOverlaySequence(it, project.durationMs, targetFrameRate, ihtxPresentationSize) }
-        val overlayAudioSequences = videoOverlays.filter { it.overlay.isVideo && it.overlay.includeAudio }
-            .map { audioOverlaySequence(it, project.durationMs) }
-        return Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences + durationAnchorSequences)
-            .setVideoCompositorSettings(OverlayVideoCompositorSettings(videoOverlays, ihtxPresentationSize, ihtxOutputSize))
-            .build()
+        val overlayTracks = overlayTracks(project)
+        // Pictures: one sequence (one decoder) per lane, top lane first.
+        val videoLanes = lanes(overlayTracks.filterNot { it.overlay.audioOnly })
+        // Sound: overlay videos with their audio switched on, and sound-only overlays.
+        val audioLanes = lanes(overlayTracks.filter { it.overlay.audioOnly || (it.overlay.isVideo && it.overlay.includeAudio) })
+        if (videoLanes.isEmpty() && audioLanes.isEmpty()) {
+            return Composition.Builder(baseSequences + durationAnchorSequences).build()
+        }
+        val overlaySequences = videoLanes.map { laneVideoSequence(it, project.durationMs, targetFrameRate, ihtxPresentationSize) }
+        val overlayAudioSequences = audioLanes.map { laneAudioSequence(it, project.durationMs) }
+        val builder = Composition.Builder(overlaySequences + overlayAudioSequences + baseSequences + durationAnchorSequences)
+        if (videoLanes.isNotEmpty()) {
+            builder.setVideoCompositorSettings(OverlayVideoCompositorSettings(videoLanes, ihtxPresentationSize, ihtxOutputSize))
+        }
+        return builder.build()
     }
 
     fun videoEffects(
@@ -157,7 +175,7 @@ object ProjectCompositionFactory {
     internal fun overlayEffect(clip: Clip, resolveBitmap: (String) -> Bitmap?, includeVideoPosters: Boolean): Effect? {
         if (clip.overlays.isEmpty()) return null
         val overlays: List<TextureOverlay> = clip.overlays.asReversed().mapNotNull { overlay ->
-            if (!includeVideoPosters) return@mapNotNull null
+            if (!includeVideoPosters || overlay.audioOnly) return@mapNotNull null
             val bitmap = resolveBitmap(overlay.sourceUri) ?: return@mapNotNull null
             val endMs = if (overlay.endMs <= overlay.startMs) clip.durationMs else overlay.endMs
             TimedBitmapOverlay(bitmap, overlay, overlay.startMs * 1_000, endMs * 1_000)
@@ -198,13 +216,16 @@ object ProjectCompositionFactory {
         outputPresentationSize: Size?,
         source: SourceOverride? = null,
     ): EditedMediaItem {
-        val sourceStartMs = source?.startMs ?: clip.trimStartMs
+        // Reversed media is rendered at normal speed; otherwise the clip reads speed× as much source.
+        val speed = if (source == null) clip.playbackSpeed else 1f
+        val startPositionMs = source?.let { it.startMs + slice.startMs } ?: clip.sourceMsAt(slice.startMs)
+        val endPositionMs = source?.let { it.startMs + slice.endMs } ?: clip.sourceMsAt(slice.endMs)
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(source?.uri ?: clip.sourceUri))
             .setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(sourceStartMs + slice.startMs)
-                    .setEndPositionMs(sourceStartMs + slice.endMs)
+                    .setStartPositionMs(startPositionMs)
+                    .setEndPositionMs(endPositionMs.coerceAtLeast(startPositionMs + 1))
                     .build(),
             )
             .build()
@@ -238,6 +259,7 @@ object ProjectCompositionFactory {
             .setRemoveAudio(!includeAudio)
             .setRemoveVideo(!includeVideo)
             .setEffects(effects)
+        if (speed != 1f) builder.setSpeed(constantSpeed(speed))
         if (includeVideo && targetFrameRate != null) builder.setFrameRate(targetFrameRate)
         return builder.build()
     }
@@ -275,7 +297,7 @@ object ProjectCompositionFactory {
         return slices.asReversed()
     }
 
-    private fun videoOverlayTracks(project: EditProject): List<VideoOverlayTrack> = buildList {
+    private fun overlayTracks(project: EditProject): List<VideoOverlayTrack> = buildList {
         var clipStartMs = 0L
         project.clips.forEach { clip ->
             clip.overlays.forEach { overlay ->
@@ -296,55 +318,120 @@ object ProjectCompositionFactory {
         }
     }
 
-    private fun videoOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long, targetFrameRate: Int?, ihtxPresentationSize: Size?): EditedMediaItemSequence {
+    /**
+     * Groups overlays into lanes, each played as one sequence. Overlays with the same lane number
+     * share one (split further only if two of them overlap); lane 0 comes first, so it's drawn on
+     * top. Overlays without a lane each get their own, after the numbered ones, in project order.
+     */
+    private fun lanes(tracks: List<VideoOverlayTrack>): List<List<VideoOverlayTrack>> {
+        val pooled = tracks.filter { it.overlay.lane >= 0 }
+            .groupBy { it.overlay.lane }
+            .toSortedMap()
+            .values
+            .flatMap { group ->
+                val subLanes = mutableListOf<MutableList<VideoOverlayTrack>>()
+                group.sortedBy { it.globalStartMs }.forEach { track ->
+                    val free = subLanes.firstOrNull { it.last().globalEndMs <= track.globalStartMs }
+                    if (free != null) free += track else subLanes += mutableListOf(track)
+                }
+                subLanes
+            }
+        val single = tracks.filter { it.overlay.lane < 0 }.map { listOf(it) }
+        return pooled + single
+    }
+
+    /** One stretch of an overlay: [startMs, endMs) local to the overlay, read from [sourceStartMs]. */
+    private data class OverlayPiece(val startMs: Long, val endMs: Long, val sourceStartMs: Long)
+
+    /**
+     * Cuts an overlay into pieces at loop points (a source shorter than the overlay restarts from
+     * its beginning, as before) and, when its effects are keyframed, at animation steps so each
+     * piece can carry its own effect values.
+     */
+    private fun overlayPieces(track: VideoOverlayTrack, playsSource: Boolean, segments: List<TimelineSegment>): List<OverlayPiece> {
+        val overlay = track.overlay
+        val durationMs = track.globalEndMs - track.globalStartMs
+        val speed = overlay.playbackSpeed.toDouble()
+        val keyframed = segments.any { it.enabled && it.keyframes.isNotEmpty() }
+        val boundaries = sortedSetOf(0L, durationMs)
+        if (keyframed) {
+            segments.flatMap { it.keyframes }.map { it.timeMs }.filter { it in 1 until durationMs }.forEach { boundaries += it }
+            val stepMs = max(40L, ceil(durationMs / 300.0).toLong())
+            var t = stepMs
+            while (t < durationMs) { boundaries += t; t += stepMs }
+        }
+        val sourceDurationMs = overlay.sourceDurationMs.takeIf { playsSource && it >= 100 }
+        val pieces = mutableListOf<OverlayPiece>()
+        // The overlay may begin part-way into its clip-local range (export start trimming).
+        val first = overlay.sourceStartMs + overlay.sourceOffsetMs
+        boundaries.toList().zipWithNext().forEach { (from, to) ->
+            var t = from
+            while (t < to) {
+                val raw = first + (t * speed).roundToLong()
+                val source = if (sourceDurationMs != null) raw.mod(sourceDurationMs) else raw
+                var end = to
+                if (sourceDurationMs != null) {
+                    // Where the source runs out and loops, in overlay time.
+                    val untilLoop = ((sourceDurationMs - source) / speed).roundToLong().coerceAtLeast(1)
+                    end = minOf(to, t + untilLoop)
+                }
+                pieces += OverlayPiece(t, end, source)
+                t = end
+            }
+        }
+        return pieces
+    }
+
+    private fun laneVideoSequence(
+        lane: List<VideoOverlayTrack>,
+        projectDurationMs: Long,
+        targetFrameRate: Int?,
+        ihtxPresentationSize: Size?,
+    ): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
-        if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
-
-        if (!track.overlay.isVideo) {
-            val durationMs = track.globalEndMs - track.globalStartMs
-            val imageItem = EditedMediaItem.Builder(MediaItem.fromUri(Uri.parse(track.overlay.sourceUri)))
-                .setDurationUs(durationMs * 1_000)
-                .setFrameRate(targetFrameRate ?: 30)
-                .setRemoveAudio(true)
-                .setEffects(Effects(emptyList(), overlayTrackEffects(track, ihtxPresentationSize)))
-                .build()
-            builder.addItem(imageItem)
-            val trailingGapMs = projectDurationMs - track.globalEndMs
-            if (trailingGapMs > 0) builder.addGap(trailingGapMs * 1_000)
-            return builder.build()
+        var cursorMs = 0L
+        lane.sortedBy { it.globalStartMs }.forEach { track ->
+            if (track.globalStartMs > cursorMs) builder.addGap((track.globalStartMs - cursorMs) * 1_000)
+            val overlay = track.overlay
+            val segments = overlay.effectSegments.filter { it.enabled }
+            overlayPieces(track, overlay.isVideo, segments).forEach { piece ->
+                val effects = Effects(emptyList(), overlayTrackEffects(track, piece.startMs, ihtxPresentationSize))
+                val pieceMs = piece.endMs - piece.startMs
+                val item = if (!overlay.isVideo) {
+                    EditedMediaItem.Builder(MediaItem.fromUri(Uri.parse(overlay.sourceUri)))
+                        .setDurationUs(pieceMs * 1_000)
+                        .setFrameRate(targetFrameRate ?: 30)
+                        .setRemoveAudio(true)
+                        .setEffects(effects)
+                        .build()
+                } else {
+                    val speed = overlay.playbackSpeed
+                    val mediaItem = MediaItem.Builder()
+                        .setUri(Uri.parse(overlay.sourceUri))
+                        .setClippingConfiguration(
+                            MediaItem.ClippingConfiguration.Builder()
+                                .setStartPositionMs(piece.sourceStartMs)
+                                .setEndPositionMs(piece.sourceStartMs + (pieceMs * speed.toDouble()).roundToLong().coerceAtLeast(1))
+                                .build(),
+                        )
+                        .build()
+                    val itemBuilder = EditedMediaItem.Builder(mediaItem)
+                        .setRemoveAudio(true)
+                        .setEffects(effects)
+                    if (speed != 1f) itemBuilder.setSpeed(constantSpeed(speed))
+                    if (targetFrameRate != null) itemBuilder.setFrameRate(targetFrameRate)
+                    itemBuilder.build()
+                }
+                builder.addItem(item)
+            }
+            cursorMs = track.globalEndMs
         }
-
-        var remainingMs = track.globalEndMs - track.globalStartMs
-        val sourceDurationMs = track.overlay.sourceDurationMs.takeIf { it >= 100 } ?: remainingMs
-        // Loops the source; the first piece may start part-way in (export start trimming).
-        var pieceStartMs = track.overlay.sourceOffsetMs.coerceAtLeast(0) % sourceDurationMs.coerceAtLeast(1)
-        while (remainingMs > 0) {
-            val pieceDurationMs = minOf(sourceDurationMs - pieceStartMs, remainingMs)
-            val mediaItem = MediaItem.Builder()
-                .setUri(Uri.parse(track.overlay.sourceUri))
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(pieceStartMs)
-                        .setEndPositionMs(pieceStartMs + pieceDurationMs)
-                        .build(),
-                )
-                .build()
-            pieceStartMs = 0
-            val videoEffects = overlayTrackEffects(track, ihtxPresentationSize)
-            val itemBuilder = EditedMediaItem.Builder(mediaItem)
-                .setRemoveAudio(true)
-                .setEffects(Effects(emptyList(), videoEffects))
-            if (targetFrameRate != null) itemBuilder.setFrameRate(targetFrameRate)
-            builder.addItem(itemBuilder.build())
-            remainingMs -= pieceDurationMs
-        }
-
-        val trailingGapMs = projectDurationMs - track.globalEndMs
-        if (trailingGapMs > 0) builder.addGap(trailingGapMs * 1_000)
+        if (projectDurationMs > cursorMs) builder.addGap((projectDurationMs - cursorMs) * 1_000)
         return builder.build()
     }
 
-    private fun overlayTrackEffects(track: VideoOverlayTrack, ihtxPresentationSize: Size?): List<Effect> = buildList {
+    /** The overlay's video effects at [localMs] into it, then any layout normalisation. */
+    private fun overlayTrackEffects(track: VideoOverlayTrack, localMs: Long, ihtxPresentationSize: Size?): List<Effect> = buildList {
         if (track.overlay.ihtxLayout && ihtxPresentationSize != null) {
             add(Presentation.createForWidthAndHeight(
                 ihtxPresentationSize.width,
@@ -353,47 +440,50 @@ object ProjectCompositionFactory {
             ))
         }
         track.overlay.effectSegments.filter { it.enabled }.forEach { segment ->
-            segmentVideoEffect(segment, 0, waitForVideoMapFrames = true)?.let(::add)
+            segmentVideoEffect(segment, localMs, waitForVideoMapFrames = true)?.let(::add)
+        }
+        if (track.overlay.fillFrame) {
+            // Every frame-filling overlay arrives at one known size, which the compositor then
+            // stretches over the output frame (sizes can differ between items of a lane).
+            add(Presentation.createForWidthAndHeight(FILL_FRAME_SIZE.width, FILL_FRAME_SIZE.height, Presentation.LAYOUT_STRETCH_TO_FIT))
         }
     }
 
-    private fun audioOverlaySequence(track: VideoOverlayTrack, projectDurationMs: Long): EditedMediaItemSequence {
+    private fun laneAudioSequence(lane: List<VideoOverlayTrack>, projectDurationMs: Long): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
-        if (track.globalStartMs > 0) builder.addGap(track.globalStartMs * 1_000)
-        var remainingMs = track.globalEndMs - track.globalStartMs
-        val sourceDurationMs = track.overlay.sourceDurationMs.takeIf { it >= 100 } ?: remainingMs
-        // Loops the source; the first piece may start part-way in (export start trimming).
-        var pieceStartMs = track.overlay.sourceOffsetMs.coerceAtLeast(0) % sourceDurationMs.coerceAtLeast(1)
-        while (remainingMs > 0) {
-            val pieceDurationMs = minOf(sourceDurationMs - pieceStartMs, remainingMs)
-            val mediaItem = MediaItem.Builder()
-                .setUri(Uri.parse(track.overlay.sourceUri))
-                .setClippingConfiguration(
-                    MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(pieceStartMs)
-                        .setEndPositionMs(pieceStartMs + pieceDurationMs)
-                        .build(),
-                )
-                .build()
-            pieceStartMs = 0
-            val audioProcessors = track.overlay.audioSegments
-                .filter { it.enabled && it.effectId != "reverse_audio" }
-                .mapNotNull { audioProcessorFor(it, 0) }
-            builder.addItem(
-                EditedMediaItem.Builder(mediaItem)
+        var cursorMs = 0L
+        lane.sortedBy { it.globalStartMs }.forEach { track ->
+            if (track.globalStartMs > cursorMs) builder.addGap((track.globalStartMs - cursorMs) * 1_000)
+            val overlay = track.overlay
+            val speed = overlay.playbackSpeed
+            overlayPieces(track, playsSource = true, segments = emptyList()).forEach { piece ->
+                val pieceMs = piece.endMs - piece.startMs
+                val mediaItem = MediaItem.Builder()
+                    .setUri(Uri.parse(overlay.sourceUri))
+                    .setClippingConfiguration(
+                        MediaItem.ClippingConfiguration.Builder()
+                            .setStartPositionMs(piece.sourceStartMs)
+                            .setEndPositionMs(piece.sourceStartMs + (pieceMs * speed.toDouble()).roundToLong().coerceAtLeast(1))
+                            .build(),
+                    )
+                    .build()
+                val audioProcessors = overlay.audioSegments
+                    .filter { it.enabled && it.effectId != "reverse_audio" }
+                    .mapNotNull { audioProcessorFor(it, piece.startMs) }
+                val itemBuilder = EditedMediaItem.Builder(mediaItem)
                     .setRemoveVideo(true)
                     .setEffects(Effects(audioProcessors, emptyList()))
-                    .build(),
-            )
-            remainingMs -= pieceDurationMs
+                if (speed != 1f) itemBuilder.setSpeed(constantSpeed(speed))
+                builder.addItem(itemBuilder.build())
+            }
+            cursorMs = track.globalEndMs
         }
-        val trailingGapMs = projectDurationMs - track.globalEndMs
-        if (trailingGapMs > 0) builder.addGap(trailingGapMs * 1_000)
+        if (projectDurationMs > cursorMs) builder.addGap((projectDurationMs - cursorMs) * 1_000)
         return builder.build()
     }
 
     private class OverlayVideoCompositorSettings(
-        private val overlays: List<VideoOverlayTrack>,
+        private val lanes: List<List<VideoOverlayTrack>>,
         private val ihtxPresentationSize: Size?,
         private val ihtxOutputSize: Size?,
     ) : VideoCompositorSettings {
@@ -402,17 +492,27 @@ object ProjectCompositionFactory {
 
         override fun getOutputSize(inputSizes: List<Size>): Size {
             this.inputSizes = inputSizes
-            return inputSizes.getOrElse(overlays.size) { inputSizes.first() }.also { outputSize = it }
+            return inputSizes.getOrElse(lanes.size) { inputSizes.first() }.also { outputSize = it }
         }
 
         override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings {
-            val track = overlays.getOrNull(inputId) ?: return StaticOverlaySettings.Builder().build()
-            val visible = presentationTimeUs in (track.globalStartMs * 1_000) until (track.globalEndMs * 1_000)
+            val lane = lanes.getOrNull(inputId) ?: return StaticOverlaySettings.Builder().build()
+            val track = lane.firstOrNull { presentationTimeUs in (it.globalStartMs * 1_000) until (it.globalEndMs * 1_000) }
+                ?: return HIDDEN
             val localTimeMs = (presentationTimeUs / 1_000 - track.globalStartMs + track.overlay.startMs).coerceAtLeast(0)
             val animated = track.overlay.valuesAt(localTimeMs)
+            val frameSize = if (track.overlay.ihtxLayout) ihtxOutputSize ?: outputSize else outputSize
+            if (track.overlay.fillFrame && frameSize != null) {
+                return StaticOverlaySettings.Builder()
+                    .setAlphaScale(animated.alpha.coerceIn(0f, 1f))
+                    .setScale(
+                        frameSize.width.toFloat() / FILL_FRAME_SIZE.width,
+                        frameSize.height.toFloat() / FILL_FRAME_SIZE.height,
+                    )
+                    .build()
+            }
             val scale = animated.scale.coerceAtLeast(0.01f)
             val inputSize = if (track.overlay.ihtxLayout) ihtxPresentationSize else inputSizes.getOrNull(inputId)
-            val frameSize = if (track.overlay.ihtxLayout) ihtxOutputSize ?: outputSize else outputSize
             val scaleX = if (track.overlay.ihtxLayout && inputSize != null && frameSize != null) {
                 scale * frameSize.width.toFloat() / inputSize.width.toFloat()
             } else scale
@@ -420,13 +520,17 @@ object ProjectCompositionFactory {
                 scale * frameSize.height.toFloat() / inputSize.height.toFloat()
             } else scale
             return StaticOverlaySettings.Builder()
-                .setAlphaScale(if (visible) animated.alpha.coerceIn(0f, 1f) else 0f)
+                .setAlphaScale(animated.alpha.coerceIn(0f, 1f))
                 .setScale(scaleX, scaleY)
                 .setBackgroundFrameAnchor(
                     animated.offsetX.coerceIn(-1f, 1f),
                     animated.offsetY.coerceIn(-1f, 1f),
                 )
                 .build()
+        }
+
+        private companion object {
+            val HIDDEN: StaticOverlaySettings = StaticOverlaySettings.Builder().setAlphaScale(0f).build()
         }
     }
 

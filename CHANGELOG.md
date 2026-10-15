@@ -30,6 +30,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Load opens layered projects from other editors as well as effect-app projects. Each layer
+  becomes an overlay that keeps its in-point, speed, crop window and position; sounds become
+  sound-only overlays, with pitch shifts. Solid colours, text and noise layers are drawn as
+  images. A "Find media" list asks for each file the project uses, once: every cut of that
+  file is relinked with its timing kept. Layers that need blend modes, fades and track-wide
+  effects aren't carried over yet, and the app says so after opening.
+- Overlays can start part-way into their video or sound, play at another speed, share a lane
+  (one player per lane in export, so dense projects stay light), play sound only, and fill the
+  frame. Clips can play at another speed.
+- Crop & place effect: crops a window out of the picture and places it anywhere in the frame,
+  transparent around it, so layers underneath show through.
+- Replacing a clip whose media is missing now relinks every clip and overlay that used that
+  file and keeps their in-points, instead of resetting the clip to the whole new file.
+
 - Moving video overlays during export, with timeline positioning, opacity, scale,
   position, automatic looping, and reorderable layer priority. The editor preview
   uses a still poster to keep playback lightweight.

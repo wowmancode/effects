@@ -1,6 +1,21 @@
 # HANDOFF: open layered desktop-editor projects (.veg) in effect-app
 
-Status: **research done, no app code written yet.** Nothing committed or pushed.
+Status: **implemented, not yet compiled on CI.** All code below is in the working tree of branch
+`agent/veg-import-handoff` (uncommitted). The pure-Kotlin reader and importer compile locally with
+`kotlinc` and pass `core-model/src/test/.../veg/VegImporterTest.kt` (6 tests). On the test project
+they give 85 clips over 13.09 s with lanes for every layer. Android code (effect, pipeline, app) has
+only been reviewed by eye: push and read CI next.
+
+Files added: `core-model/.../model/veg/{VegReader,VegImporter,LayerShaders}.kt`,
+`core-effects/.../FramePlacementEffect.kt`, `app/.../ProjectOpener.kt`, and the test.
+Files changed: `ProjectModels.kt` (Clip.speed; Overlay sourceStartMs/speed/audioOnly/lane/fillFrame;
+`relinkSource`), `ProjectCompositionFactory.kt` (lanes, speed, sound-only, fill frame),
+`ProjectExporter.kt` (speed-aware trimming), `EditorViewModel.kt` (loadProject, relinkMedia,
+missingMedia/openNotes), `EditorScreen.kt` (open any file, Find media dialog, preview speed),
+`PreviewOverlays.kt` (players per lane, in-point/speed, placed images, sound-only), registry and
+CHANGELOG.
+
+Original status: research done, no app code written yet. Nothing committed or pushed.
 
 ## Goal (from the owner)
 

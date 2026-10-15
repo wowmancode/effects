@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.view.TextureView
 import androidx.annotation.OptIn
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -106,9 +107,10 @@ internal fun PreviewOverlayLayer(
         val rectLeft = (containerWidth - rectWidth) / 2f
         val rectTop = (containerHeight - rectHeight) / 2f
 
-        // overlays[0] is the top layer, so draw the list back to front.
-        clip.overlays.asReversed().forEach { overlay ->
-            androidx.compose.runtime.key(overlay.id) {
+        // overlays[0] is the top layer, so draw the list back to front. Overlays in a lane share
+        // one key, so their player carries on from clip to clip instead of starting over.
+        clip.overlays.asReversed().filterNot { it.audioOnly }.forEach { overlay ->
+            androidx.compose.runtime.key(overlay.previewKey()) {
                 OverlayItem(
                     overlay = overlay,
                     clipDurationMs = clip.durationMs,
@@ -123,8 +125,15 @@ internal fun PreviewOverlayLayer(
                 )
             }
         }
+        clip.overlays.filter { it.audioOnly }.forEach { overlay ->
+            androidx.compose.runtime.key(overlay.previewKey()) {
+                OverlayAudio(overlay, clip.durationMs, timeMs, mainPlaying)
+            }
+        }
     }
 }
+
+private fun Overlay.previewKey(): String = if (lane >= 0) "lane:$lane" else id
 
 private data class OverlayRect(val left: Float, val top: Float, val width: Float, val height: Float)
 
@@ -143,15 +152,19 @@ private fun OverlayItem(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val overlaySize = rememberPixelSize(context, overlay.sourceUri, overlay.isVideo) ?: return
+    val overlaySize = if (overlay.fillFrame) backgroundSize
+    else rememberPixelSize(context, overlay.sourceUri, overlay.isVideo) ?: return
     val endMs = if (overlay.endMs <= overlay.startMs) clipDurationMs else overlay.endMs
     val visible = timeMs in overlay.startMs until endMs
     val values = overlay.valuesAt(timeMs)
-    val scale = values.scale.coerceAtLeast(0.01f)
+    val scale = if (overlay.fillFrame) 1f else values.scale.coerceAtLeast(0.01f)
     val width = rect.width * overlaySize.width / backgroundSize.width.coerceAtLeast(1) * scale
     val height = rect.height * overlaySize.height / backgroundSize.height.coerceAtLeast(1) * scale
-    val centerX = rect.left + (values.offsetX.coerceIn(-1f, 1f) + 1f) / 2f * rect.width
-    val centerY = rect.top + (1f - values.offsetY.coerceIn(-1f, 1f)) / 2f * rect.height
+    // A frame-filling overlay covers the picture; its placement is done by its effects.
+    val centerX = if (overlay.fillFrame) rect.left + rect.width / 2f
+    else rect.left + (values.offsetX.coerceIn(-1f, 1f) + 1f) / 2f * rect.width
+    val centerY = if (overlay.fillFrame) rect.top + rect.height / 2f
+    else rect.top + (1f - values.offsetY.coerceIn(-1f, 1f)) / 2f * rect.height
     val alpha = if (visible) values.alpha.coerceIn(0f, 1f) else 0f
     var dragging by remember { mutableStateOf(false) }
     val latestValues by rememberUpdatedState(values)
@@ -167,7 +180,7 @@ private fun OverlayItem(
         .size(with(density) { width.toDp() }, with(density) { height.toDp() })
         .then(if (dragging) Modifier.border(2.dp, Color.Yellow) else Modifier)
         // Hidden overlays (outside their time range) let touches through to the player.
-        .then(if (!visible) Modifier else Modifier.pointerInput(overlay.id) {
+        .then(if (!visible || overlay.fillFrame) Modifier else Modifier.pointerInput(overlay.id) {
             var x = 0f
             var y = 0f
             var time = 0L
@@ -205,16 +218,51 @@ private fun OverlayItem(
     if (overlay.isVideo) {
         OverlayVideo(overlay, clipDurationMs, timeMs, mainPlaying, visible, alpha, modifier)
     } else {
-        OverlayImage(context, overlay.sourceUri, alpha, modifier)
+        OverlayImage(context, overlay, timeMs, alpha, modifier)
     }
 }
 
 @Composable
-private fun OverlayImage(context: Context, uri: String, alpha: Float, modifier: Modifier) {
+private fun OverlayImage(context: Context, overlay: Overlay, timeMs: Long, alpha: Float, modifier: Modifier) {
+    val uri = overlay.sourceUri
     val bitmap by produceState<Bitmap?>(null, uri) {
         value = withContext(Dispatchers.IO) { OverlayBitmapCache.get(context.applicationContext, uri) }
     }
+    val placement = overlay.effectSegments.firstOrNull { it.enabled && it.effectId == "frame_place" }
     Box(modifier) {
+        val image = bitmap
+        if (image != null && placement != null) {
+            // Same crop-and-place as the export's frame_place effect (without the window turn).
+            val p = placement.paramsAt((timeMs - overlay.startMs).coerceAtLeast(0))
+            val imageBitmap = image.asImageBitmap()
+            Canvas(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }) {
+                fun v(key: String, fallback: Float) = p[key]?.takeIf(Float::isFinite) ?: fallback
+                val srcW = kotlin.math.abs(v("src_w", 1f)) * image.width
+                val srcH = kotlin.math.abs(v("src_h", 1f)) * image.height
+                val srcLeft = v("src_cx", 0.5f) * image.width - srcW / 2f
+                val srcTop = v("src_cy", 0.5f) * image.height - srcH / 2f
+                // Only the part of the window that lies on the picture is drawn.
+                val left = srcLeft.coerceIn(0f, image.width.toFloat())
+                val top = srcTop.coerceIn(0f, image.height.toFloat())
+                val right = (srcLeft + srcW).coerceIn(0f, image.width.toFloat())
+                val bottom = (srcTop + srcH).coerceIn(0f, image.height.toFloat())
+                if (right - left < 1f || bottom - top < 1f) return@Canvas
+                val dstW = kotlin.math.abs(v("dst_w", 1f)) * size.width
+                val dstH = kotlin.math.abs(v("dst_h", 1f)) * size.height
+                val scaleX = dstW / srcW.coerceAtLeast(1e-3f)
+                val scaleY = dstH / srcH.coerceAtLeast(1e-3f)
+                val dstLeft = v("dst_cx", 0.5f) * size.width - dstW / 2f + (left - srcLeft) * scaleX
+                val dstTop = v("dst_cy", 0.5f) * size.height - dstH / 2f + (top - srcTop) * scaleY
+                drawImage(
+                    image = imageBitmap,
+                    srcOffset = IntOffset(left.roundToInt(), top.roundToInt()),
+                    srcSize = IntSize((right - left).roundToInt().coerceAtLeast(1), (bottom - top).roundToInt().coerceAtLeast(1)),
+                    dstOffset = IntOffset(dstLeft.roundToInt(), dstTop.roundToInt()),
+                    dstSize = IntSize(((right - left) * scaleX).roundToInt().coerceAtLeast(1), ((bottom - top) * scaleY).roundToInt().coerceAtLeast(1)),
+                )
+            }
+            return@Box
+        }
         bitmap?.let {
             Image(
                 bitmap = it.asImageBitmap(),
@@ -238,7 +286,7 @@ private fun OverlayVideo(
     modifier: Modifier,
 ) {
     val context = LocalContext.current
-    val player = remember(overlay.id, overlay.sourceUri) {
+    val player = remember(overlay.previewKey(), overlay.sourceUri) {
         ExoPlayer.Builder(context.applicationContext).build().apply {
             // The effect pipeline must be enabled before the first prepare().
             setVideoEffects(emptyList())
@@ -249,6 +297,7 @@ private fun OverlayVideo(
     }
     DisposableEffect(player) { onDispose { player.release() } }
     LaunchedEffect(player, overlay.includeAudio) { player.volume = if (overlay.includeAudio) 1f else 0f }
+    LaunchedEffect(player, overlay.playbackSpeed) { player.setPlaybackSpeed(overlay.playbackSpeed) }
     LaunchedEffect(player, overlay.effectSegments) {
         val stand = Clip(
             id = overlay.id,
@@ -260,44 +309,14 @@ private fun OverlayVideo(
         runCatching { player.setVideoEffects(ProjectCompositionFactory.videoEffects(stand)) }
     }
 
-    // Follow the preview clock: play/pause with it and correct drift. The source loops, like export.
-    val latestTime by rememberUpdatedState(timeMs)
-    val latestPlaying by rememberUpdatedState(mainPlaying)
-    val latestVisible by rememberUpdatedState(visible)
-    LaunchedEffect(player) {
-        var lastSeekMs = -1L
-        while (true) {
-            withFrameMillis { }
-            if (!latestVisible) {
-                if (player.playWhenReady) player.pause()
-                continue
-            }
-            val duration = overlay.sourceDurationMs.takeIf { it >= 100 }
-                ?: player.duration.takeIf { it > 0 }
-                ?: continue
-            val expected = ((latestTime - overlay.startMs).coerceAtLeast(0) + overlay.sourceOffsetMs).mod(duration)
-            val raw = abs(player.currentPosition.mod(duration) - expected)
-            val drift = minOf(raw, duration - raw)
-            if (latestPlaying) {
-                if (!player.playWhenReady) {
-                    player.seekTo(expected)
-                    player.play()
-                } else if (drift > 250) {
-                    player.seekTo(expected)
-                }
-            } else {
-                if (player.playWhenReady) player.pause()
-                if (drift > 40 && abs(expected - lastSeekMs) > 40) {
-                    lastSeekMs = expected
-                    player.seekTo(expected)
-                }
-            }
-        }
-    }
+    FollowPreviewClock(player, overlay, timeMs, mainPlaying, visible)
 
     Box(modifier) {
         AndroidView(
-            factory = { viewContext -> TextureView(viewContext).also(player::setVideoTextureView) },
+            factory = { viewContext ->
+                // Not opaque: placed or cropped overlays are transparent around their picture.
+                TextureView(viewContext).apply { isOpaque = false }.also(player::setVideoTextureView)
+            },
             update = { view -> view.alpha = alpha },
             onRelease = { view -> player.clearVideoTextureView(view) },
             modifier = Modifier.fillMaxSize(),
@@ -337,4 +356,66 @@ private fun readPixelSize(context: Context, uri: String, isVideo: Boolean): IntS
     } finally {
         retriever.release()
     }
+}
+
+/**
+ * Keeps an overlay's own player in step with the preview: plays and pauses with it and corrects
+ * drift. The source position comes from the overlay's in-point and speed, and loops like export.
+ * Reads the latest overlay each frame, since a lane's player outlives the overlay it started with.
+ */
+@Composable
+private fun FollowPreviewClock(player: ExoPlayer, overlay: Overlay, timeMs: Long, mainPlaying: Boolean, visible: Boolean) {
+    val latestOverlay by rememberUpdatedState(overlay)
+    val latestTime by rememberUpdatedState(timeMs)
+    val latestPlaying by rememberUpdatedState(mainPlaying)
+    val latestVisible by rememberUpdatedState(visible)
+    LaunchedEffect(player) {
+        var lastSeekMs = -1L
+        while (true) {
+            withFrameMillis { }
+            if (!latestVisible) {
+                if (player.playWhenReady) player.pause()
+                continue
+            }
+            val current = latestOverlay
+            val duration = current.sourceDurationMs.takeIf { it >= 100 }
+                ?: player.duration.takeIf { it > 0 }
+                ?: continue
+            val expected = current.sourceMsAt(latestTime).mod(duration)
+            val raw = abs(player.currentPosition.mod(duration) - expected)
+            val drift = minOf(raw, duration - raw)
+            if (latestPlaying) {
+                if (!player.playWhenReady) {
+                    player.seekTo(expected)
+                    player.play()
+                } else if (drift > 250) {
+                    player.seekTo(expected)
+                }
+            } else {
+                if (player.playWhenReady) player.pause()
+                if (drift > 40 && abs(expected - lastSeekMs) > 40) {
+                    lastSeekMs = expected
+                    player.seekTo(expected)
+                }
+            }
+        }
+    }
+}
+
+/** A sound-only overlay: its own player with no picture, following the preview clock. */
+@OptIn(UnstableApi::class)
+@Composable
+private fun OverlayAudio(overlay: Overlay, clipDurationMs: Long, timeMs: Long, mainPlaying: Boolean) {
+    val context = LocalContext.current
+    val player = remember(overlay.previewKey(), overlay.sourceUri) {
+        ExoPlayer.Builder(context.applicationContext).build().apply {
+            repeatMode = Player.REPEAT_MODE_ONE
+            setMediaItem(MediaItem.fromUri(Uri.parse(overlay.sourceUri)))
+            prepare()
+        }
+    }
+    DisposableEffect(player) { onDispose { player.release() } }
+    LaunchedEffect(player, overlay.playbackSpeed) { player.setPlaybackSpeed(overlay.playbackSpeed) }
+    val endMs = if (overlay.endMs <= overlay.startMs) clipDurationMs else overlay.endMs
+    FollowPreviewClock(player, overlay, timeMs, mainPlaying, visible = timeMs in overlay.startMs until endMs)
 }

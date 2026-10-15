@@ -24,6 +24,7 @@ import dev.lec.effectapp.model.TimelineSegment
 import java.io.File
 import java.util.UUID
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 @OptIn(UnstableApi::class)
 class ProjectExporter(private val context: Context) {
  private var callback: Callback? = null
@@ -162,9 +163,11 @@ class ProjectExporter(private val context: Context) {
    if(left<=0) return@mapNotNull null
    val cut=skip; skip=0
    val d=(c.durationMs-cut).coerceAtMost(left); left-=d
+   // The clip reads speed× as much source as it lasts, so the cut moves its in-point by cut×speed.
+   val inPoint=c.sourceMsAt(cut)
    c.copy(
-    trimStartMs=c.trimStartMs+cut,
-    trimEndMs=c.trimStartMs+cut+d,
+    trimStartMs=inPoint,
+    trimEndMs=inPoint+d,
     effectSegments=c.effectSegments.map{it.shiftedBy(cut).forWholeClip(d)},
     audioSegments=c.audioSegments.map{it.shiftedBy(cut).forWholeClip(d)},
     overlays=c.overlays.mapNotNull { it.shiftedBy(cut) },
@@ -195,7 +198,7 @@ class ProjectExporter(private val context: Context) {
    endMs=if(untilEnd) 0 else endMs-cut,
    keyframes=pinned+kept,
    // An overlay video already playing at the cut continues from where it was.
-   sourceOffsetMs=sourceOffsetMs+(cut-startMs).coerceAtLeast(0),
+   sourceOffsetMs=sourceOffsetMs+((cut-startMs).coerceAtLeast(0)*playbackSpeed.toDouble()).roundToLong(),
   )
  }
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?,val outputSize:Size?) {
@@ -203,7 +206,7 @@ class ProjectExporter(private val context: Context) {
   fun mutesBaseAudio(index:Int):Boolean = index>0 && index%passes==0
   fun nextProject(previous:File,index:Int):EditProject {
    val stage=index/passes
-   val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=base.durationMs,overlays=emptyList(),videoOverride=null,audioOverride=null)
+   val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=base.durationMs,speed=1f,overlays=emptyList(),videoOverride=null,audioOverride=null)
    val project=base.copy(clips=listOf(first))
    if(index%passes!=0 || stage==0) return project
    val overlay=overlays[stage-1]

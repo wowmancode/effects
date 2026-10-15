@@ -18,7 +18,9 @@ import dev.lec.effectapp.model.ProjectJson
 import dev.lec.effectapp.model.PresetJson
 import dev.lec.effectapp.model.TimelineSegment
 import dev.lec.effectapp.model.TransformSettings
+import dev.lec.effectapp.model.veg.VegImporter
 import java.util.UUID
+import kotlin.math.roundToLong
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +35,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
 
     private val _selection = MutableStateFlow<Selection?>(null)
     val selection: StateFlow<Selection?> = _selection.asStateFlow()
+
+    /** Media the open project reads but this device can't open; shown so it can be located. */
+    private val _missingMedia = MutableStateFlow<List<MissingMedia>>(emptyList())
+    val missingMedia: StateFlow<List<MissingMedia>> = _missingMedia.asStateFlow()
+
+    /** Notes from the last project opened from another format (what didn't carry over). */
+    private val _openNotes = MutableStateFlow<List<String>>(emptyList())
+    val openNotes: StateFlow<List<String>> = _openNotes.asStateFlow()
+
+    /** Bumped each time a project is opened, so the missing-media prompt shows again. */
+    private val _missingPrompt = MutableStateFlow(0)
+    val missingPrompt: StateFlow<Int> = _missingPrompt.asStateFlow()
 
     init {
         val savedPresets = runCatching {
@@ -96,7 +110,38 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     }
 
     fun replaceClipMedia(id: String, uri: String, displayName: String, durationMs: Long) {
+        val clip = _project.value.clips.find { it.id == id } ?: return
+        if (clip.mediaMissing) {
+            // Locating a missing file: every cut of it keeps its in-point, length and speed.
+            relinkMedia(clip.sourceUri, uri, displayName, durationMs)
+            return
+        }
         updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
+    }
+
+    /** Points everything that reads [oldUri] at [newUri] (see EditProject.relinkSource). */
+    fun relinkMedia(oldUri: String, newUri: String, displayName: String, durationMs: Long) {
+        recordUndo()
+        _project.value = _project.value.relinkSource(oldUri, newUri, displayName, durationMs)
+        refreshMissingMedia()
+    }
+
+    fun dismissOpenNotes() {
+        _openNotes.value = emptyList()
+    }
+
+    private fun refreshMissingMedia() {
+        val project = _project.value
+        val names = buildMap {
+            project.clips.forEach { clip ->
+                putIfAbsent(clip.sourceUri, clip.displayName)
+                clip.overlays.forEach { putIfAbsent(it.sourceUri, it.displayName) }
+            }
+        }
+        _missingMedia.value = project.sourceUris()
+            .filterNot(::canReadMedia)
+            .map { uri -> MissingMedia(uri, VegImporter.missingFileName(uri) ?: names[uri] ?: uri) }
+            .sortedBy { it.name.lowercase() }
     }
 
     /** Snips [clipId] at [atLocalMs] (local to the clip) into two independent clips. */
@@ -108,18 +153,20 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         val clip = clips[index]
         if (clip.durationMs <= 1) return
         val split = atLocalMs.coerceIn(1, clip.durationMs - 1)
-        val boundary = clip.trimStartMs + split
         val tailDuration = clip.durationMs - split
+        // The tail starts where the source is at the split (speed× the elapsed time).
+        val tailInPoint = clip.sourceMsAt(split)
         val first = clip.copy(
             id = UUID.randomUUID().toString(),
-            trimEndMs = boundary,
+            trimEndMs = clip.trimStartMs + split,
             effectSegments = clip.effectSegments.map { it.forWholeClip(split) },
             audioSegments = clip.audioSegments.map { it.forWholeClip(split) },
             overlays = clip.overlays.mapNotNull { it.clampedToRange(0, split, clip.durationMs) },
         )
         val second = clip.copy(
             id = UUID.randomUUID().toString(),
-            trimStartMs = boundary,
+            trimStartMs = tailInPoint,
+            trimEndMs = tailInPoint + tailDuration,
             effectSegments = clip.effectSegments.map { it.forWholeClip(tailDuration) },
             audioSegments = clip.audioSegments.map { it.forWholeClip(tailDuration) },
             overlays = clip.overlays.mapNotNull { it.shiftedInto(split, tailDuration, clip.durationMs) },
@@ -467,7 +514,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     fun encode(): String = ProjectJson.encode(_project.value)
 
     fun load(json: String) {
-        val loaded = ProjectJson.decode(json)
+        loadProject(ProjectJson.decode(json), notes = emptyList())
+    }
+
+    /** Opens [loaded] (from a project file or another format), keeping this device's presets. */
+    fun loadProject(loaded: EditProject, notes: List<String>) {
         val mergedPresets = deduplicatePresets(_project.value.presets + loaded.presets)
         _project.value = loaded.copy(
             presets = mergedPresets,
@@ -481,6 +532,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         )
         persistPresets()
         _selection.value = null
+        _openNotes.value = notes
+        refreshMissingMedia()
+        _missingPrompt.value++
     }
 
     private fun updateClip(id: String, transform: Clip.() -> Clip) {
@@ -588,9 +642,13 @@ private fun Overlay.shiftedInto(split: Long, tailDurationMs: Long, clipDurationM
     val newStart = (startMs - split).coerceIn(0, tailDurationMs)
     val newEnd = (effectiveEnd - split).coerceIn(0, tailDurationMs)
     if (newEnd <= newStart) return null
+    // A video or sound already playing at the split carries on from where it was.
+    val playedMs = (split - startMs).coerceAtLeast(0)
+    val playsSource = isVideo || audioOnly
     return copy(
         startMs = newStart,
         endMs = newEnd,
+        sourceStartMs = if (playsSource) sourceStartMs + (playedMs * playbackSpeed.toDouble()).roundToLong() else sourceStartMs,
         keyframes = keyframes.mapNotNull { keyframe ->
             val shifted = keyframe.timeMs - split
             keyframe.copy(timeMs = shifted).takeIf { shifted in 0..tailDurationMs }
@@ -616,6 +674,8 @@ private fun List<TimelineSegment>.moved(segmentId: String, delta: Int): List<Tim
     if (source == destination) return this
     return toMutableList().apply { add(destination, removeAt(source)) }
 }
+
+data class MissingMedia(val uri: String, val name: String)
 
 data class Selection(
     val clipId: String,
