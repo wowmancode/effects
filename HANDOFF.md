@@ -1,10 +1,8 @@
 # HANDOFF: open layered desktop-editor projects (.veg) in effect-app
 
-Status: **implemented, not yet compiled on CI.** All code below is in the working tree of branch
-`agent/veg-import-handoff` (uncommitted). The pure-Kotlin reader and importer compile locally with
-`kotlinc` and pass `core-model/src/test/.../veg/VegImporterTest.kt` (6 tests). On the test project
-they give 85 clips over 13.09 s with lanes for every layer. Android code (effect, pipeline, app) has
-only been reviewed by eye: push and read CI next.
+Status: **implemented; CI green** (`assembleDebug lint test`) on branch `agent/veg-import-handoff`,
+commit 0f40e31. Not yet tried on a device. The pure-Kotlin reader and importer were also run
+locally on the test project: 85 clips over 13.09 s, with lanes for every layer.
 
 Files added: `core-model/.../model/veg/{VegReader,VegImporter,LayerShaders}.kt`,
 `core-effects/.../FramePlacementEffect.kt`, `app/.../ProjectOpener.kt`, and the test.
