@@ -1,7 +1,6 @@
 package dev.lec.effectapp.pipeline
 
 import androidx.annotation.OptIn
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.EncoderUtil
 
@@ -10,10 +9,11 @@ import androidx.media3.transformer.EncoderUtil
  * work depends on the phone's encoders, so the list offered is filtered by [available].
  */
 enum class ExportCodec(val label: String, val mimeType: String) {
-    H264("H.264", MimeTypes.VIDEO_H264),
-    H265("H.265 (HEVC)", MimeTypes.VIDEO_H265),
-    VP9("VP9", MimeTypes.VIDEO_VP9),
-    AV1("AV1", MimeTypes.VIDEO_AV1),
+    // Plain MIME strings (Media3's VP9/AV1 constants are unstable API).
+    H264("H.264", "video/avc"),
+    H265("H.265 (HEVC)", "video/hevc"),
+    VP9("VP9", "video/x-vnd.on2.vp9"),
+    AV1("AV1", "video/av01"),
     ;
 
     companion object {
