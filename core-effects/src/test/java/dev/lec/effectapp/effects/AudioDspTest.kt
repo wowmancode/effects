@@ -10,7 +10,8 @@ import org.junit.Test
 class AudioDspTest {
     @Test
     fun everyRegisteredAudioEffectHasAnExportProcessor() {
-        EffectRegistry.byCategory(EffectCategory.AUDIO).forEach { effect ->
+        // Reverse audio is rendered up front by the pipeline (ReverseMediaCache), not streamed.
+        EffectRegistry.byCategory(EffectCategory.AUDIO).filter { it.id != "reverse_audio" }.forEach { effect ->
             val segment = TimelineSegment(
                 id = effect.id,
                 effectId = effect.id,
