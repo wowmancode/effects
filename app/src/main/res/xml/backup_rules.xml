@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="file" path="effect-presets.json" />
+    <include domain="file" path="preset-thumbnails/" />
+</full-backup-content>

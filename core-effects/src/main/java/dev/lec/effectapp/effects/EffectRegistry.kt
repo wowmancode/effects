@@ -1,0 +1,63 @@
+package dev.lec.effectapp.effects
+
+object EffectRegistry {
+    private val registered = listOf<LecEffect>(
+        HueRotateEffect(),
+        HslAdjustEffect(),
+        SelectiveHueEffect(),
+        LabInvertEffect(),
+        LabHueShiftEffect(),
+        ColorspaceHueShiftEffect(),
+        ColorspaceInvertEffect(),
+        ColorCurvesEffect(),
+        DisplacementMapEffect(),
+        CustomLutEffect(),
+        VideoPluginEffect(),
+        SharpenEffect(),
+        GradientMapEffect(),
+        GlowEffect(),
+        GodRaysEffect(),
+        SwirlEffect(),
+        SpinEffect(),
+        WaveEffect(),
+        TilesEffect(),
+        PinchBulgeEffect(),
+        GhostTrailEffect(),
+        ColorInvertEffect(),
+        ZoomEffect(),
+        ChromaticAberrationEffect(),
+        VhsEffect(),
+        RgbToBgrEffect(),
+        RippleEffect(),
+        ReverseVideoEffect(),
+        FreezeFrameEffect(),
+        MirrorFlipEffect(),
+        MirrorEffect(),
+        VolumeEffect(),
+        AudioEchoEffect(),
+        ChorusEffect(),
+        TremoloEffect(),
+        VibratoEffect(),
+        AudioPluginEffect(),
+        BitcrushEffect(),
+        OverdriveEffect(),
+        FlangerEffect(),
+        RingModEffect(),
+        FilterEffect(),
+        AutoPanEffect(),
+        PitchChangeEffect(),
+        SplitPitchEffect(),
+        VocoderEffect("vocoder_square", "Vocoder · square"),
+        VocoderEffect("vocoder_saw", "Vocoder · saw"),
+        ReverseAudioEffect(),
+        VocoderEffect("vocoder_sine", "Vocoder · sine"),
+        VocoderEffect("vocoder_triangle", "Vocoder · triangle"),
+        VocoderEffect("vocoder_custom", "Vocoder · custom carrier", customCarrier = true),
+        VocoderLabEffect(),
+    )
+    val all: List<LecEffect> get() = registered
+
+    fun byId(id: String): LecEffect? = registered.firstOrNull { it.id == id }
+
+    fun byCategory(category: EffectCategory): List<LecEffect> = registered.filter { it.category == category }
+}
