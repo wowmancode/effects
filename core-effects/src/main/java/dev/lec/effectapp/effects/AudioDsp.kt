@@ -432,8 +432,12 @@ private class PitchDspState(
             windowMs = 80f,
         )
 
-        fun split(segment: TimelineSegment, sampleRate: Int, channels: Int): PitchDspState {
-            val algorithm = SplitPitchAlgorithm.from(segment.params)
+        fun split(segment: TimelineSegment, sampleRate: Int, channels: Int): AudioDspState {
+            if (SplitPitchAlgorithm.from(segment.params) == SplitPitchAlgorithm.DRUMS_UNPITCHED &&
+                sampleRate in 8_000..384_000 && channels in 1..8
+            ) {
+                return DrumsUnpitchedDspState(segment, sampleRate, channels)
+            }
             return PitchDspState(
                 segment = segment,
                 sampleRate = sampleRate,
@@ -442,12 +446,8 @@ private class PitchDspState(
                 dryMix = segment.params["dry_mix"] ?: 0.2f,
                 wetMix = segment.params["voice_mix"] ?: 0.8f,
                 alignVoices = true,
-                preserveTransients = algorithm != SplitPitchAlgorithm.ORIGINAL,
-                windowMs = when (algorithm) {
-                    SplitPitchAlgorithm.ORIGINAL -> SPLIT_PITCH_WINDOW_MS
-                    SplitPitchAlgorithm.ELASTIQUE -> 60f
-                    SplitPitchAlgorithm.A17_DRUMS -> 12f
-                },
+                preserveTransients = false,
+                windowMs = SPLIT_PITCH_WINDOW_MS,
             )
         }
     }

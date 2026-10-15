@@ -10,8 +10,8 @@ extern "C" {
 
 typedef enum {
     SPLIT_PITCH_ORIGINAL = 0,
-    SPLIT_PITCH_ELASTIQUE_APPROX = 1,
-    SPLIT_PITCH_A17_DRUMS = 2
+    /* expressfx_drums streaming pitch shift; voice semitones clamp to +/-24. */
+    SPLIT_PITCH_DRUMS_UNPITCHED = 1
 } SplitPitchMode;
 
 typedef struct SplitPitchState SplitPitchState;

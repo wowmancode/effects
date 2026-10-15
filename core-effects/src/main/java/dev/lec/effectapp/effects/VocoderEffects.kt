@@ -9,14 +9,12 @@ data class SplitPitchVoice(val semitones: Float, val level: Float = 1f)
 
 enum class SplitPitchAlgorithm(val storedValue: Float) {
     ORIGINAL(0f),
-    ELASTIQUE(1f),
-    A17_DRUMS(2f);
+    DRUMS_UNPITCHED(1f);
 
     companion object {
+        /** Projects saved with the retired Elastique (1) or a17 drums (2) methods open as drums unpitched. */
         fun from(values: Map<String, Float>): SplitPitchAlgorithm =
-            entries.firstOrNull {
-                it.storedValue.toInt() == values["pitch_algorithm"]?.roundToInt()
-            } ?: ORIGINAL
+            if ((values["pitch_algorithm"]?.roundToInt() ?: 0) >= 1) DRUMS_UNPITCHED else ORIGINAL
     }
 }
 
@@ -27,7 +25,7 @@ class SplitPitchEffect : LecEffect {
     override val params = listOf(
         EffectParam("dry_mix", "Original voice", 0f, 1f, 0.2f),
         EffectParam("voice_mix", "Split voices", 0f, 1f, 0.8f),
-        EffectParam("pitch_algorithm", "Pitch method", 0f, 2f, 0f),
+        EffectParam("pitch_algorithm", "Pitch method", 0f, 1f, 0f),
     )
 
     @OptIn(UnstableApi::class)

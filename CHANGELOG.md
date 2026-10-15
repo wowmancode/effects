@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [0.7.0] - Unreleased
 
+### Changed
+
+- Split pitch: the Elastique and a17 drums pitch methods are replaced by a single
+  Drums unpitched method (expressfx_drums stretch-and-resample). Original is
+  unchanged. Projects saved with either retired method open as Drums unpitched.
+  Voice pitches are limited to ±24 semitones in this method; it adds about 28 ms
+  of latency to the dry and pitched voices alike.
+
 ### Added
 
 - Moving video overlays during export, with timeline positioning, opacity, scale,

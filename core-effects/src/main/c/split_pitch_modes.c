@@ -1,4 +1,5 @@
 #include "split_pitch_modes.h"
+#include "expressfx_drums.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -13,15 +14,19 @@ struct SplitPitchState {
     unsigned write_index;
     unsigned frames_written;
     size_t voice_count;
-    int preserve_transients;
     float dry_mix;
     float voice_mix;
-    float smoothed_energy;
     float *history;
     unsigned char *initialized;
     float ratio[SPLIT_MAX_VOICES];
     float level[SPLIT_MAX_VOICES];
     float phase[SPLIT_MAX_VOICES];
+    /* Drums unpitched: one stream per voice plus a 0-semitone stream that
+       delays the dry signal by the same latency. NULL in Original mode. */
+    ExpressfxDrumsStream *drums[SPLIT_MAX_VOICES];
+    ExpressfxDrumsStream *drums_dry;
+    float *scratch;
+    size_t scratch_frames;
 };
 
 static float clampf(float x, float low, float high) {
@@ -74,18 +79,29 @@ SplitPitchState *split_pitch_create(unsigned sample_rate, unsigned channels,
     if (sample_rate < 8000 || channels == 0 || channels > 8 ||
         voice_count == 0 || voice_count > SPLIT_MAX_VOICES ||
         !semitones || !levels || mode < SPLIT_PITCH_ORIGINAL ||
-        mode > SPLIT_PITCH_A17_DRUMS) return NULL;
+        mode > SPLIT_PITCH_DRUMS_UNPITCHED) return NULL;
     SplitPitchState *s = (SplitPitchState *)calloc(1, sizeof(*s));
     if (!s) return NULL;
-    float window_ms = mode == SPLIT_PITCH_ORIGINAL ? 20.0f :
-                      mode == SPLIT_PITCH_ELASTIQUE_APPROX ? 60.0f : 12.0f;
-    s->window = (unsigned)clampf(sample_rate * window_ms / 1000.0f, 128.0f, 4096.0f);
     s->channels = channels;
     s->voice_count = voice_count;
-    s->preserve_transients = mode != SPLIT_PITCH_ORIGINAL;
     s->dry_mix = clampf(dry_mix, 0.0f, 1.0f);
     s->voice_mix = clampf(voice_mix, 0.0f, 1.0f);
-    s->smoothed_energy = 0.01f;
+    if (mode == SPLIT_PITCH_DRUMS_UNPITCHED) {
+        s->drums_dry = expressfx_drums_stream_create(sample_rate, channels, 0.0);
+        int ok = s->drums_dry != NULL;
+        for (size_t v = 0; v < voice_count && ok; ++v) {
+            s->level[v] = clampf(levels[v], 0.0f, 1.0f);
+            s->drums[v] = expressfx_drums_stream_create(sample_rate, channels,
+                (double)clampf(semitones[v], -24.0f, 24.0f));
+            ok = s->drums[v] != NULL;
+        }
+        if (!ok) {
+            split_pitch_destroy(s);
+            return NULL;
+        }
+        return s;
+    }
+    s->window = (unsigned)clampf(sample_rate * 20.0f / 1000.0f, 128.0f, 4096.0f);
     s->history = (float *)calloc((size_t)channels * s->window, sizeof(float));
     s->initialized = (unsigned char *)calloc(channels, sizeof(unsigned char));
     if (!s->history || !s->initialized) {
@@ -99,11 +115,41 @@ SplitPitchState *split_pitch_create(unsigned sample_rate, unsigned channels,
     return s;
 }
 
+static void drums_process(SplitPitchState *s, const int16_t *input,
+                          int16_t *output, size_t frames) {
+    size_t samples = frames * s->channels;
+    if (frames > s->scratch_frames) {
+        float *grown = (float *)realloc(s->scratch, 3 * samples * sizeof(float));
+        if (!grown) {
+            memcpy(output, input, samples * sizeof(int16_t));
+            return;
+        }
+        s->scratch = grown;
+        s->scratch_frames = frames;
+    }
+    float *in = s->scratch;
+    float *mix = in + samples;
+    float *voice = mix + samples;
+    for (size_t i = 0; i < samples; ++i) in[i] = input[i] / 32768.0f;
+    expressfx_drums_stream_process(s->drums_dry, in, voice, frames);
+    for (size_t i = 0; i < samples; ++i) mix[i] = voice[i] * s->dry_mix;
+    for (size_t v = 0; v < s->voice_count; ++v) {
+        expressfx_drums_stream_process(s->drums[v], in, voice, frames);
+        float gain = s->level[v] * s->voice_mix;
+        for (size_t i = 0; i < samples; ++i) mix[i] += voice[i] * gain;
+    }
+    for (size_t i = 0; i < samples; ++i)
+        output[i] = (int16_t)clampf(mix[i] * 32767.0f, -32768.0f, 32767.0f);
+}
+
 void split_pitch_process(SplitPitchState *s, const int16_t *input,
                          int16_t *output, size_t frames) {
     if (!s || !input || !output) return;
+    if (s->drums_dry) {
+        drums_process(s, input, output, frames);
+        return;
+    }
     for (size_t frame = 0; frame < frames; ++frame) {
-        float energy = 0.0f;
         for (unsigned channel = 0; channel < s->channels; ++channel) {
             float normalized = input[frame * s->channels + channel] / 32768.0f;
             float *buffer = s->history + (size_t)channel * s->window;
@@ -112,9 +158,7 @@ void split_pitch_process(SplitPitchState *s, const int16_t *input,
                 s->initialized[channel] = 1;
             }
             buffer[s->write_index] = normalized;
-            energy += fabsf(normalized);
         }
-        energy /= (float)s->channels;
         for (unsigned channel = 0; channel < s->channels; ++channel) {
             float wet = 0.0f;
             for (size_t v = 0; v < s->voice_count; ++v)
@@ -124,11 +168,6 @@ void split_pitch_process(SplitPitchState *s, const int16_t *input,
             output[frame * s->channels + channel] =
                 (int16_t)clampf(rendered, -32768.0f, 32767.0f);
         }
-        if (s->preserve_transients && s->frames_written >= s->window &&
-            energy > fmaxf(0.08f, s->smoothed_energy * 3.0f)) {
-            for (size_t v = 0; v < s->voice_count; ++v) s->phase[v] = 0.0f;
-        }
-        s->smoothed_energy = s->smoothed_energy * 0.995f + energy * 0.005f;
         s->write_index = (s->write_index + 1) % s->window;
         if (s->frames_written < s->window) ++s->frames_written;
         for (size_t v = 0; v < s->voice_count; ++v)
@@ -138,6 +177,9 @@ void split_pitch_process(SplitPitchState *s, const int16_t *input,
 
 void split_pitch_destroy(SplitPitchState *s) {
     if (!s) return;
+    for (size_t v = 0; v < SPLIT_MAX_VOICES; ++v) expressfx_drums_stream_destroy(s->drums[v]);
+    expressfx_drums_stream_destroy(s->drums_dry);
+    free(s->scratch);
     free(s->history);
     free(s->initialized);
     free(s);

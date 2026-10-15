@@ -90,7 +90,10 @@ class AudioDspTest {
         }
 
         assertTrue(outputs[0].zip(outputs[1]).any { (a, b) -> a != b })
-        assertTrue(outputs[0].zip(outputs[2]).any { (a, b) -> a != b })
+        assertEquals(
+            SplitPitchAlgorithm.DRUMS_UNPITCHED,
+            SplitPitchAlgorithm.from(mapOf("pitch_algorithm" to 2f)),
+        )
     }
 
     @Test
@@ -113,6 +116,28 @@ class AudioDspTest {
         repeat(processedFrames) { frame -> rendered = state.process(10_000 + frame, frame.toLong() / 48, 0) }
         val alignmentDelay = (windowFrames - 2) / 2
         val expected = 10_000 + processedFrames - 1 - alignmentDelay
+
+        assertTrue(rendered in (expected - 2)..(expected + 2))
+    }
+
+    @Test
+    fun drumsUnpitchedZeroVoiceIsTheInputDelayedByTheStreamLatency() {
+        val segment = TimelineSegment(
+            id = "split",
+            effectId = "split_pitch",
+            startMs = 0,
+            endMs = 1_000,
+            params = SplitPitchEffect.encodeVoices(
+                listOf(SplitPitchVoice(0f)),
+                mapOf("dry_mix" to 0.5f, "voice_mix" to 0.5f, "pitch_algorithm" to 1f),
+            ),
+        )
+        val state = requireNotNull(createAudioDspState(segment, 48_000, 1))
+        val latency = DrumsUnpitchedStream(48_000, 1, 0.0).latency + 1
+        val processedFrames = latency + 100
+        var rendered = 0
+        repeat(processedFrames) { frame -> rendered = state.process(10_000 + frame, frame.toLong() / 48, 0) }
+        val expected = 10_000 + processedFrames - 1 - latency
 
         assertTrue(rendered in (expected - 2)..(expected + 2))
     }

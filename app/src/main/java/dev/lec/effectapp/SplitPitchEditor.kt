@@ -27,8 +27,7 @@ internal fun SplitPitchEditor(values: Map<String, Float>, onChange: (Map<String,
         SplitPitchAlgorithm.entries.forEach { option ->
             val label = when (option) {
                 SplitPitchAlgorithm.ORIGINAL -> "Original"
-                SplitPitchAlgorithm.ELASTIQUE -> "Elastique"
-                SplitPitchAlgorithm.A17_DRUMS -> "a17 drums"
+                SplitPitchAlgorithm.DRUMS_UNPITCHED -> "Drums unpitched"
             }
             if (option == algorithm) {
                 Button(
@@ -45,8 +44,8 @@ internal fun SplitPitchEditor(values: Map<String, Float>, onChange: (Map<String,
     }
     Text(when (algorithm) {
         SplitPitchAlgorithm.ORIGINAL -> "The existing split-pitch sound."
-        SplitPitchAlgorithm.ELASTIQUE -> "Longer grains for smoother tonal audio; an approximation, not zplane élastique."
-        SplitPitchAlgorithm.A17_DRUMS -> "Shorter grains and transient resets for drums; adjustable voice pitches below."
+        SplitPitchAlgorithm.DRUMS_UNPITCHED ->
+            "Drum-style stretch-and-resample for percussive audio. Voice pitches are limited to ±24 semitones."
     })
     Text("Pitch voices", style = MaterialTheme.typography.titleSmall)
     Text("Each voice is a separate copy of the clip audio. Add intervals to build chords.")

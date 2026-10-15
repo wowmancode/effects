@@ -1,4 +1,5 @@
 #include "split_pitch_modes.h"
+#include "expressfx_drums.h"
 
 #include <assert.h>
 #include <math.h>
@@ -9,7 +10,7 @@
 int main(void) {
     enum { FRAMES = 8000 };
     int16_t *input = (int16_t *)malloc(FRAMES * sizeof(*input));
-    int16_t *output[3];
+    int16_t *output[2];
     assert(input);
     for (int frame = 0; frame < FRAMES; ++frame) {
         double tone = sin(frame * 2.0 * 3.141592653589793 * 440.0 / 48000.0);
@@ -17,7 +18,7 @@ int main(void) {
     }
     const float semitones[] = {7.0f};
     const float levels[] = {1.0f};
-    for (int mode = 0; mode < 3; ++mode) {
+    for (int mode = 0; mode < 2; ++mode) {
         output[mode] = (int16_t *)malloc(FRAMES * sizeof(int16_t));
         assert(output[mode]);
         SplitPitchState *state = split_pitch_create(48000, 1, (SplitPitchMode)mode,
@@ -28,14 +29,29 @@ int main(void) {
                             FRAMES / 2);
         split_pitch_destroy(state);
     }
-    int changed_elastique = 0;
-    int changed_drums = 0;
+    assert(!split_pitch_create(48000, 1, (SplitPitchMode)2, 1, semitones, levels,
+                               0.0f, 1.0f));
+
+    /* Drums unpitched with only the pitched voice is the expressfx_drums
+       stream, quantized back to PCM16. */
+    float *normalized = (float *)malloc(FRAMES * sizeof(float));
+    float *shifted = (float *)malloc(FRAMES * sizeof(float));
+    assert(normalized && shifted);
+    for (int frame = 0; frame < FRAMES; ++frame) normalized[frame] = input[frame] / 32768.0f;
+    ExpressfxDrumsStream *stream = expressfx_drums_stream_create(48000, 1, 7.0);
+    assert(stream);
+    expressfx_drums_stream_process(stream, normalized, shifted, FRAMES);
+    expressfx_drums_stream_destroy(stream);
+    int changed = 0;
     for (int frame = 0; frame < FRAMES; ++frame) {
-        changed_elastique |= output[0][frame] != output[1][frame];
-        changed_drums |= output[0][frame] != output[2][frame];
+        float expected = fminf(32767.0f, fmaxf(-32768.0f, shifted[frame] * 32767.0f));
+        assert(output[1][frame] == (int16_t)expected);
+        changed |= output[0][frame] != output[1][frame];
     }
-    assert(changed_elastique && changed_drums);
-    for (int mode = 0; mode < 3; ++mode) free(output[mode]);
+    assert(changed);
+    for (int mode = 0; mode < 2; ++mode) free(output[mode]);
+    free(shifted);
+    free(normalized);
     free(input);
     puts("split pitch C profiles passed");
     return 0;

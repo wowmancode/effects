@@ -28,12 +28,15 @@ jobs:
         run: gradle --no-daemon assembleDebug lint test
       - name: Test portable split-pitch C processor
         run: |
-          gcc -std=c11 -O2 -Wall -Wextra -Werror \
-            -Icore-effects/src/main/c \
-            core-effects/src/main/c/split_pitch_modes.c \
-            core-effects/src/test/c/split_pitch_modes_test.c \
-            -lm -o /tmp/split_pitch_modes_test
-          /tmp/split_pitch_modes_test
+          for t in split_pitch_modes expressfx_drums; do
+            gcc -std=c11 -O2 -Wall -Wextra -Werror \
+              -Icore-effects/src/main/c \
+              core-effects/src/main/c/split_pitch_modes.c \
+              core-effects/src/main/c/expressfx_drums.c \
+              core-effects/src/test/c/${t}_test.c \
+              -lm -o /tmp/${t}_test
+            /tmp/${t}_test
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: effect-app-debug
