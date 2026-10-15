@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -63,6 +64,8 @@ private enum class ExportAspectRatio(val label: String, val ratio: Float?) {
 fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val project by viewModel.project.collectAsState()
+    val missingMedia by viewModel.missingMedia.collectAsState()
+    LaunchedEffect(project) { viewModel.checkMedia() }
     val exporter = remember { ProjectExporter(context.applicationContext) }
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
     var state by remember { mutableStateOf(ExportState.IDLE) }
@@ -205,6 +208,14 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     }
                     if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
                     carrierError?.let { Text("Carrier audio error: $it") }
+                    if (missingMedia.isNotEmpty()) {
+                        Text(
+                            "These files aren't on this device yet: " + missingMedia.joinToString { it.name } +
+                                ". Find them before exporting.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        OutlinedButton(onClick = { viewModel.promptMissingMedia(); onBack() }) { Text("Find media") }
+                    }
                     Button(
                         onClick = {
                             output.delete()
@@ -223,11 +234,12 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 object : ProjectExporter.Callback {
                                     override fun onCompleted() { state = ExportState.DONE; progress = 100 }
                                     override fun onError(errorValue: ExportException) {
-                                        error = listOfNotNull(
-                                            exporter.lastIhtxFailure()?.let { "IHTX export " + it.current + "/" + it.total },
-                                            errorValue.message,
-                                            errorValue.cause?.message,
-                                        ).distinct().joinToString(" · ").ifBlank {
+                                        error = (
+                                            listOfNotNull(
+                                                exporter.lastIhtxFailure()?.let { "IHTX export " + it.current + "/" + it.total },
+                                                errorValue.message,
+                                            ) + causeMessages(errorValue)
+                                            ).distinct().joinToString(" · ").ifBlank {
                                             errorValue.javaClass.simpleName
                                         }
                                         state = ExportState.ERROR
@@ -239,7 +251,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 startMs = startMs,
                             )
                         },
-                        enabled = project.clips.isNotEmpty() && carriersReady,
+                        enabled = project.clips.isNotEmpty() && carriersReady && missingMedia.isEmpty(),
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {
@@ -273,4 +285,18 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
             }
         }
     }
+}
+
+/** The messages of an error's causes, innermost last (e.g. which file couldn't be read). */
+private fun causeMessages(error: Throwable): List<String> {
+    val messages = mutableListOf<String>()
+    var cause = error.cause
+    var depth = 0
+    while (cause != null && depth < 6) {
+        val message = cause.message?.takeIf { it.isNotBlank() }
+        messages += if (message != null) "${cause.javaClass.simpleName}: $message" else cause.javaClass.simpleName
+        cause = cause.cause
+        depth++
+    }
+    return messages
 }

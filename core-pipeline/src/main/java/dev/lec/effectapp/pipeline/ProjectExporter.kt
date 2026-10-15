@@ -74,7 +74,7 @@ class ProjectExporter(private val context: Context) {
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   preparing=true
   background {
-   val prepared=ReverseMediaCache.prepare(context,project)
+   val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
    queue.post { preparing=false; if(this.callback===callback) transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap),outputPath) }
   }
  }
@@ -91,7 +91,8 @@ class ProjectExporter(private val context: Context) {
   preparing=true
   background {
    // Reverse the whole clips first so trimming the start keeps what the preview shows.
-   val result=runCatching { ReverseMediaCache.prepare(context,project).takeForExport(startMs,lengthMs) }
+   // Fit clips to their files' real lengths first: a start past the end of a file fails the export.
+   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,project)).takeForExport(startMs,lengthMs) }
    queue.post {
     preparing=false
     if(this.callback!==callback) return@post

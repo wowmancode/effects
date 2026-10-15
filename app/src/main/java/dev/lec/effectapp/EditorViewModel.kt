@@ -130,6 +130,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         _openNotes.value = emptyList()
     }
 
+    /** Re-checks which media this device can open (e.g. before an export). */
+    fun checkMedia() = refreshMissingMedia()
+
+    /** Shows the Find media list again. */
+    fun promptMissingMedia() {
+        refreshMissingMedia()
+        _missingPrompt.value++
+    }
+
     private fun refreshMissingMedia() {
         val project = _project.value
         val names = buildMap {
