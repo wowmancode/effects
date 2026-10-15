@@ -66,7 +66,7 @@ class ProjectExporter(private val context: Context) {
    b.ihtx?.let { plan ->
     if (b.done < b.projects.size) {
      val previous=b.files[b.done - 1]
-     b.projects[b.done] = plan.nextProject(previous, b.done, audioLeadMs(previous))
+     b.projects[b.done] = plan.nextProject(previous, b.done, audioLeadMs(previous, plan.base.durationMs))
     }
    }
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
@@ -77,7 +77,7 @@ class ProjectExporter(private val context: Context) {
    else if (!b.concat) {
     b.concat=true
     transformer=newTransformer()
-    queue.post { if (batch===b) transformer.start(concatenate(b.files),b.output) }
+    queue.post { if (batch===b) transformer.start(concatenate(b.files,b.ihtx?.base?.durationMs),b.output) }
    }
    else { batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() } }
   }
@@ -192,12 +192,14 @@ class ProjectExporter(private val context: Context) {
  private fun background(block:()->Unit) { Thread(block,"export-prepare").start() }
  private fun startTransformer(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.ihtx?.outputSize,outputPresentationSize=b.ihtx?.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
  /**
-  * How much longer a pass's sound track is than its picture, in ms (0..250): the priming silence
-  * an AAC encoder adds in front of the sound when the device doesn't report it for removal.
+  * The priming silence (ms, 0..250) an AAC encoder put in front of a pass's sound when the device
+  * doesn't report it for removal: how much longer the sound track is than the length the pass was
+  * rendered to. Measured against that length, not the picture track, whose reported length can
+  * be a frame short (which would skip a frame of sound every pass and add up over many passes).
   */
- private fun audioLeadMs(file:File):Long {
-  val (audioUs,videoUs)=trackDurationsUs(file)
-  return if(audioUs<0 || videoUs<0) 0 else ((audioUs-videoUs)/1_000).coerceIn(0,MAX_AUDIO_LEAD_MS)
+ private fun audioLeadMs(file:File,intendedMs:Long):Long {
+  val (audioUs,_)=trackDurationsUs(file)
+  return if(audioUs<0 || intendedMs<=0) 0 else (audioUs/1_000-intendedMs).coerceIn(0,MAX_AUDIO_LEAD_MS)
  }
  /** (audio, video) track durations of an export file in µs; -1 when a track is missing. */
  private fun trackDurationsUs(file:File):Pair<Long,Long> {
@@ -257,7 +259,7 @@ class ProjectExporter(private val context: Context) {
   * the pictures are copied through untouched and each pass's sound is cut to just its content
   * (from after the priming, as long as the picture) and encoded once.
   */
- private fun concatenate(files:List<File>):Composition {
+ private fun concatenate(files:List<File>,passMs:Long?):Composition {
   val durations=files.map(::trackDurationsUs)
   if(durations.any { (audioUs,videoUs) -> audioUs<0 || videoUs<=0 }) {
    // A pass without sound or picture: join as before.
@@ -267,16 +269,24 @@ class ProjectExporter(private val context: Context) {
     .build()
   }
   val video=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_VIDEO))
-   .addItems(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).setRemoveAudio(true).build() })
+   .addItems(files.map { file ->
+    // A file's length is its longest track (the sound, with its priming), so the pictures are
+    // cut to the pass length too, or each would sit that much apart from the next.
+    val builder=MediaItem.Builder().setUri(Uri.fromFile(file))
+    if(passMs!=null && passMs>0) builder.setClippingConfiguration(MediaItem.ClippingConfiguration.Builder().setEndPositionMs(passMs).build())
+    EditedMediaItem.Builder(builder.build()).setRemoveAudio(true).build()
+   })
    .build()
   val audio=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_AUDIO))
    .addItems(files.zip(durations) { file,(audioUs,videoUs) ->
-    val leadMs=((audioUs-videoUs)/1_000).coerceIn(0,MAX_AUDIO_LEAD_MS)
+    // Every pass is rendered to the same length; each segment of sound is cut to exactly it.
+    val lengthMs=passMs?.takeIf { it>0 } ?: (videoUs/1_000)
+    val leadMs=(audioUs/1_000-lengthMs).coerceIn(0,MAX_AUDIO_LEAD_MS)
     val item=MediaItem.Builder()
      .setUri(Uri.fromFile(file))
      .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
       .setStartPositionMs(leadMs)
-      .setEndPositionMs(leadMs+videoUs/1_000)
+      .setEndPositionMs(leadMs+lengthMs)
       .build())
      .build()
     EditedMediaItem.Builder(item).setRemoveVideo(true).build()

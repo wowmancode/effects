@@ -12,7 +12,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - IHTX exports keep sound and picture together. Each pass's audio encoder put a little silence
   in front of the sound, so every pass (and every joined segment) pushed the sound later. Later
   passes now read the sound from after that silence, and the final join copies the pictures
-  through and cuts each pass's sound to match its picture, encoding the sound once.
+  through and cuts each pass's picture and sound to the export length, encoding the sound once.
+  The silence is measured against the export length, so very short exports (e.g. 0.4 s × 10)
+  don't lose a frame of sound per pass.
 - Export runs on its own thread, so a slow or stuck export can no longer freeze the app;
   Cancel returns immediately. Animated Crop & place follows its keyframes during export instead
   of cutting clips and layers into short slices, and layer pieces split only at clip cuts are
