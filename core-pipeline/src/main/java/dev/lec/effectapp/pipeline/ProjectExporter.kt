@@ -3,6 +3,7 @@ import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -27,29 +28,51 @@ import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 @OptIn(UnstableApi::class)
 class ProjectExporter(private val context: Context) {
- private var callback: Callback? = null
- private var batch: Batch? = null
- private var failedIhtxStatus: IhtxStatus? = null
+ // The Transformer runs on its own thread: its calls (start, cancel) and callbacks can block or
+ // take a while with large layered projects, and must never hold up the UI. Results are handed
+ // back to the main thread; progress is sampled on the export thread and cached for the UI.
+ private val exportThread = HandlerThread("effect-export").apply { start() }
+ private val queue = Handler(exportThread.looper)
+ private val main = Handler(Looper.getMainLooper())
+ @Volatile private var callback: Callback? = null
+ @Volatile private var batch: Batch? = null
+ @Volatile private var failedIhtxStatus: IhtxStatus? = null
+ @Volatile private var lastProgress: Int? = null
+ @Volatile private var videoMimeType: String = MimeTypes.VIDEO_H264
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
- private val queue = Handler(Looper.getMainLooper())
+ private val progressPoll = object : Runnable {
+  override fun run() {
+   if (callback == null) { lastProgress = null; return }
+   val h=ProgressHolder()
+   lastProgress = if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE) null else {
+    val b=batch
+    if(b==null) h.progress else ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100)
+   }
+   queue.postDelayed(this, PROGRESS_POLL_MS)
+  }
+ }
+ private fun finish(block:(Callback)->Unit) {
+  val c=callback; callback=null; lastProgress=null
+  if(c!=null) main.post { block(c) }
+ }
  private val transformerListener = object : Transformer.Listener {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
    val b=batch
-   if (b==null) { val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted(); return }
+   if (b==null) { transformer=newTransformer(); finish { it.onCompleted() }; return }
    b.retries=0
    b.done++
    b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
-    batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted()
+    batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() }
    }
    else if (!b.concat) {
     b.concat=true
     transformer=newTransformer()
     queue.post { if (batch===b) transformer.start(concatenate(b.files),b.output) }
    }
-   else { batch=null; b.files.forEach(File::delete); val c=callback; callback=null; transformer=newTransformer(); c?.onCompleted() }
+   else { batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() } }
   }
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
    val b=batch
@@ -60,22 +83,31 @@ class ProjectExporter(private val context: Context) {
     queue.postDelayed({ if (batch===b) startStage(b,b.done) }, RETRY_COOLDOWN_MS)
     return
    }
-   failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; val c=callback; callback=null; transformer=newTransformer(); c?.onError(exportException)
+   failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; transformer=newTransformer(); finish { it.onError(exportException) }
   }
  }
  @Volatile private var preparing=false
- private var transformer: Transformer = newTransformer()
+ @Volatile private var transformer: Transformer = newTransformer()
  private fun newTransformer():Transformer = Transformer.Builder(context)
-  .setVideoMimeType(MimeTypes.VIDEO_H264)
+  .setLooper(exportThread.looper)
+  .setVideoMimeType(videoMimeType)
   .setAudioMimeType(MimeTypes.AUDIO_AAC)
   .addListener(transformerListener)
   .build()
- fun start(project: EditProject, outputPath: String, callback: Callback) {
+ fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264) {
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
+  videoMimeType=codec.mimeType
   preparing=true
   background {
    val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
-   queue.post { preparing=false; if(this.callback===callback) transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap),outputPath) }
+   queue.post {
+    preparing=false
+    if(this.callback===callback) {
+     transformer=newTransformer()
+     transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap),outputPath)
+     queue.removeCallbacks(progressPoll); queue.post(progressPoll)
+    }
+   }
   }
  }
  /** True while reversed clip media is being rendered, before the export itself starts. */
@@ -84,8 +116,9 @@ class ProjectExporter(private val context: Context) {
   * Exports [lengthMs] of the project beginning [startMs] into it, [exports] times cumulatively.
   * Reversed media is rendered first, on a background thread; the call returns immediately.
   */
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0) {
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264) {
   check(this.callback==null) { "An export is already running" }
+  videoMimeType=codec.mimeType
   failedIhtxStatus=null
   this.callback=callback
   preparing=true
@@ -98,11 +131,12 @@ class ProjectExporter(private val context: Context) {
     if(this.callback!==callback) return@post
     val base=result.getOrNull()
     if(base==null || base.clips.isEmpty()) {
-     this.callback=null
-     callback.onError(ExportException.createForUnexpected(IllegalArgumentException(result.exceptionOrNull()?.message ?: "Nothing to export after the start time")))
+     finish { it.onError(ExportException.createForUnexpected(IllegalArgumentException(result.exceptionOrNull()?.message ?: "Nothing to export after the start time"))) }
      return@post
     }
+    transformer=newTransformer()
     beginIhtx(base,exports,outputPath,overlays,overlayGridSize,exportAspectRatio)
+    queue.removeCallbacks(progressPoll); queue.post(progressPoll)
    }
   }
  }
@@ -116,8 +150,19 @@ class ProjectExporter(private val context: Context) {
  }
  fun ihtxStatus():IhtxStatus? { val b=batch ?: return null; return if(b.concat) IhtxStatus(b.projects.size,b.projects.size,true) else IhtxStatus(b.done+1,b.projects.size,false) }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
- fun progress():Int? { val h=ProgressHolder(); if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE)return null; val b=batch?:return h.progress; return ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100) }
- fun cancel(){ transformer.cancel(); batch?.files?.forEach(File::delete); batch=null; callback=null; preparing=false }
+ /** Latest progress (0..100), sampled on the export thread; null when not known. */
+ fun progress():Int? = lastProgress
+ /** Stops the export without waiting for it (the Transformer is cancelled on its own thread). */
+ fun cancel(){
+  callback=null; preparing=false; lastProgress=null
+  queue.post {
+   runCatching { transformer.cancel() }
+   batch?.files?.forEach(File::delete); batch=null
+   transformer=newTransformer()
+  }
+ }
+ /** Cancels anything running and ends the export thread; the exporter can't be used afterwards. */
+ fun release(){ cancel(); queue.post { exportThread.quitSafely() } }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
  private fun startStage(b:Batch,index:Int){
   if(index>0) {
@@ -218,6 +263,7 @@ class ProjectExporter(private val context: Context) {
  }
 
  private companion object {
+  const val PROGRESS_POLL_MS = 200L
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
  }

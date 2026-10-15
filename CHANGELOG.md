@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Export runs on its own thread, so a slow or stuck export can no longer freeze the app;
+  Cancel returns immediately. Animated Crop & place follows its keyframes during export instead
+  of cutting clips and layers into short slices, and layer pieces split only at clip cuts are
+  joined back up, so layered projects export with far fewer decoder restarts.
 - Reverse video and reverse audio are now truly reversed. Each reversed clip is
   rendered once (cached) — video through an all-keyframe intermediate remuxed back
   to front, audio decoded and written back to front — so the preview plays it
@@ -43,6 +47,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transparent around it, so layers underneath show through.
 - Replacing a clip whose media is missing now relinks every clip and overlay that used that
   file and keeps their in-points, instead of resetting the clip to the whole new file.
+- Export video codec choice: H.264, H.265 (HEVC), VP9 or AV1, in an .mp4 with AAC sound.
+  Only the codecs the phone can encode are offered.
 
 - Moving video overlays during export, with timeline positioning, opacity, scale,
   position, automatic looping, and reorderable layer priority. The editor preview

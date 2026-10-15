@@ -29,6 +29,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ import androidx.core.content.FileProvider
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.ExportException
 import dev.lec.effectapp.effects.CarrierAudioStore
+import dev.lec.effectapp.pipeline.ExportCodec
 import dev.lec.effectapp.pipeline.ProjectExporter
 import dev.lec.effectapp.model.Overlay
 import java.io.File
@@ -65,6 +67,11 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
     val project by viewModel.project.collectAsState()
     val missingMedia by viewModel.missingMedia.collectAsState()
+    // Only codecs this phone can encode are offered (looked up once, off the main thread).
+    val codecs by produceState(listOf(ExportCodec.H264)) {
+        value = withContext(Dispatchers.IO) { ExportCodec.available() }
+    }
+    var codec by remember { mutableStateOf(ExportCodec.H264) }
     LaunchedEffect(project) { viewModel.checkMedia() }
     val exporter = remember { ProjectExporter(context.applicationContext) }
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
@@ -112,7 +119,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         }
     }
 
-    DisposableEffect(exporter) { onDispose { if (state == ExportState.RUNNING) exporter.cancel() } }
+    DisposableEffect(exporter) { onDispose { exporter.release() } }
     LaunchedEffect(carrierUris) {
         carriersReady = carrierUris.isEmpty()
         carrierError = null
@@ -187,6 +194,15 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         }
                     }
                     Text("Keeps the video proportional and fills unused space with black bars.")
+                    Text("Video codec")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        codecs.forEach { option ->
+                            OutlinedButton(onClick = { codec = option }, modifier = Modifier.weight(1f)) {
+                                Text(if (codec == option) "✓ ${option.label}" else option.label, maxLines = 1)
+                            }
+                        }
+                    }
+                    Text("Saved as .mp4 with AAC sound. Codecs this phone can't encode aren't shown.")
                     Text("IHTX animated overlays")
                     OutlinedTextField(
                         value = overlayGridSizeText,
@@ -249,6 +265,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 overlayGridSize = overlayGridSize,
                                 exportAspectRatio = exportAspectRatio.ratio,
                                 startMs = startMs,
+                                codec = codec,
                             )
                         },
                         enabled = project.clips.isNotEmpty() && carriersReady && missingMedia.isEmpty(),

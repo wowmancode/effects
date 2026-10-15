@@ -39,44 +39,73 @@ class FramePlacementEffect : LecEffect {
     )
 
     override fun toMediaEffect(values: Map<String, Float>): Effect {
-        fun v(key: String) = values[key]?.takeIf(Float::isFinite) ?: params.first { it.id == key }.default
-        return FramePlacementGlEffect(
-            floatArrayOf(v("src_cx"), v("src_cy"), v("src_w"), v("src_h")),
-            v("src_rot"),
-            v("src_aspect").coerceIn(0.01f, 100f),
-            floatArrayOf(v("dst_cx"), v("dst_cy"), nonZero(v("dst_w")), nonZero(v("dst_h"))),
-        )
+        val placement = placementValues(values)
+        return FramePlacementGlEffect(placement)
     }
 
-    private fun nonZero(value: Float): Float = if (kotlin.math.abs(value) < 1e-5f) 1e-5f else value
+    companion object {
+        private val DEFAULTS = FramePlacementEffect().params.associate { it.id to it.default }
+
+        /**
+         * The shader's ten values (window cx, cy, w, h, turn, aspect; place cx, cy, w, h) for a
+         * parameter map; missing values fall back to identity.
+         */
+        fun placementValues(values: Map<String, Float>): FloatArray {
+            fun v(key: String) = values[key]?.takeIf(Float::isFinite) ?: DEFAULTS.getValue(key)
+            fun nonZero(value: Float) = if (kotlin.math.abs(value) < 1e-5f) 1e-5f else value
+            return floatArrayOf(
+                v("src_cx"), v("src_cy"), v("src_w"), v("src_h"),
+                v("src_rot"), v("src_aspect").coerceIn(0.01f, 100f),
+                v("dst_cx"), v("dst_cy"), nonZero(v("dst_w")), nonZero(v("dst_h")),
+            )
+        }
+
+        val IDENTITY: FloatArray get() = placementValues(emptyMap())
+    }
+}
+
+/**
+ * Crop & place that follows keyframes over time, for export: one instance covers a whole sequence
+ * (a lane of overlays, or the clip row), so consecutive items share it and Media3 keeps one GL
+ * chain instead of rebuilding it per item. Frames are matched by presentation time, which in an
+ * export is the position in the sequence; times outside every span pass the picture through.
+ */
+@OptIn(UnstableApi::class)
+class TimedFramePlacement(spans: List<Span>) : GlEffect {
+    /** [startUs, endUs) of the sequence placed by [valuesAtMs], called with ms since [originMs]. */
+    class Span(val startUs: Long, val endUs: Long, val originMs: Long, val valuesAtMs: (Long) -> Map<String, Float>)
+
+    private val ordered = spans.sortedBy { it.startUs }
+    private val starts = LongArray(ordered.size) { ordered[it].startUs }
+
+    fun valuesAt(presentationTimeUs: Long): FloatArray {
+        // The last span starting at or before this time.
+        var index = java.util.Arrays.binarySearch(starts, presentationTimeUs)
+        if (index < 0) index = -index - 2
+        val span = ordered.getOrNull(index)?.takeIf { presentationTimeUs < it.endUs }
+            ?: return FramePlacementEffect.IDENTITY
+        val localMs = (presentationTimeUs / 1_000 - span.originMs).coerceAtLeast(0)
+        return FramePlacementEffect.placementValues(span.valuesAtMs(localMs))
+    }
+
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
+        FramePlacementShaderProgram(useHdr, ::valuesAt)
 }
 
 @OptIn(UnstableApi::class)
-private class FramePlacementGlEffect(
-    val source: FloatArray,
-    val rotation: Float,
-    val sourceAspect: Float,
-    val destination: FloatArray,
-) : GlEffect {
+private class FramePlacementGlEffect(val values: FloatArray) : GlEffect {
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram =
-        FramePlacementShaderProgram(useHdr, source, rotation, sourceAspect, destination)
+        FramePlacementShaderProgram(useHdr) { values }
 
-    override fun equals(other: Any?): Boolean =
-        other is FramePlacementGlEffect && source.contentEquals(other.source) && rotation == other.rotation &&
-            sourceAspect == other.sourceAspect && destination.contentEquals(other.destination)
+    override fun equals(other: Any?): Boolean = other is FramePlacementGlEffect && values.contentEquals(other.values)
 
-    override fun hashCode(): Int =
-        ((source.contentHashCode() * 31 + rotation.hashCode()) * 31 + sourceAspect.hashCode()) * 31 +
-            destination.contentHashCode()
+    override fun hashCode(): Int = values.contentHashCode()
 }
 
 @OptIn(UnstableApi::class)
 private class FramePlacementShaderProgram(
     useHdr: Boolean,
-    private val source: FloatArray,
-    private val rotation: Float,
-    private val sourceAspect: Float,
-    private val destination: FloatArray,
+    private val valuesAt: (Long) -> FloatArray,
 ) : BaseGlShaderProgram(useHdr, 1) {
     private val program = try {
         GlProgram(VERTEX_SHADER, FRAGMENT_SHADER)
@@ -88,12 +117,13 @@ private class FramePlacementShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         try {
+            val v = valuesAt(presentationTimeUs)
             program.use()
             program.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-            program.setFloatsUniform("uSource", source)
-            program.setFloatUniform("uRotation", rotation)
-            program.setFloatUniform("uSourceAspect", sourceAspect)
-            program.setFloatsUniform("uDestination", destination)
+            program.setFloatsUniform("uSource", floatArrayOf(v[0], v[1], v[2], v[3]))
+            program.setFloatUniform("uRotation", v[4])
+            program.setFloatUniform("uSourceAspect", v[5])
+            program.setFloatsUniform("uDestination", floatArrayOf(v[6], v[7], v[8], v[9]))
             program.setBufferAttribute("aFramePosition", FRAME_VERTICES, 4)
             program.bindAttributesAndUniforms()
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, 4)

@@ -27,6 +27,7 @@ import dev.lec.effectapp.effects.DEFAULT_VIDEO_PLUGIN_SOURCE
 import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_C_STYLE
 import dev.lec.effectapp.effects.displacementMapMediaEffect
 import dev.lec.effectapp.effects.EffectRegistry
+import dev.lec.effectapp.effects.TimedFramePlacement
 import dev.lec.effectapp.effects.audioProcessorFor
 import dev.lec.effectapp.effects.customLutMediaEffect
 import dev.lec.effectapp.effects.videoPluginEffect
@@ -55,6 +56,35 @@ object ProjectCompositionFactory {
         override fun getNextSpeedChangeTimeUs(timeUs: Long): Long = C.TIME_UNSET
     }
 
+    /** Stretches frame-filling overlays to FILL_FRAME_SIZE; shared so items compare equal. */
+    private val FILL_FRAME_PRESENTATION: Presentation =
+        Presentation.createForWidthAndHeight(FILL_FRAME_SIZE.width, FILL_FRAME_SIZE.height, Presentation.LAYOUT_STRETCH_TO_FIT)
+
+    private val fitPresentations = java.util.concurrent.ConcurrentHashMap<Size, Presentation>()
+
+    private fun fitPresentation(size: Size): Presentation = fitPresentations.getOrPut(size) {
+        Presentation.createForWidthAndHeight(size.width, size.height, Presentation.LAYOUT_SCALE_TO_FIT)
+    }
+
+    private fun TimelineSegment.isPlacement(): Boolean = effectId == "frame_place"
+
+    /** A stretch of a sequence ([startMs, endMs) in project time) and the effects placed on it. */
+    private class PlacedRange(val startMs: Long, val endMs: Long, val segments: List<TimelineSegment>)
+
+    /**
+     * One time-driven Crop & place covering every range that has one, or null when none does.
+     * Segment keyframes are local to their range, so each span keeps its own origin.
+     */
+    private fun timedPlacement(ranges: List<PlacedRange>): TimedFramePlacement? {
+        val spans = ranges.mapNotNull { range ->
+            val segment = range.segments.firstOrNull { it.enabled && it.isPlacement() } ?: return@mapNotNull null
+            TimedFramePlacement.Span(range.startMs * 1_000, range.endMs * 1_000, range.startMs) { localMs ->
+                segment.paramsAt(localMs)
+            }
+        }
+        return if (spans.isEmpty()) null else TimedFramePlacement(spans)
+    }
+
     fun create(
         project: EditProject,
         resolveBitmap: (String) -> Bitmap? = { null },
@@ -67,9 +97,15 @@ object ProjectCompositionFactory {
     ): Composition {
         require(project.clips.isNotEmpty()) { "A project needs at least one clip" }
         val hasReverse = project.clips.any { it.reversesVideo() || it.reversesAudio() }
-        val hasKeyframes = project.clips.any { clip -> (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() } }
+        // Crop & place on the clip row runs as one time-driven effect over the whole row, so its
+        // keyframes don't cut clips into slices (each slice would restart a decoder and GL chain).
+        val basePlacement = timedPlacement(project.clips.runningFold(0L) { start, clip -> start + clip.durationMs }
+            .zip(project.clips) { startMs, clip -> PlacedRange(startMs, startMs + clip.durationMs, clip.effectSegments) })
+        val hasKeyframes = project.clips.any { clip ->
+            (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() && !(basePlacement != null && it.isPlacement()) }
+        }
         val baseSequences = if (!hasReverse && !hasKeyframes) {
-            val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, outputPresentationSize, includeAudio = !muteBaseAudio) }
+            val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, outputPresentationSize, includeAudio = !muteBaseAudio, placement = basePlacement) }
             listOf(
                 if (muteBaseAudio) EditedMediaItemSequence.withVideoFrom(items)
                 else EditedMediaItemSequence.withAudioAndVideoFrom(items),
@@ -79,8 +115,9 @@ object ProjectCompositionFactory {
             // back to one-frame slices in reverse order.
             val videoItems = project.clips.flatMap { clip ->
                 val source = clip.videoOverride
-                sourceSlices(clip, source == null && clip.reversesVideo(), clip.effectSegments, targetFrameRate).map { slice ->
-                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source)
+                val sliceSegments = clip.effectSegments.filterNot { basePlacement != null && it.isPlacement() }
+                sourceSlices(clip, source == null && clip.reversesVideo(), sliceSegments, targetFrameRate).map { slice ->
+                    editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source, placement = basePlacement)
                 }
             }
             val audioItems = project.clips.flatMap { clip ->
@@ -127,6 +164,7 @@ object ProjectCompositionFactory {
         resolveBitmap: (String) -> Bitmap? = { null },
         includeVideoOverlayPosters: Boolean = true,
         waitForVideoMapFrames: Boolean = false,
+        sharedPlacement: Effect? = null,
     ): List<Effect> {
         val result = mutableListOf<Effect>()
         val transform = clip.transform
@@ -135,8 +173,10 @@ object ProjectCompositionFactory {
         }
         // Visual effects are deliberately clip-wide. List order is stack order and is unbounded.
         clip.effectSegments.filter { it.enabled }.forEach { segment ->
+            if (sharedPlacement != null && segment.isPlacement()) return@forEach
             segmentVideoEffect(segment, timeMs, waitForVideoMapFrames)?.let(result::add)
         }
+        sharedPlacement?.let(result::add)
         // Overlays composite last so they sit on top of the processed image.
         overlayEffect(clip, resolveBitmap, includeVideoOverlayPosters)?.let(result::add)
         return result
@@ -195,6 +235,7 @@ object ProjectCompositionFactory {
         targetFrameRate: Int?,
         outputPresentationSize: Size?,
         includeAudio: Boolean = true,
+        placement: Effect? = null,
     ): EditedMediaItem =
         editedItem(
             clip = clip,
@@ -204,6 +245,7 @@ object ProjectCompositionFactory {
             resolveBitmap = resolveBitmap,
             targetFrameRate = targetFrameRate,
             outputPresentationSize = outputPresentationSize,
+            placement = placement,
         )
 
     private fun editedItem(
@@ -215,6 +257,7 @@ object ProjectCompositionFactory {
         targetFrameRate: Int?,
         outputPresentationSize: Size?,
         source: SourceOverride? = null,
+        placement: Effect? = null,
     ): EditedMediaItem {
         // Reversed media is rendered at normal speed; otherwise the clip reads speed× as much source.
         val speed = if (source == null) clip.playbackSpeed else 1f
@@ -245,14 +288,11 @@ object ProjectCompositionFactory {
                     resolveBitmap,
                     includeVideoOverlayPosters = false,
                     waitForVideoMapFrames = true,
+                    sharedPlacement = placement,
                 ))
-                outputPresentationSize?.let { size ->
-                    add(Presentation.createForWidthAndHeight(
-                        size.width,
-                        size.height,
-                        Presentation.LAYOUT_SCALE_TO_FIT,
-                    ))
-                }
+                // One shared instance per size: Media3 compares effect lists between items and
+                // rebuilds the whole GL chain when they differ (Presentation has no equals).
+                outputPresentationSize?.let { size -> add(fitPresentation(size)) }
             } else emptyList(),
         )
         val builder = EditedMediaItem.Builder(mediaItem)
@@ -382,6 +422,59 @@ object ProjectCompositionFactory {
         return pieces
     }
 
+    /**
+     * Joins consecutive pieces of a lane that are really one continuous stretch of the same media
+     * (layers are cut wherever the clip row cuts): same file, speed and look, the second starting
+     * where the first stops in the source. Fewer items means fewer decoder restarts in export.
+     */
+    private fun mergeContiguous(lane: List<VideoOverlayTrack>, ignorePlacement: Boolean): List<VideoOverlayTrack> {
+        val result = mutableListOf<VideoOverlayTrack>()
+        lane.sortedBy { it.globalStartMs }.forEach { next ->
+            val previous = result.lastOrNull()
+            if (previous != null && continues(previous, next, ignorePlacement)) {
+                val joinedMs = next.globalEndMs - next.globalStartMs
+                result[result.lastIndex] = VideoOverlayTrack(
+                    overlay = previous.overlay.copy(endMs = previous.overlay.endMs + joinedMs),
+                    globalStartMs = previous.globalStartMs,
+                    globalEndMs = next.globalEndMs,
+                )
+            } else {
+                result += next
+            }
+        }
+        return result
+    }
+
+    private fun continues(a: VideoOverlayTrack, b: VideoOverlayTrack, ignorePlacement: Boolean): Boolean {
+        val x = a.overlay
+        val y = b.overlay
+        if (a.globalEndMs != b.globalStartMs) return false
+        if (x.sourceUri != y.sourceUri || x.isVideo != y.isVideo || x.audioOnly != y.audioOnly) return false
+        if (x.fillFrame != y.fillFrame || x.includeAudio != y.includeAudio || x.ihtxLayout != y.ihtxLayout) return false
+        if (x.playbackSpeed != y.playbackSpeed || x.sourceDurationMs != y.sourceDurationMs) return false
+        if (x.keyframes.isNotEmpty() || y.keyframes.isNotEmpty()) return false
+        if (x.alpha != y.alpha || x.scale != y.scale || x.offsetX != y.offsetX || x.offsetY != y.offsetY) return false
+        if (x.isVideo || x.audioOnly) {
+            val expected = x.sourceStartMs + x.sourceOffsetMs +
+                ((a.globalEndMs - a.globalStartMs) * x.playbackSpeed.toDouble()).roundToLong()
+            if (kotlin.math.abs(y.sourceStartMs + y.sourceOffsetMs - expected) > 3) return false
+        }
+        return sameLook(x.effectSegments, y.effectSegments, ignorePlacement) &&
+            sameLook(x.audioSegments, y.audioSegments, ignorePlacement)
+    }
+
+    /** Same enabled effects with the same static values (keyframed effects never match). */
+    private fun sameLook(a: List<TimelineSegment>, b: List<TimelineSegment>, ignorePlacement: Boolean): Boolean {
+        fun key(list: List<TimelineSegment>): List<Triple<String, Map<String, Float>, Map<String, String>>>? {
+            val kept = list.filter { it.enabled && !(ignorePlacement && it.isPlacement()) }
+            if (kept.any { it.keyframes.isNotEmpty() }) return null
+            return kept.map { Triple(it.effectId, it.params, it.stringParams) }
+        }
+        val left = key(a) ?: return false
+        val right = key(b) ?: return false
+        return left == right
+    }
+
     private fun laneVideoSequence(
         lane: List<VideoOverlayTrack>,
         projectDurationMs: Long,
@@ -389,13 +482,16 @@ object ProjectCompositionFactory {
         ihtxPresentationSize: Size?,
     ): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_VIDEO))
+        // One time-driven Crop & place for the whole lane (built from the unmerged pieces, whose
+        // keyframes are local to each piece), then pieces that only split at clip cuts are joined.
+        val placement = timedPlacement(lane.map { PlacedRange(it.globalStartMs, it.globalEndMs, it.overlay.effectSegments) })
         var cursorMs = 0L
-        lane.sortedBy { it.globalStartMs }.forEach { track ->
+        mergeContiguous(lane, ignorePlacement = placement != null).forEach { track ->
             if (track.globalStartMs > cursorMs) builder.addGap((track.globalStartMs - cursorMs) * 1_000)
             val overlay = track.overlay
-            val segments = overlay.effectSegments.filter { it.enabled }
+            val segments = overlay.effectSegments.filter { it.enabled && !(placement != null && it.isPlacement()) }
             overlayPieces(track, overlay.isVideo, segments).forEach { piece ->
-                val effects = Effects(emptyList(), overlayTrackEffects(track, piece.startMs, ihtxPresentationSize))
+                val effects = Effects(emptyList(), overlayTrackEffects(track, piece.startMs, ihtxPresentationSize, placement))
                 val pieceMs = piece.endMs - piece.startMs
                 val item = if (!overlay.isVideo) {
                     // The image duration on the MediaItem is what routes it to Media3's image loader;
@@ -438,7 +534,12 @@ object ProjectCompositionFactory {
     }
 
     /** The overlay's video effects at [localMs] into it, then any layout normalisation. */
-    private fun overlayTrackEffects(track: VideoOverlayTrack, localMs: Long, ihtxPresentationSize: Size?): List<Effect> = buildList {
+    private fun overlayTrackEffects(
+        track: VideoOverlayTrack,
+        localMs: Long,
+        ihtxPresentationSize: Size?,
+        placement: Effect? = null,
+    ): List<Effect> = buildList {
         if (track.overlay.ihtxLayout && ihtxPresentationSize != null) {
             add(Presentation.createForWidthAndHeight(
                 ihtxPresentationSize.width,
@@ -447,19 +548,21 @@ object ProjectCompositionFactory {
             ))
         }
         track.overlay.effectSegments.filter { it.enabled }.forEach { segment ->
+            if (placement != null && segment.isPlacement()) return@forEach
             segmentVideoEffect(segment, localMs, waitForVideoMapFrames = true)?.let(::add)
         }
+        placement?.let(::add)
         if (track.overlay.fillFrame) {
             // Every frame-filling overlay arrives at one known size, which the compositor then
             // stretches over the output frame (sizes can differ between items of a lane).
-            add(Presentation.createForWidthAndHeight(FILL_FRAME_SIZE.width, FILL_FRAME_SIZE.height, Presentation.LAYOUT_STRETCH_TO_FIT))
+            add(FILL_FRAME_PRESENTATION)
         }
     }
 
     private fun laneAudioSequence(lane: List<VideoOverlayTrack>, projectDurationMs: Long): EditedMediaItemSequence {
         val builder = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
         var cursorMs = 0L
-        lane.sortedBy { it.globalStartMs }.forEach { track ->
+        mergeContiguous(lane, ignorePlacement = true).forEach { track ->
             if (track.globalStartMs > cursorMs) builder.addGap((track.globalStartMs - cursorMs) * 1_000)
             val overlay = track.overlay
             val speed = overlay.playbackSpeed
