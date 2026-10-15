@@ -10,8 +10,8 @@ import androidx.media3.transformer.EncoderUtil
  */
 enum class ExportCodec(val label: String, val mimeType: String) {
     // Plain MIME strings (Media3's VP9/AV1 constants are unstable API).
-    H264("H.264", "video/avc"),
-    H265("H.265 (HEVC)", "video/hevc"),
+    H264("H264", "video/avc"),
+    H265("H265", "video/hevc"),
     VP9("VP9", "video/x-vnd.on2.vp9"),
     AV1("AV1", "video/av01"),
     ;

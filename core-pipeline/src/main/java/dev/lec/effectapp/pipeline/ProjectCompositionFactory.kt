@@ -104,7 +104,10 @@ object ProjectCompositionFactory {
         val hasKeyframes = project.clips.any { clip ->
             (clip.effectSegments + clip.audioSegments).any { it.keyframes.isNotEmpty() && !(basePlacement != null && it.isPlacement()) }
         }
-        val baseSequences = if (!hasReverse && !hasKeyframes) {
+        // A clip that reads its sound from elsewhere (reversed, or offset in IHTX passes) needs
+        // picture and sound in separate sequences.
+        val hasOverrides = project.clips.any { it.videoOverride != null || it.audioOverride != null }
+        val baseSequences = if (!hasReverse && !hasKeyframes && !hasOverrides) {
             val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, outputPresentationSize, includeAudio = !muteBaseAudio, placement = basePlacement) }
             listOf(
                 if (muteBaseAudio) EditedMediaItemSequence.withVideoFrom(items)

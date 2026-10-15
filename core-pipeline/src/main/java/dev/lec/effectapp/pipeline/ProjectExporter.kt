@@ -21,6 +21,7 @@ import dev.lec.effectapp.model.EditProject
 import dev.lec.effectapp.model.EffectKeyframe
 import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.OverlayKeyframe
+import dev.lec.effectapp.model.SourceOverride
 import dev.lec.effectapp.model.TimelineSegment
 import java.io.File
 import java.util.UUID
@@ -61,7 +62,12 @@ class ProjectExporter(private val context: Context) {
    if (b==null) { transformer=newTransformer(); finish { it.onCompleted() }; return }
    b.retries=0
    b.done++
-   b.ihtx?.let { plan -> if (b.done < b.projects.size) b.projects[b.done] = plan.nextProject(b.files[b.done - 1], b.done) }
+   b.ihtx?.let { plan ->
+    if (b.done < b.projects.size) {
+     val previous=b.files[b.done - 1]
+     b.projects[b.done] = plan.nextProject(previous, b.done, audioLeadMs(previous))
+    }
+   }
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
@@ -177,6 +183,31 @@ class ProjectExporter(private val context: Context) {
  }
  private fun background(block:()->Unit) { Thread(block,"export-prepare").start() }
  private fun startTransformer(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.ihtx?.outputSize,outputPresentationSize=b.ihtx?.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
+ /**
+  * How much longer a pass's sound track is than its picture, in ms (0..250): the priming silence
+  * an AAC encoder adds in front of the sound when the device doesn't report it for removal.
+  */
+ private fun audioLeadMs(file:File):Long {
+  val (audioUs,videoUs)=trackDurationsUs(file)
+  return if(audioUs<0 || videoUs<0) 0 else ((audioUs-videoUs)/1_000).coerceIn(0,MAX_AUDIO_LEAD_MS)
+ }
+ /** (audio, video) track durations of an export file in µs; -1 when a track is missing. */
+ private fun trackDurationsUs(file:File):Pair<Long,Long> {
+  val extractor=android.media.MediaExtractor()
+  return try {
+   extractor.setDataSource(file.absolutePath)
+   var audioUs=-1L; var videoUs=-1L
+   for(i in 0 until extractor.trackCount) {
+    val format=extractor.getTrackFormat(i)
+    val mime=format.getString(android.media.MediaFormat.KEY_MIME) ?: continue
+    if(!format.containsKey(android.media.MediaFormat.KEY_DURATION)) continue
+    val duration=format.getLong(android.media.MediaFormat.KEY_DURATION)
+    if(mime.startsWith("audio/")) audioUs=maxOf(audioUs,duration)
+    if(mime.startsWith("video/")) videoUs=maxOf(videoUs,duration)
+   }
+   audioUs to videoUs
+  } catch (_:Exception) { -1L to -1L } finally { extractor.release() }
+ }
  private fun videoSize(sourceUri:String):Size? {
   val retriever=MediaMetadataRetriever()
   return try {
@@ -194,10 +225,42 @@ class ProjectExporter(private val context: Context) {
   fun even(value:Float):Int = (((value.roundToInt().coerceAtLeast(2)+1)/2)*2)
   return if(targetAspect >= 1f) Size(even(longestEdge),even(longestEdge/targetAspect)) else Size(even(longestEdge*targetAspect),even(longestEdge))
  }
- private fun concatenate(files:List<File>)=Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() })))
-  .setTransmuxAudio(true)
-  .setTransmuxVideo(true)
-  .build()
+ /**
+  * Joins the passes. Each pass's sound starts with encoder priming and runs that much longer than
+  * its picture, so joining files as they are would push the sound later with every pass. Instead
+  * the pictures are copied through untouched and each pass's sound is cut to just its content
+  * (from after the priming, as long as the picture) and encoded once.
+  */
+ private fun concatenate(files:List<File>):Composition {
+  val durations=files.map(::trackDurationsUs)
+  if(durations.any { (audioUs,videoUs) -> audioUs<0 || videoUs<=0 }) {
+   // A pass without sound or picture: join as before.
+   return Composition.Builder(listOf(EditedMediaItemSequence.withAudioAndVideoFrom(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).build() })))
+    .setTransmuxAudio(true)
+    .setTransmuxVideo(true)
+    .build()
+  }
+  val video=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_VIDEO))
+   .addItems(files.map { EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(it))).setRemoveAudio(true).build() })
+   .build()
+  val audio=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_AUDIO))
+   .addItems(files.zip(durations) { file,(audioUs,videoUs) ->
+    val leadMs=((audioUs-videoUs)/1_000).coerceIn(0,MAX_AUDIO_LEAD_MS)
+    val item=MediaItem.Builder()
+     .setUri(Uri.fromFile(file))
+     .setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
+      .setStartPositionMs(leadMs)
+      .setEndPositionMs(leadMs+videoUs/1_000)
+      .build())
+     .build()
+    EditedMediaItem.Builder(item).setRemoveVideo(true).build()
+   })
+   .build()
+  return Composition.Builder(listOf(video,audio))
+   .setTransmuxVideo(true)
+   .setTransmuxAudio(false)
+   .build()
+ }
  data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
  private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0)
  private fun EditProject.takeForExport(start:Long,length:Long):EditProject {
@@ -250,9 +313,18 @@ class ProjectExporter(private val context: Context) {
  private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?,val outputSize:Size?) {
   private companion object { const val GRID_COVERAGE = 1.02f }
   fun mutesBaseAudio(index:Int):Boolean = index>0 && index%passes==0
-  fun nextProject(previous:File,index:Int):EditProject {
+  /**
+   * The next pass: the previous pass's file as one clip, with the first clip's effects again.
+   * [audioLeadMs] is the silence the audio encoder put in front of that file's sound; the next
+   * pass reads the sound from just after it, so picture and sound stay together however many
+   * passes are stacked (otherwise every pass pushes the sound a little later).
+   */
+  fun nextProject(previous:File,index:Int,audioLeadMs:Long = 0):EditProject {
    val stage=index/passes
-   val first=base.clips.first().copy(sourceUri=Uri.fromFile(previous).toString(),trimStartMs=0,trimEndMs=base.durationMs,speed=1f,overlays=emptyList(),videoOverride=null,audioOverride=null)
+   val template=base.clips.first()
+   val uri=Uri.fromFile(previous).toString()
+   val audio=if(audioLeadMs>0 && !template.audioSegments.any { it.enabled && it.effectId=="reverse_audio" }) SourceOverride(uri,audioLeadMs) else null
+   val first=template.copy(sourceUri=uri,trimStartMs=0,trimEndMs=base.durationMs,speed=1f,overlays=emptyList(),videoOverride=null,audioOverride=audio)
    val project=base.copy(clips=listOf(first))
    if(index%passes!=0 || stage==0) return project
    val overlay=overlays[stage-1]
@@ -264,6 +336,7 @@ class ProjectExporter(private val context: Context) {
 
  private companion object {
   const val PROGRESS_POLL_MS = 200L
+  const val MAX_AUDIO_LEAD_MS = 250L
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
  }
