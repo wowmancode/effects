@@ -18,14 +18,19 @@ class RelayHubTest {
     }
 
     private val room = "0123456789abcdef0123456789abcdef"
+    private var now = 0L
+    private fun hub(limits: RelayHub.Limits = RelayHub.Limits()) = RelayHub(limits) { now }
+
+    private suspend fun RelayHub.owner(peer: RelayHub.Peer, token: String? = null) =
+        openOwner(room, peer, token) as RelayHub.OwnerResult.Opened
 
     @Test
     fun routesBetweenOwnerAndGuests() = runTest {
-        val hub = RelayHub()
+        val hub = hub()
         val owner = FakePeer()
         val alice = FakePeer()
         val bob = FakePeer()
-        assertNull(hub.openOwner(room, owner))
+        hub.owner(owner)
         assertNull(hub.openGuest(room, alice))
         assertNull(hub.openGuest(room, bob))
         assertEquals(2, owner.text.count { it.contains("joined") })
@@ -40,49 +45,81 @@ class RelayHubTest {
 
     @Test
     fun guestsCannotPretendToBeTheOwner() = runTest {
-        val hub = RelayHub()
+        val hub = hub()
         val owner = FakePeer()
         val alice = FakePeer()
         val bob = FakePeer()
-        hub.openOwner(room, owner)
+        hub.owner(owner)
         hub.openGuest(room, alice)
         hub.openGuest(room, bob)
         hub.fromOwner(alice, RelayHub.idBytes(bob.id) + byteArrayOf(1))
         hub.kick(alice, bob.id)
         assertTrue(bob.binary.isEmpty())
         assertNull(bob.closed)
+        // Taking over the room needs the owner's token, not just the room id.
+        val intruder = FakePeer()
+        assertEquals(RelayHub.OwnerResult.Refused("room-taken"), hub.openOwner(room, intruder))
+        assertEquals(RelayHub.OwnerResult.Refused("room-taken"), hub.openOwner(room, intruder, "f".repeat(32)))
     }
 
     @Test
-    fun rejectsTakenMissingAndFullRooms() = runTest {
-        val hub = RelayHub(RelayHub.Limits(maxGuestsPerRoom = 1))
+    fun rejectsMissingAndFullRooms() = runTest {
+        val hub = hub(RelayHub.Limits(maxGuestsPerRoom = 1))
         assertEquals("no-room", hub.openGuest(room, FakePeer()))
-        assertEquals("bad-request", hub.openOwner("nope", FakePeer()))
-        hub.openOwner(room, FakePeer())
-        assertEquals("room-taken", hub.openOwner(room, FakePeer()))
+        assertEquals(RelayHub.OwnerResult.Refused("bad-request"), hub.openOwner("nope", FakePeer()))
+        hub.owner(FakePeer())
         assertNull(hub.openGuest(room, FakePeer()))
         assertEquals("room-full", hub.openGuest(room, FakePeer()))
     }
 
     @Test
-    fun ownerLeavingClosesTheRoom() = runTest {
-        val hub = RelayHub()
+    fun ownerCanComeBackWithTheirToken() = runTest {
+        val hub = hub()
         val owner = FakePeer()
         val alice = FakePeer()
-        hub.openOwner(room, owner)
+        val token = hub.owner(owner).token
         hub.openGuest(room, alice)
         hub.leave(owner)
+        assertTrue(alice.text.last().contains("owner-away"))
+        assertNull(alice.closed)
+        // Frames sent while the owner is away go nowhere.
+        hub.fromGuest(alice, byteArrayOf(1))
+
+        now += 30_000
+        hub.expire()
+        val back = FakePeer()
+        val opened = hub.owner(back, token)
+        assertTrue(opened.resumed)
+        assertTrue(back.text.any { it.contains(alice.id) && it.contains("joined") })
+        assertTrue(back.text.last().contains("synced"))
+        assertTrue(alice.text.last().contains("owner-back"))
+        hub.fromGuest(alice, byteArrayOf(2))
+        assertArrayEquals(RelayHub.idBytes(alice.id) + byteArrayOf(2), back.binary.single())
+    }
+
+    @Test
+    fun roomClosesWhenTheOwnerDoesntComeBack() = runTest {
+        val hub = hub()
+        val owner = FakePeer()
+        val alice = FakePeer()
+        val token = hub.owner(owner).token
+        hub.openGuest(room, alice)
+        hub.leave(owner)
+        now += 120_000
+        hub.expire()
         assertEquals("room closed", alice.closed)
         assertEquals(0, hub.roomCount())
         assertEquals("no-room", hub.openGuest(room, FakePeer()))
+        // After a relay restart (or expiry) the owner can open it again under the same token.
+        assertEquals(token, hub.owner(FakePeer(), token).token)
     }
 
     @Test
     fun guestLeavingTellsTheOwner() = runTest {
-        val hub = RelayHub()
+        val hub = hub()
         val owner = FakePeer()
         val alice = FakePeer()
-        hub.openOwner(room, owner)
+        hub.owner(owner)
         hub.openGuest(room, alice)
         hub.leave(alice)
         assertTrue(owner.text.last().contains("left"))
@@ -93,12 +130,14 @@ class RelayHubTest {
     @Test
     fun understandsExactlyWhatTheAppSends() {
         // Same text the app's RelayClient sends and expects; keep these in step with it.
-        val room = "0123456789abcdef0123456789abcdef"
-        assertTrue(HELLO.matchEntire("""{"v":1,"room":"$room","role":"owner"}""") != null)
-        assertTrue(HELLO.matchEntire("""{"v":1,"room":"$room","role":"guest"}""") != null)
-        assertTrue(HELLO.matchEntire("""{"v":1,"room":"$room","role":"owner"\}""") == null)
+        assertTrue(HELLO.matchEntire("""{"v":2,"room":"$room","role":"owner"}""") != null)
+        assertTrue(HELLO.matchEntire("""{"v":2,"room":"$room","role":"guest"}""") != null)
+        val resume = HELLO.matchEntire("""{"v":2,"room":"$room","role":"owner","resume":"${"a".repeat(32)}"}""")
+        assertEquals("a".repeat(32), resume!!.groupValues[3])
+        assertTrue(HELLO.matchEntire("""{"v":2,"room":"$room","role":"owner"\}""") == null)
         assertTrue(KICK.matchEntire("""{"kick":"0123456789abcdef"}""") != null)
-        val ready = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"\}$""")
+        val ready = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"(?:,"token":"([0-9a-f]{32})")?\}$""")
         assertTrue(ready.matches("""{"ok":true,"id":"${RelayHub.newPeerId()}"}"""))
+        assertTrue(ready.matches("""{"ok":true,"id":"${RelayHub.newPeerId()}","token":"${RelayHub.newToken()}"}"""))
     }
 }

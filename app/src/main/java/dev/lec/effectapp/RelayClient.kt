@@ -19,12 +19,16 @@ internal class RelayClient(
     private val roomId: String,
     private val owner: Boolean,
     private val listener: Listener,
+    /** Owner only: the token from an earlier connection, to take the same room back. */
+    private val resumeToken: String? = null,
 ) {
     interface Listener {
-        fun onReady(connectionId: String)
+        /** [token] is the owner's resume token (null for guests). */
+        fun onReady(connectionId: String, token: String?)
         fun onEvent(json: String)
         fun onBinary(bytes: ByteArray)
-        fun onClosed(reason: String)
+        /** [canRetry] is false when reconnecting can't help (removed, room gone, refused). */
+        fun onClosed(reason: String, canRetry: Boolean)
     }
 
     private val url = "wss://$host/ws"
@@ -34,24 +38,26 @@ internal class RelayClient(
 
     fun connect() {
         val request = runCatching { Request.Builder().url(url).build() }.getOrElse {
-            finish("That relay server address isn't valid.")
+            finish("That relay server address isn't valid.", canRetry = false)
             return
         }
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send("""{"v":1,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"}""")
+                val resume = resumeToken?.takeIf { owner }?.let { ""","resume":"$it"""" }.orEmpty()
+                webSocket.send("""{"v":2,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"$resume}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (text.length > 4_096) return
                 if (!ready) {
-                    val id = READY.find(text)?.groupValues?.get(1)
-                    if (id != null) {
+                    val match = READY.find(text)
+                    if (match != null) {
                         ready = true
-                        listener.onReady(id)
+                        listener.onReady(match.groupValues[1], match.groupValues[2].ifEmpty { null })
                     } else {
                         val error = ERROR.find(text)?.groupValues?.get(1) ?: "unexpected reply"
-                        finish(describe(error))
+                        // "no-room" can be a relay that restarted, with the owner on the way back.
+                        finish(describe(error), canRetry = error == "server-full" || error == "no-room")
                         webSocket.close(1000, null)
                     }
                     return
@@ -66,23 +72,28 @@ internal class RelayClient(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
-                finish(if (reason == "kicked") "You were removed from the room." else "The connection closed.")
+                when (reason) {
+                    "kicked" -> finish("You were removed from the room.", canRetry = false)
+                    "room closed" -> finish("The room closed.", canRetry = false)
+                    "replaced" -> finish("This room was opened again somewhere else.", canRetry = false)
+                    else -> finish("The connection closed.", canRetry = true)
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                finish("The connection closed.")
+                finish("The connection closed.", canRetry = true)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                finish(if (ready) "Lost the connection to the relay server." else "Couldn't reach the relay server.")
+                finish(if (ready) "Lost the connection to the relay server." else "Couldn't reach the relay server.", canRetry = true)
             }
         })
     }
 
-    private fun finish(reason: String) {
+    private fun finish(reason: String, canRetry: Boolean) {
         if (closed) return
         closed = true
-        listener.onClosed(reason)
+        listener.onClosed(reason, canRetry)
     }
 
     /** Sends one frame, waiting while a lot is already queued (big file transfers). */
@@ -114,7 +125,7 @@ internal class RelayClient(
     companion object {
         const val MAX_FRAME = 600 * 1024
         private const val MAX_QUEUED = 2L * 1024 * 1024
-        private val READY = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"\}$""")
+        private val READY = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"(?:,"token":"([0-9a-f]{32})")?\}$""")
         private val ERROR = Regex("""^\{"error":"([a-z-]{1,32})"\}$""")
 
         private val client: OkHttpClient by lazy {

@@ -47,6 +47,17 @@ class GuestSync(confirmed: EditProject, version: Long) {
         rebuild()
     }
 
+    /**
+     * Catches up after a reconnect: [project] is the owner's current state, and batches up to
+     * [lastBatch] were already handled. Returns the rest, which never arrived and must be
+     * sent again.
+     */
+    fun resync(version: Long, project: EditProject, lastBatch: Long): List<Pair<Long, List<Op>>> {
+        pending.removeAll { it.first <= lastBatch }
+        snapshot(version, project)
+        return pending.toList()
+    }
+
     fun snapshot(version: Long, project: EditProject) {
         confirmed = project
         this.version = version

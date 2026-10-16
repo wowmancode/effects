@@ -110,4 +110,16 @@ class OnlineCryptoTest {
             Codec.hex(Hkdf.derive(ikm, salt, info, 42)),
         )
     }
+
+    @Test
+    fun resumeProofIsTiedToTheConnectionAndMember() {
+        val pair = PairKeys.derive(ByteArray(32) { 3 }, ByteArray(32) { 4 }, ByteArray(91) { 1 }, ByteArray(91) { 2 })
+        val proof = PairKeys.resumeProof(pair.resumeKey, "room", "0011223344556677", "m1")
+        assertArrayEquals(proof, PairKeys.resumeProof(pair.resumeKey, "room", "0011223344556677", "m1"))
+        assertNotEquals(Codec.hex(proof), Codec.hex(PairKeys.resumeProof(pair.resumeKey, "room", "8899aabbccddeeff", "m1")))
+        assertNotEquals(Codec.hex(proof), Codec.hex(PairKeys.resumeProof(pair.resumeKey, "room", "0011223344556677", "m2")))
+        // The resume key is separate from both message keys.
+        assertNotEquals(Codec.hex(pair.resumeKey), Codec.hex(pair.ownerToGuest))
+        assertNotEquals(Codec.hex(pair.resumeKey), Codec.hex(pair.guestToOwner))
+    }
 }

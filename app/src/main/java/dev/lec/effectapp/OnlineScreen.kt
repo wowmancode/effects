@@ -79,6 +79,10 @@ fun OnlineScreen(online: OnlineViewModel, editor: EditorViewModel, onBack: () ->
                 state.phase == OnlinePhase.CONNECTING -> Waiting("Connecting…", "Cancel") { online.leave() }
                 state.phase == OnlinePhase.WAITING -> WaitingForOwner(state) { online.leave() }
                 state.phase == OnlinePhase.IN_ROOM -> RoomContent(online, state)
+                state.phase == OnlinePhase.RECONNECTING -> Waiting(
+                    "Connection lost. Reconnecting… Your edits are kept and sent once you're back.",
+                    if (state.owner) "End room" else "Leave",
+                ) { online.leave() }
                 else -> EndedContent(state.endedReason) { online.dismiss() }
             }
         }
@@ -198,6 +202,9 @@ private fun RoomContent(online: OnlineViewModel, ui: OnlineUi) {
     val room = ui.room ?: return
     var confirmLeave by remember { mutableStateOf(false) }
 
+    if (ui.ownerAway) {
+        Text("The owner's connection dropped. Waiting for them to come back…", color = MaterialTheme.colorScheme.error)
+    }
     if (ui.owner) {
         Section("Invite") {
             val invite = ui.invite.orEmpty()
@@ -314,7 +321,7 @@ private fun MemberRow(online: OnlineViewModel, ui: OnlineUi, member: MemberInfo)
                         member.owner -> " (owner)"
                         me -> " (you)"
                         else -> ""
-                    },
+                    } + if (member.away) " · reconnecting…" else "",
                     fontWeight = FontWeight.SemiBold,
                 )
                 if (ui.owner && !member.owner) {

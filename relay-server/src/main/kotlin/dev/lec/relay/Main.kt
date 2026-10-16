@@ -18,12 +18,14 @@ import io.ktor.websocket.readBytes
 import io.ktor.websocket.readText
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger("relay")
-internal val HELLO = Regex("""\{"v":1,"room":"([0-9a-f]{32})","role":"(owner|guest)"\}""")
+internal val HELLO = Regex("""\{"v":2,"room":"([0-9a-f]{32})","role":"(owner|guest)"(?:,"resume":"([0-9a-f]{32})")?\}""")
 internal val KICK = Regex("""\{"kick":"([0-9a-f]{16})"\}""")
 
 fun main() {
@@ -35,6 +37,13 @@ fun main() {
             timeout = 60.seconds
             maxFrameSize = 600L * 1024
             masking = false
+        }
+        // Rooms whose owner didn't come back in time are closed.
+        launch {
+            while (true) {
+                delay(5_000)
+                hub.expire()
+            }
         }
         routing {
             get("/") { call.respondText("effect-app relay\n") }
@@ -75,15 +84,28 @@ private suspend fun serve(hub: RelayHub, session: DefaultWebSocketSession) {
             peer.close("bad request")
             return
         }
-        val (roomId, role) = match.destructured
+        val (roomId, role, resume) = match.destructured
         val owner = role == "owner"
-        val error = if (owner) hub.openOwner(roomId, peer) else hub.openGuest(roomId, peer)
-        if (error != null) {
-            peer.sendText("""{"error":"$error"}""")
-            peer.close(error)
-            return
+        if (owner) {
+            // The reply goes out before any "joined" events, so the app knows it's in first.
+            when (val result = hub.openOwner(roomId, peer, resume.ifEmpty { null }) { token ->
+                peer.sendText("""{"ok":true,"id":"${peer.id}","token":"$token"}""")
+            }) {
+                is RelayHub.OwnerResult.Refused -> {
+                    peer.sendText("""{"error":"${result.error}"}""")
+                    peer.close(result.error)
+                    return
+                }
+                is RelayHub.OwnerResult.Opened -> Unit
+            }
+        } else {
+            val error = hub.openGuest(roomId, peer) { peer.sendText("""{"ok":true,"id":"${peer.id}"}""") }
+            if (error != null) {
+                peer.sendText("""{"error":"$error"}""")
+                peer.close(error)
+                return
+            }
         }
-        peer.sendText("""{"ok":true,"id":"${peer.id}"}""")
         log.info("{} connected ({} rooms)", if (owner) "owner" else "guest", hub.roomCount())
         val limiter = ByteBudget(bytesPerSecond = 16L * 1024 * 1024, burstBytes = 32L * 1024 * 1024)
         for (frame in session.incoming) {
@@ -120,7 +142,7 @@ private class ByteBudget(private val bytesPerSecond: Long, private val burstByte
                 return
             }
             val waitMs = ((bytes - available) / bytesPerSecond * 1000).toLong().coerceIn(1, 1_000)
-            kotlinx.coroutines.delay(waitMs)
+            delay(waitMs)
         }
     }
 }

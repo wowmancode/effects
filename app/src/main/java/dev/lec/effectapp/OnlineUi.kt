@@ -4,7 +4,7 @@ import dev.lec.effectapp.online.MediaOffer
 import dev.lec.effectapp.online.Perm
 import dev.lec.effectapp.online.RoomState
 
-enum class OnlinePhase { PREPARING, CONNECTING, WAITING, IN_ROOM, ENDED }
+enum class OnlinePhase { PREPARING, CONNECTING, WAITING, IN_ROOM, RECONNECTING, ENDED }
 
 data class JoinRequest(val connectionId: String, val name: String, val safetyCode: String)
 
@@ -48,6 +48,8 @@ data class OnlineUi(
     val pluginPrompts: List<PluginPrompt> = emptyList(),
     val notice: OnlineNotice? = null,
     val endedReason: String? = null,
+    /** Guest: the owner's connection dropped and the relay is holding the room for them. */
+    val ownerAway: Boolean = false,
 ) {
     val myPerms: Set<Perm>
         get() = if (owner) Perm.entries.toSet() else room?.members?.firstOrNull { it.id == myMemberId }?.perms.orEmpty()

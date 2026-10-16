@@ -12,6 +12,8 @@ data class MemberInfo(
     val name: String,
     val owner: Boolean = false,
     val perms: Set<Perm> = emptySet(),
+    /** Lost connection; the seat is kept for a couple of minutes while they reconnect. */
+    val away: Boolean = false,
 )
 
 @Serializable
@@ -43,8 +45,22 @@ data class MediaOffer(
 /** Join handshake, encrypted with the room key (anyone with the invite can read these). */
 @Serializable
 sealed class Handshake {
+    /**
+     * Join request. A reconnecting member sets [resume] (their member id) and [proof]
+     * (see PairKeys.resumeProof) and reuses the key from their first join.
+     */
     @Serializable @SerialName("hello")
-    data class GuestHello(val version: Int, val key: String, val name: String) : Handshake()
+    data class GuestHello(
+        val version: Int,
+        val key: String,
+        val name: String,
+        val resume: String? = null,
+        val proof: String? = null,
+    ) : Handshake()
+
+    /** The owner no longer has that member (or the proof failed): join from scratch, with a new key. */
+    @Serializable @SerialName("resume-refused")
+    data object ResumeRefused : Handshake()
 
     @Serializable @SerialName("welcome")
     data class OwnerHello(val key: String) : Handshake()
@@ -70,7 +86,12 @@ sealed class Msg {
     data class BatchRefused(val batchId: Long, val reason: String) : Msg()
 
     @Serializable @SerialName("snapshot")
-    data class Snapshot(val version: Long, val project: EditProject) : Msg()
+    data class Snapshot(
+        val version: Long,
+        val project: EditProject,
+        /** After a reconnect: the last of the recipient's batches the owner handled (-1 = none). */
+        val lastBatch: Long = -1,
+    ) : Msg()
 
     @Serializable @SerialName("chat-out")
     data class ChatOut(val from: String, val name: String, val text: String, val sentAt: Long, val timelineMs: Long? = null) : Msg()

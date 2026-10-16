@@ -142,6 +142,22 @@ class ProjectSyncTest {
     }
 
     @Test
+    fun resyncResendsOnlyWhatTheOwnerNeverGot() {
+        val base = project(clip("1", segments = listOf(segment("s1"))))
+        val sync = GuestSync(base, 1)
+        val first = ProjectSync.diff(base, project(clip("1", segments = listOf(segment("s1", value = 2f)))))
+        sync.local(1, first)
+        val second = ProjectSync.diff(sync.view, project(clip("1", segments = listOf(segment("s1", value = 3f)))))
+        sync.local(2, second)
+        // The owner had applied batch 1 before the connection dropped; batch 2 was lost.
+        val ownerState = ProjectSync.apply(base, first)
+        val resend = sync.resync(5, ownerState, lastBatch = 1)
+        assertEquals(listOf(2L), resend.map { it.first })
+        assertEquals(3f, sync.view.clips[0].effectSegments[0].params["amount"])
+        assertEquals(ownerState, sync.confirmed)
+    }
+
+    @Test
     fun largeMessagesAreFragmentedAndRejoined() {
         val big = project(*Array(300) { clip("c$it", segments = List(20) { s -> segment("s$s") }) })
         val message = Msg.Snapshot(9, big)

@@ -587,7 +587,15 @@ fun EditorScreen(
                         val onlineUi by online.ui.collectAsState()
                         val people = onlineUi?.takeIf { it.phase == OnlinePhase.IN_ROOM }?.room?.members?.size
                         TextButton(onClick = onOnline, contentPadding = PaddingValues(horizontal = 3.dp)) {
-                            Text(if (people != null) "Online·$people" else "Online", fontSize = 10.sp)
+                            val reconnecting = onlineUi?.phase == OnlinePhase.RECONNECTING || onlineUi?.ownerAway == true
+                            Text(
+                                when {
+                                    reconnecting -> "Online…"
+                                    people != null -> "Online·$people"
+                                    else -> "Online"
+                                },
+                                fontSize = 10.sp,
+                            )
                         }
                     }
                 },

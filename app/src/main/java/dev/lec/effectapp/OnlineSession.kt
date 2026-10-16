@@ -87,7 +87,7 @@ internal class OnlineSession(
         parentScope.coroutineContext + Job() + CoroutineExceptionHandler { _, error -> failSafely(error) },
     )
     private val keys = RoomKeys(start.invite.secret)
-    private val identity = SessionIdentity.create()
+    private var identity = SessionIdentity.create()
     private val validator = WireValidator(catalog)
     private val permissions = PermissionCheck(catalog)
     private val random = SecureRandom()
@@ -105,10 +105,12 @@ internal class OnlineSession(
     val ui: StateFlow<OnlineUi> = _ui.asStateFlow()
 
     private sealed interface Event {
-        data class Ready(val connectionId: String) : Event
-        data class RelayEvent(val json: String) : Event
-        data class Binary(val bytes: ByteArray) : Event
-        data class Closed(val reason: String) : Event
+        // Relay events carry the connection they came from, so a late event from a dropped
+        // connection can't be mistaken for one from the current connection.
+        data class Ready(val generation: Int, val connectionId: String, val token: String?) : Event
+        data class RelayEvent(val generation: Int, val json: String) : Event
+        data class Binary(val generation: Int, val bytes: ByteArray) : Event
+        data class Closed(val generation: Int, val reason: String, val canRetry: Boolean) : Event
         data object LocalChanged : Event
         data class Hashed(val results: Map<String, MediaOffer?>) : Event
         data class Run(val block: suspend () -> Unit) : Event
@@ -130,7 +132,18 @@ internal class OnlineSession(
     private val blockedPlugins = HashMap<String, Pair<String, String>>()
     private val incoming = HashMap<String, Incoming>()
 
+    // Reconnecting
+    private var generation = 0
+    private var connectedOnce = false
+    private var reconnectAttempt = 0
+    private var reconnectJob: Job? = null
+    private var myConnectionId = ""
+    private val streamJobs = HashMap<String, Job>()
+
     // Owner state
+    private var resumeToken: String? = null
+    /** Set while the relay lists who is still here after the owner reconnects. */
+    private var stillHere: MutableSet<String>? = null
     private var hostProject = EditProject(createdAt = 0)
     private var version = 0L
     private var room = RoomState(2, false, 100, emptySet(), emptyList())
@@ -144,16 +157,24 @@ internal class OnlineSession(
     private var batchId = 0L
     /** Media this guest shared; the only files it will upload when the owner asks. */
     private val myOffers = HashSet<String>()
+    private var myPairKeys: PairKeys? = null
+    /** Reconnected and waiting for the owner to take this member back. */
+    private var resuming = false
+    private var roomClosing = false
 
-    private enum class PeerState { NEW, AWAITING_APPROVAL, ADMITTED }
+    /** AWAY: a member whose connection dropped; their seat is kept while they reconnect. */
+    private enum class PeerState { NEW, AWAITING_APPROVAL, ADMITTED, AWAY }
 
-    private inner class Peer(val connectionId: String) {
+    private inner class Peer(var connectionId: String) {
         var state = PeerState.NEW
         var cipher: SessionCipher? = null
         // Guests never need to send the owner anything big (changes, chat, file chunks);
         // only the owner sends whole projects.
-        val decoder = Wire.Decoder(if (owner) MAX_GUEST_MESSAGE_BYTES else Wire.MAX_MESSAGE_BYTES)
+        var decoder = Wire.Decoder(if (owner) MAX_GUEST_MESSAGE_BYTES else Wire.MAX_MESSAGE_BYTES)
         var publicKey: ByteArray? = null
+        var resumeKey: ByteArray? = null
+        /** The last of this guest's batches handled, so a reconnect resends only what was lost. */
+        var lastBatch = -1L
         val sendLock = Mutex()
         var memberId = ""
         var name = ""
@@ -219,15 +240,77 @@ internal class OnlineSession(
 
     private fun connect() {
         _ui.update { it.copy(phase = if (it.phase == OnlinePhase.PREPARING) OnlinePhase.CONNECTING else it.phase) }
+        val gen = ++generation
+        relay?.close()
         val client = RelayClient(start.invite.host, keys.roomId, owner, object : RelayClient.Listener {
-            override fun onReady(connectionId: String) { events.trySend(Event.Ready(connectionId)) }
-            override fun onEvent(json: String) { events.trySend(Event.RelayEvent(json)) }
-            override fun onBinary(bytes: ByteArray) { events.trySend(Event.Binary(bytes)) }
-            override fun onClosed(reason: String) { events.trySend(Event.Closed(reason)) }
-        })
+            override fun onReady(connectionId: String, token: String?) { events.trySend(Event.Ready(gen, connectionId, token)) }
+            override fun onEvent(json: String) { events.trySend(Event.RelayEvent(gen, json)) }
+            override fun onBinary(bytes: ByteArray) { events.trySend(Event.Binary(gen, bytes)) }
+            override fun onClosed(reason: String, canRetry: Boolean) { events.trySend(Event.Closed(gen, reason, canRetry)) }
+        }, resumeToken = resumeToken)
         relay = client
         client.connect()
     }
+
+    // ---------------------------------------------------------------- reconnecting
+
+    private fun onConnectionLost(reason: String, canRetry: Boolean) {
+        val phase = _ui.value.phase
+        val established = connectedOnce && (owner || sync != null)
+        if (!canRetry || roomClosing || !established || (phase != OnlinePhase.IN_ROOM && phase != OnlinePhase.RECONNECTING)) {
+            end(
+                when {
+                    roomClosing -> "The room closed."
+                    !owner && phase == OnlinePhase.IN_ROOM -> "The room closed. $reason"
+                    else -> reason
+                },
+            )
+            return
+        }
+        relay = null
+        if (phase != OnlinePhase.RECONNECTING) {
+            _ui.update { it.copy(phase = OnlinePhase.RECONNECTING, ownerAway = false) }
+            interruptTransfers()
+            reconnectAttempt = 0
+        }
+        val delays = RECONNECT_DELAYS_S
+        if (reconnectAttempt >= delays.size) {
+            end("Couldn't reconnect to the room. $reason")
+            return
+        }
+        val wait = delays[reconnectAttempt++]
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            delay(wait * 1_000L)
+            post { if (!ended && _ui.value.phase == OnlinePhase.RECONNECTING) connect() }
+        }
+    }
+
+    /** Transfers can't survive a dropped link; stop them and let people retry. */
+    private fun interruptTransfers(memberId: String? = null) {
+        incoming.values.filter { memberId == null || it.from == memberId || !owner }.forEach { abortIncoming(it) }
+        streamJobs.filterKeys { memberId == null || it.startsWith("$memberId/") }.forEach { (key, job) ->
+            job.cancel()
+            streamJobs.remove(key)
+            activeStreams.remove(key)
+        }
+        if (owner) {
+            val hashes = uploadFrom.filter { memberId == null || it.value == memberId }.keys.toList()
+            hashes.forEach { hash ->
+                uploadFrom.remove(hash)
+                val waiting = waitingFor.remove(hash).orEmpty()
+                if (OWNER_ID in waiting) mediaStatus[hash] = MediaStatus.FAILED
+                // Guests still waiting are told once they're reachable again (see sendResync).
+                waiting.filter { it != OWNER_ID }.forEach { failedFor.getOrPut(it) { mutableSetOf() } += hash }
+            }
+            if (memberId != null) waitingFor.values.forEach { it.remove(memberId) }
+        }
+        mediaStatus.entries.filter { it.value == MediaStatus.DOWNLOADING }.forEach { it.setValue(MediaStatus.FAILED) }
+        mediaProgress.clear()
+        refreshMediaUi()
+    }
+
+    private val failedFor = HashMap<String, MutableSet<String>>()
 
     /** Guest: leave the room. Owner: end it for everyone. */
     fun leave() {
@@ -253,6 +336,7 @@ internal class OnlineSession(
         if (ended) return
         ended = true
         localJob?.cancel()
+        reconnectJob?.cancel()
         incoming.values.forEach { runCatching { it.output.close(); it.file.delete() } }
         incoming.clear()
         if (editor.relinkHook === hook) editor.relinkHook = null
@@ -281,37 +365,126 @@ internal class OnlineSession(
 
     private suspend fun handle(event: Event) {
         when (event) {
-            is Event.Ready -> onReady()
-            is Event.RelayEvent -> if (owner) onRelayEvent(event.json)
-            is Event.Binary -> onBinary(event.bytes)
-            is Event.Closed -> end(
-                if (owner) event.reason
-                else if (_ui.value.phase == OnlinePhase.IN_ROOM) "The room closed. ${event.reason}" else event.reason,
-            )
+            is Event.Ready -> if (event.generation == generation) onReady(event.connectionId, event.token)
+            is Event.RelayEvent -> if (event.generation == generation) onRelayEvent(event.json)
+            is Event.Binary -> if (event.generation == generation) onBinary(event.bytes)
+            is Event.Closed -> if (event.generation == generation) onConnectionLost(event.reason, event.canRetry)
             Event.LocalChanged -> onLocalChanged()
             is Event.Hashed -> onHashed(event.results)
             is Event.Run -> event.block()
         }
     }
 
-    private suspend fun onReady() {
+    private suspend fun onReady(connectionId: String, token: String?) {
+        myConnectionId = connectionId
+        reconnectAttempt = 0
+        val reconnected = _ui.value.phase == OnlinePhase.RECONNECTING
         if (owner) {
+            if (token != null) resumeToken = token
             _ui.update { it.copy(phase = OnlinePhase.IN_ROOM) }
-            watchLocalEdits()
+            if (reconnected) {
+                // The relay now lists who is still here, then sends "synced".
+                stillHere = mutableSetOf()
+                notice("Reconnected.")
+            } else watchLocalEdits()
+            connectedOnce = true
         } else {
-            val peer = Peer("")
-            ownerPeer = peer
-            val hello = Handshake.GuestHello(1, Codec.base64Url(identity.publicBytes), start.name)
-            relay?.send(byteArrayOf(KIND_HANDSHAKE) + HandshakeBox.seal(keys.roomKey, aad(GUEST_TO_OWNER), Wire.handshake(hello)))
+            if (!reconnected) ownerPeer = Peer("") else ownerPeer?.decoder = Wire.Decoder()
+            resuming = reconnected
+            connectedOnce = true
+            sendHello()
         }
     }
 
+    /** Guest: asks to join, or (after a reconnect) to be taken back as the same member. */
+    private suspend fun sendHello() {
+        val keysForResume = myPairKeys
+        val memberId = _ui.value.myMemberId
+        val hello = if (resuming && keysForResume != null && memberId.isNotEmpty()) {
+            val proof = PairKeys.resumeProof(keysForResume.resumeKey, keys.roomId, myConnectionId, memberId)
+            Handshake.GuestHello(HELLO_VERSION, Codec.base64Url(identity.publicBytes), start.name, memberId, Codec.base64Url(proof))
+        } else {
+            Handshake.GuestHello(HELLO_VERSION, Codec.base64Url(identity.publicBytes), start.name)
+        }
+        relay?.send(byteArrayOf(KIND_HANDSHAKE) + HandshakeBox.seal(keys.roomKey, aad(GUEST_TO_OWNER), Wire.handshake(hello)))
+    }
+
     private suspend fun onRelayEvent(json: String) {
+        SIMPLE_EVENT.matchEntire(json)?.let { simple ->
+            when (simple.groupValues[1]) {
+                "synced" -> if (owner) finishOwnerResync()
+                "owner-away" -> if (!owner && !_ui.value.ownerAway) {
+                    _ui.update { it.copy(ownerAway = true) }
+                    interruptTransfers()
+                    notice("The owner's connection dropped. Waiting for them to come back…")
+                }
+                "owner-back" -> if (!owner) {
+                    _ui.update { it.copy(ownerAway = false) }
+                    // Anything sent while they were away was lost; ask again.
+                    val peer = ownerPeer
+                    if (peer != null && (peer.cipher == null || resuming)) sendHello()
+                }
+                "closed" -> roomClosing = true
+            }
+            return
+        }
+        if (!owner) return
         val match = RELAY_EVENT.matchEntire(json) ?: return
         val (kind, id) = match.destructured
         when (kind) {
-            "joined" -> if (peers.size < MAX_CONNECTIONS) peers[id] = Peer(id) else relay?.sendEvent(kickJson(id))
-            "left" -> removePeer(id, left = true)
+            "joined" -> {
+                stillHere?.add(id)
+                if (id !in peers) {
+                    if (peers.size < MAX_CONNECTIONS) peers[id] = Peer(id) else relay?.sendEvent(kickJson(id))
+                }
+            }
+            "left" -> {
+                val peer = peers[id] ?: return
+                if (peer.state == PeerState.ADMITTED) markAway(peer) else removePeer(id, left = true)
+            }
+        }
+    }
+
+    /** Owner, after reconnecting: anyone the relay no longer has is away; everyone else catches up. */
+    private suspend fun finishOwnerResync() {
+        val here = stillHere ?: return
+        stillHere = null
+        peers.values.toList().forEach { peer ->
+            when {
+                peer.connectionId in here -> if (peer.state == PeerState.ADMITTED) sendResync(peer)
+                peer.state == PeerState.ADMITTED -> markAway(peer)
+                peer.state != PeerState.AWAY -> removePeer(peer.connectionId, left = false)
+            }
+        }
+    }
+
+    /** Sends a guest the whole current project, plus what they may have missed. */
+    private suspend fun sendResync(peer: Peer) {
+        sendMsg(peer, Msg.Snapshot(version, hostProject, peer.lastBatch))
+        sendMsg(peer, Msg.Room(room))
+        val used = ProjectSync.mediaHashes(hostProject)
+        offers.values.filter { it.hash in used }.forEach { sendMsg(peer, Msg.OfferOut(it)) }
+        failedFor.remove(peer.memberId)?.forEach { hash ->
+            sendMsg(peer, Msg.MediaFailed(hash, "The download was interrupted. Tap Retry."))
+        }
+    }
+
+    /** Owner: a member's connection dropped. Their seat is kept for a while. */
+    private suspend fun markAway(peer: Peer) {
+        peer.state = PeerState.AWAY
+        room = room.copy(members = room.members.map { if (it.id == peer.memberId) it.copy(away = true) else it })
+        interruptTransfers(peer.memberId)
+        broadcastRoom()
+        systemChat("${peer.name} lost connection. Waiting for them to come back…")
+        val awayConnection = peer.connectionId
+        scope.launch {
+            delay(AWAY_GRACE_MS)
+            post {
+                if (peer.state == PeerState.AWAY && peer.connectionId == awayConnection) {
+                    peer.state = PeerState.ADMITTED // so removePeer treats them as a member
+                    removePeer(peer.connectionId, left = true)
+                }
+            }
         }
     }
 
@@ -347,7 +520,7 @@ internal class OnlineSession(
             if (bytes.size < 2) return
             val peer = ownerPeer ?: return
             when (bytes[0]) {
-                KIND_HANDSHAKE -> if (peer.cipher == null) onOwnerHello(peer, bytes)
+                KIND_HANDSHAKE -> onOwnerHello(peer, bytes)
                 KIND_SESSION -> {
                     val plain = peer.cipher?.open(bytes.copyOfRange(1, bytes.size)) ?: return
                     when (val frame = peer.decoder.decode(plain)) {
@@ -366,12 +539,13 @@ internal class OnlineSession(
         val hello = HandshakeBox.open(keys.roomKey, aad(GUEST_TO_OWNER), payload.copyOfRange(1, payload.size))
             ?.let { Wire.handshake(it) } as? Handshake.GuestHello ?: return
         val guestKey = Codec.fromBase64Url(hello.key) ?: return
+        if (hello.resume != null) return resumeGuest(peer, hello, guestKey)
         // A replayed hello (same key) can't do anything without the key's owner, but it would
         // show a second join request; ignore it.
         if (peers.values.any { it.publicKey?.contentEquals(guestKey) == true }) return
         val shared = identity.agree(guestKey) ?: return
         val refusal = when {
-            hello.version != 1 -> "This app version can't join that room. Update the app."
+            hello.version != HELLO_VERSION -> "This app version can't join that room. Update the app."
             room.locked -> "The room is locked."
             admittedCount() + awaitingCount() + 1 >= room.maxMembers -> "The room is full."
             awaitingCount() >= 5 -> "Too many people are waiting to join. Try again in a moment."
@@ -387,12 +561,50 @@ internal class OnlineSession(
         val pair = PairKeys.derive(shared, keys.roomKey, identity.publicBytes, guestKey)
         peer.cipher = SessionCipher(pair.ownerToGuest, pair.guestToOwner)
         peer.publicKey = guestKey
+        peer.resumeKey = pair.resumeKey
         peer.safetyCode = pair.safetyCode
         peer.name = Names.clean(hello.name) ?: "Guest"
         peer.state = PeerState.AWAITING_APPROVAL
         relay?.send(idBytes(peer.connectionId) + byteArrayOf(KIND_HANDSHAKE) +
             HandshakeBox.seal(keys.roomKey, aad(OWNER_TO_GUEST), Wire.handshake(Handshake.OwnerHello(Codec.base64Url(identity.publicBytes)))))
         _ui.update { it.copy(joinRequests = it.joinRequests + JoinRequest(peer.connectionId, peer.name, peer.safetyCode)) }
+    }
+
+    /**
+     * A member reconnecting on a new relay connection. They must prove they hold the keys from
+     * their first join (a proof bound to this connection, so it can't be replayed). Their
+     * encryption state carries on as before, so nothing is re-keyed or reused.
+     */
+    private suspend fun resumeGuest(placeholder: Peer, hello: Handshake.GuestHello, guestKey: ByteArray) {
+        val member = peers.values.firstOrNull {
+            it.memberId == hello.resume && (it.state == PeerState.ADMITTED || it.state == PeerState.AWAY)
+        }
+        val proof = hello.proof?.let(Codec::fromBase64Url)
+        val valid = member != null && proof != null && hello.version == HELLO_VERSION &&
+            member.publicKey?.contentEquals(guestKey) == true &&
+            member.resumeKey?.let { key ->
+                MessageDigest.isEqual(proof, PairKeys.resumeProof(key, keys.roomId, placeholder.connectionId, member.memberId))
+            } == true
+        if (!valid || member == null) {
+            relay?.send(idBytes(placeholder.connectionId) + byteArrayOf(KIND_HANDSHAKE) +
+                HandshakeBox.seal(keys.roomKey, aad(OWNER_TO_GUEST), Wire.handshake(Handshake.ResumeRefused)))
+            return
+        }
+        val old = member.connectionId
+        if (old != placeholder.connectionId) {
+            peers.remove(old)
+            // If the old connection is somehow still open, it's stale now.
+            if (member.state == PeerState.ADMITTED) relay?.sendEvent(kickJson(old))
+        }
+        peers.remove(placeholder.connectionId)
+        member.connectionId = placeholder.connectionId
+        member.decoder = Wire.Decoder(MAX_GUEST_MESSAGE_BYTES)
+        member.state = PeerState.ADMITTED
+        peers[member.connectionId] = member
+        room = room.copy(members = room.members.map { if (it.id == member.memberId) it.copy(away = false) else it })
+        sendResync(member)
+        broadcastRoom()
+        systemChat("${member.name} is back")
     }
 
     fun approve(connectionId: String) = post {
@@ -424,7 +636,10 @@ internal class OnlineSession(
     }
 
     fun kick(memberId: String) = post {
-        val peer = peers.values.firstOrNull { it.memberId == memberId && it.state == PeerState.ADMITTED } ?: return@post
+        val peer = peers.values.firstOrNull {
+            it.memberId == memberId && (it.state == PeerState.ADMITTED || it.state == PeerState.AWAY)
+        } ?: return@post
+        peer.state = PeerState.ADMITTED
         sendMsg(peer, Msg.Kicked("The owner removed you from the room."))
         dropPeer(peer)
         removePeer(peer.connectionId, left = false)
@@ -455,7 +670,8 @@ internal class OnlineSession(
         waitingFor.values.forEach { it.remove(peer.memberId) }
     }
 
-    private fun admittedCount() = peers.values.count { it.state == PeerState.ADMITTED }
+    // Members who are away still hold their seat.
+    private fun admittedCount() = peers.values.count { it.state == PeerState.ADMITTED || it.state == PeerState.AWAY }
     private fun awaitingCount() = peers.values.count { it.state == PeerState.AWAITING_APPROVAL }
     private fun admitted() = peers.values.filter { it.state == PeerState.ADMITTED }
     private fun peerFor(memberId: String) = peers.values.firstOrNull { it.memberId == memberId && it.state == PeerState.ADMITTED }
@@ -506,11 +722,25 @@ internal class OnlineSession(
     private suspend fun onOwnerHello(peer: Peer, bytes: ByteArray) {
         when (val reply = HandshakeBox.open(keys.roomKey, aad(OWNER_TO_GUEST), bytes.copyOfRange(1, bytes.size))?.let { Wire.handshake(it) }) {
             is Handshake.OwnerHello -> {
+                if (peer.cipher != null) return
                 val ownerKey = Codec.fromBase64Url(reply.key) ?: return
                 val shared = identity.agree(ownerKey) ?: return
                 val pair = PairKeys.derive(shared, keys.roomKey, ownerKey, identity.publicBytes)
                 peer.cipher = SessionCipher(pair.guestToOwner, pair.ownerToGuest)
+                myPairKeys = pair
                 _ui.update { it.copy(phase = OnlinePhase.WAITING, mySafetyCode = pair.safetyCode) }
+            }
+            is Handshake.ResumeRefused -> if (resuming) {
+                // The owner doesn't have us any more. Join again from scratch with a new key
+                // (reusing the old one would reuse its encryption keys).
+                resuming = false
+                identity = SessionIdentity.create()
+                myPairKeys = null
+                ownerPeer = Peer("")
+                sync = null
+                _ui.update { it.copy(phase = OnlinePhase.CONNECTING, myMemberId = "", mySafetyCode = null) }
+                notice("Reconnected, but the owner needs to let you in again.")
+                sendHello()
             }
             is Handshake.Refused -> end(Names.clean(reply.reason.take(200)) ?: "The room refused the request.")
             else -> Unit
@@ -528,7 +758,10 @@ internal class OnlineSession(
         when (msg) {
             is Msg.Batch -> if (peer.batches.tryTake()) onGuestBatch(peer, msg)
                 // Always answer, so the guest drops the change instead of drifting out of step.
-                else sendMsg(peer, Msg.BatchRefused(msg.batchId, "Too many changes at once. Try again."))
+                else {
+                    peer.lastBatch = maxOf(peer.lastBatch, msg.batchId)
+                    sendMsg(peer, Msg.BatchRefused(msg.batchId, "Too many changes at once. Try again."))
+                }
             is Msg.Chat -> if (peer.chats.tryTake()) {
                 val text = cleanChat(msg.text) ?: return
                 val line = Msg.ChatOut(peer.memberId, peer.name, text, System.currentTimeMillis())
@@ -553,6 +786,9 @@ internal class OnlineSession(
     }
 
     private suspend fun onGuestBatch(peer: Peer, raw: Msg.Batch) {
+        // Already handled (sent again after a reconnect).
+        if (raw.batchId <= peer.lastBatch) return
+        peer.lastBatch = raw.batchId
         val batch = raw.copy(ops = ProjectSync.sanitize(raw.ops))
         val refusal = validator.checkOps(batch.ops)
             ?: permissions.refusal(permissions.needs(hostProject, batch.ops), permsOf(peer.memberId), isOwner = false)
@@ -611,8 +847,15 @@ internal class OnlineSession(
                 val project = ProjectSync.sanitize(msg.project)
                 if (validator.checkProject(project) != null) return end("The room sent a project this phone couldn't check, so it left.")
                 val before = sync.view
-                sync.snapshot(msg.version, project)
+                // Catch up, and send again whatever the owner never got.
+                val resend = sync.resync(msg.version, project, msg.lastBatch)
                 applyWireChange(before, sync.view, alsoHistory = true)
+                if (resuming || _ui.value.phase == OnlinePhase.RECONNECTING) {
+                    resuming = false
+                    _ui.update { it.copy(phase = OnlinePhase.IN_ROOM, ownerAway = false) }
+                    notice("Reconnected.")
+                }
+                ownerPeer?.let { owner -> resend.forEach { (id, ops) -> sendMsg(owner, Msg.Batch(id, ops)) } }
             }
             is Msg.ChatOut -> {
                 val text = cleanChat(msg.text) ?: return
@@ -662,6 +905,8 @@ internal class OnlineSession(
             val line = Msg.ChatOut(OWNER_ID, start.name, cleaned, System.currentTimeMillis())
             admitted().forEach { sendMsg(it, line) }
             appendChat(line)
+        } else if (_ui.value.ownerAway) {
+            notice("The owner is reconnecting. Try again in a moment.")
         } else ownerPeer?.let { sendMsg(it, Msg.Chat(cleaned)) }
     }
 
@@ -1169,7 +1414,7 @@ internal class OnlineSession(
     private fun streamTo(peer: Peer, hash: String, knownSize: Long? = null) {
         val key = "${peer.memberId}/$hash"
         if (!activeStreams.add(key)) return
-        scope.launch {
+        streamJobs[key] = scope.launch {
             try {
                 val size = knownSize ?: offers[hash]?.size ?: return@launch
                 val input = withContext(Dispatchers.IO) { media.openForSending(hash) }
@@ -1197,6 +1442,7 @@ internal class OnlineSession(
                 sendMsg(peer, if (ok) Msg.MediaEnd(hash) else Msg.MediaFailed(hash, "The file couldn't be read."))
             } finally {
                 activeStreams.remove(key)
+                streamJobs.remove(key)
             }
         }
     }
@@ -1263,6 +1509,11 @@ internal class OnlineSession(
 
     companion object {
         const val OWNER_ID = "owner"
+        private const val HELLO_VERSION = 2
+        /** About 100 seconds of retries, inside the relay's two-minute hold. */
+        private val RECONNECT_DELAYS_S = listOf(1, 2, 3, 5, 8, 12, 15, 20, 20)
+        private const val AWAY_GRACE_MS = 150_000L
+        private val SIMPLE_EVENT = Regex("""^\{"event":"(synced|owner-away|owner-back|closed)"\}$""")
         const val MAX_CHAT_CHARS = 1_000
         private const val MAX_CHAT_LINES = 300
         private const val MAX_CONNECTIONS = 24

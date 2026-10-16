@@ -154,15 +154,29 @@ class SessionIdentity private constructor(private val keyPair: KeyPair) {
 class PairKeys(
     val ownerToGuest: ByteArray,
     val guestToOwner: ByteArray,
+    /** Lets a guest prove, after reconnecting, that it's the same member (see [resumeProof]). */
+    val resumeKey: ByteArray,
     /** 12 digits both phones show; equal codes mean nobody is sitting in the middle. */
     val safetyCode: String,
 ) {
     companion object {
         fun derive(shared: ByteArray, roomKey: ByteArray, ownerPublic: ByteArray, guestPublic: ByteArray): PairKeys {
             val info = "lecfx session v1".toByteArray() + ownerPublic + guestPublic
-            val okm = Hkdf.derive(shared, roomKey, info, 64)
-            return PairKeys(okm.copyOfRange(0, 32), okm.copyOfRange(32, 64), safetyCode(ownerPublic, guestPublic))
+            val okm = Hkdf.derive(shared, roomKey, info, 96)
+            return PairKeys(
+                okm.copyOfRange(0, 32),
+                okm.copyOfRange(32, 64),
+                okm.copyOfRange(64, 96),
+                safetyCode(ownerPublic, guestPublic),
+            )
         }
+
+        /**
+         * Proof for a reconnecting guest, bound to the new relay connection id so a recorded
+         * proof is useless on any other connection.
+         */
+        fun resumeProof(resumeKey: ByteArray, roomId: String, connectionId: String, memberId: String): ByteArray =
+            Hkdf.hmac(resumeKey, "lecfx resume v1|$roomId|$connectionId|$memberId".toByteArray())
 
         fun safetyCode(ownerPublic: ByteArray, guestPublic: ByteArray): String {
             val digest = MessageDigest.getInstance("SHA-256")
