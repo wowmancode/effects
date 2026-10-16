@@ -25,6 +25,18 @@ docker build -t effect-app-relay .
 docker run -p 8080:8080 effect-app-relay
 ```
 
+### Without building it yourself
+
+Every CI run on GitHub publishes **effect-app-relay**: open the repo's **Actions** tab, pick a
+green run, and download it under *Artifacts*. Unzip it, then:
+
+```text
+tar -xf effect-app-relay-1.0.0.tar
+effect-app-relay-1.0.0/bin/effect-app-relay
+```
+
+It runs anywhere with Java 17, including Termux on Android (`pkg install openjdk-17`).
+
 ## Put it behind HTTPS
 
 The app only connects over `wss://` (secure WebSockets), so the server needs a TLS certificate.
