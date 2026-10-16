@@ -1277,7 +1277,7 @@ internal class OnlineSession(
         /** Stands in for GLSL code nobody has approved yet: draws the picture unchanged. */
         const val PLACEHOLDER_SOURCE = "red = red; // waiting for approval"
         private val HASH = Regex("[0-9a-f]{64}")
-        private val RELAY_EVENT = Regex("""^\{"event":"(joined|left)","id":"([0-9a-f]{16})"}$""")
+        private val RELAY_EVENT = Regex("""^\{"event":"(joined|left)","id":"([0-9a-f]{16})"\}$""")
         private val CHAT_INVISIBLE = Regex("[\\p{Cf}\\p{Co}\\p{Cn}\\u0000-\\u0009\\u000B-\\u001F\\u007F-\\u009F]")
     }
 }

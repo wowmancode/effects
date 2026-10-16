@@ -23,8 +23,8 @@ import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger("relay")
-private val HELLO = Regex("""\{"v":1,"room":"([0-9a-f]{32})","role":"(owner|guest)"}""")
-private val KICK = Regex("""\{"kick":"([0-9a-f]{16})"}""")
+private val HELLO = Regex("""\{"v":1,"room":"([0-9a-f]{32})","role":"(owner|guest)"\}""")
+private val KICK = Regex("""\{"kick":"([0-9a-f]{16})"\}""")
 
 fun main() {
     val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
@@ -71,7 +71,7 @@ private suspend fun serve(hub: RelayHub, session: DefaultWebSocketSession) {
         }
         val match = hello?.readText()?.let(HELLO::matchEntire)
         if (match == null) {
-            peer.sendText("""{"error":"bad-request"}""")
+            peer.sendText("""{"error":"bad-request"\}""")
             peer.close("bad request")
             return
         }
@@ -79,11 +79,11 @@ private suspend fun serve(hub: RelayHub, session: DefaultWebSocketSession) {
         val owner = role == "owner"
         val error = if (owner) hub.openOwner(roomId, peer) else hub.openGuest(roomId, peer)
         if (error != null) {
-            peer.sendText("""{"error":"$error"}""")
+            peer.sendText("""{"error":"$error"\}""")
             peer.close(error)
             return
         }
-        peer.sendText("""{"ok":true,"id":"${peer.id}"}""")
+        peer.sendText("""{"ok":true,"id":"${peer.id}"\}""")
         log.info("{} connected ({} rooms)", if (owner) "owner" else "guest", hub.roomCount())
         val limiter = ByteBudget(bytesPerSecond = 16L * 1024 * 1024, burstBytes = 32L * 1024 * 1024)
         for (frame in session.incoming) {

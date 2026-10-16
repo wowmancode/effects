@@ -39,7 +39,7 @@ internal class RelayClient(
         }
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send("""{"v":1,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"}""")
+                webSocket.send("""{"v":1,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"\}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -114,8 +114,8 @@ internal class RelayClient(
     companion object {
         const val MAX_FRAME = 600 * 1024
         private const val MAX_QUEUED = 2L * 1024 * 1024
-        private val READY = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"}$""")
-        private val ERROR = Regex("""^\{"error":"([a-z-]{1,32})"}$""")
+        private val READY = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"\}$""")
+        private val ERROR = Regex("""^\{"error":"([a-z-]{1,32})"\}$""")
 
         private val client: OkHttpClient by lazy {
             OkHttpClient.Builder()
