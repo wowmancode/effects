@@ -39,7 +39,7 @@ internal class RelayClient(
         }
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                webSocket.send("""{"v":1,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"\}""")
+                webSocket.send("""{"v":1,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"}""")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

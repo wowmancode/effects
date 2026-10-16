@@ -89,4 +89,16 @@ class RelayHubTest {
         hub.fromGuest(alice, byteArrayOf(1))
         assertTrue(owner.binary.isEmpty())
     }
+
+    @Test
+    fun understandsExactlyWhatTheAppSends() {
+        // Same text the app's RelayClient sends and expects; keep these in step with it.
+        val room = "0123456789abcdef0123456789abcdef"
+        assertTrue(HELLO.matchEntire("""{"v":1,"room":"$room","role":"owner"}""") != null)
+        assertTrue(HELLO.matchEntire("""{"v":1,"room":"$room","role":"guest"}""") != null)
+        assertTrue(HELLO.matchEntire("""{"v":1,"room":"$room","role":"owner"\}""") == null)
+        assertTrue(KICK.matchEntire("""{"kick":"0123456789abcdef"}""") != null)
+        val ready = Regex("""^\{"ok":true,"id":"([0-9a-f]{16})"\}$""")
+        assertTrue(ready.matches("""{"ok":true,"id":"${RelayHub.newPeerId()}"}"""))
+    }
 }
