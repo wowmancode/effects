@@ -33,7 +33,10 @@ internal class RelayClient(
     @Volatile private var closed = false
 
     fun connect() {
-        val request = Request.Builder().url(url).build()
+        val request = runCatching { Request.Builder().url(url).build() }.getOrElse {
+            finish("That relay server address isn't valid.")
+            return
+        }
         socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 webSocket.send("""{"v":1,"room":"$roomId","role":"${if (owner) "owner" else "guest"}"}""")

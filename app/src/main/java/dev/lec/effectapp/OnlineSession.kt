@@ -33,6 +33,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -81,7 +82,10 @@ internal class OnlineSession(
     parentScope: CoroutineScope,
 ) {
     private val owner = start is RoomStart.Create
-    private val scope = CoroutineScope(parentScope.coroutineContext + Job())
+    // Anything that goes wrong inside the room closes the room with a message, never the app.
+    private val scope = CoroutineScope(
+        parentScope.coroutineContext + Job() + CoroutineExceptionHandler { _, error -> failSafely(error) },
+    )
     private val keys = RoomKeys(start.invite.secret)
     private val identity = SessionIdentity.create()
     private val validator = WireValidator(catalog)
@@ -265,7 +269,8 @@ internal class OnlineSession(
 
     private fun failSafely(error: Throwable) {
         if (error is kotlinx.coroutines.CancellationException) return
-        end("Something went wrong in the room, so it was closed. (${error.javaClass.simpleName})")
+        CrashLog.record(error, "online room")
+        end("Something went wrong in the room, so it was closed. (${error.javaClass.simpleName}: ${error.message?.take(120)})")
     }
 
     private fun post(block: suspend () -> Unit) {
