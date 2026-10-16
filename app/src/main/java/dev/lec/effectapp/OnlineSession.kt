@@ -154,7 +154,7 @@ internal class OnlineSession(
         var memberId = ""
         var name = ""
         var safetyCode = ""
-        val frames = RateLimiter(perSecond = 400.0, burst = 1_200.0)
+        val frames = RateLimiter(perSecond = 20.0, burst = 40.0)
         val batches = RateLimiter(perSecond = 30.0, burst = 120.0)
         val chats = RateLimiter(perSecond = 1.0, burst = 5.0)
         val requests = RateLimiter(perSecond = 5.0, burst = 60.0)
@@ -315,7 +315,9 @@ internal class OnlineSession(
             if (bytes.size <= ID_BYTES + 1) return
             val id = Codec.hex(bytes.copyOfRange(0, ID_BYTES))
             val peer = peers[id] ?: return
-            if (!peer.frames.tryTake()) return
+            // Before someone is let in, cap how much they can make this phone do. After that
+            // the relay limits throughput, and each kind of message has its own limit below.
+            if (peer.state != PeerState.ADMITTED && !peer.frames.tryTake()) return
             val payload = bytes.copyOfRange(ID_BYTES, bytes.size)
             try {
                 when (payload[0]) {
@@ -520,6 +522,8 @@ internal class OnlineSession(
         if (peer.state != PeerState.ADMITTED) return
         when (msg) {
             is Msg.Batch -> if (peer.batches.tryTake()) onGuestBatch(peer, msg)
+                // Always answer, so the guest drops the change instead of drifting out of step.
+                else sendMsg(peer, Msg.BatchRefused(msg.batchId, "Too many changes at once. Try again."))
             is Msg.Chat -> if (peer.chats.tryTake()) {
                 val text = cleanChat(msg.text) ?: return
                 val line = Msg.ChatOut(peer.memberId, peer.name, text, System.currentTimeMillis())
@@ -1030,6 +1034,8 @@ internal class OnlineSession(
     private suspend fun onWant(memberId: String, hash: String) {
         val offer = offers[hash] ?: return
         val peer = peerFor(memberId) ?: return
+        // One copy of a file to a person at a time.
+        if ("$memberId/$hash" in activeStreams) return
         if (media.openForSending(hash)?.also { it.close() } != null) {
             streamTo(peer, hash, offer.size)
         } else {
@@ -1152,33 +1158,41 @@ internal class OnlineSession(
         mediaProgress.remove(transfer.hash)
     }
 
+    private val activeStreams = HashSet<String>()
+
     /** Sends a file in chunks (owner to a guest, or a guest uploading to the owner). */
     private fun streamTo(peer: Peer, hash: String, knownSize: Long? = null) {
+        val key = "${peer.memberId}/$hash"
+        if (!activeStreams.add(key)) return
         scope.launch {
-            val size = knownSize ?: offers[hash]?.size ?: return@launch
-            val input = withContext(Dispatchers.IO) { media.openForSending(hash) }
-            if (input == null) {
-                sendMsg(peer, Msg.MediaFailed(hash, "The file isn't available."))
-                return@launch
-            }
-            var sent = 0L
-            var index = 0
-            val buffer = ByteArray(Wire.CHUNK_BYTES)
-            val ok = runCatching {
-                input.use {
-                    sendMsg(peer, Msg.MediaStart(hash, size))
-                    while (!ended) {
-                        val n = withContext(Dispatchers.IO) { readFully(input, buffer) }
-                        if (n <= 0) break
-                        sent += n
-                        if (sent > size) error("File changed")
-                        sendFrames(peer, listOf(Wire.chunk(hash, index++, buffer, n)))
-                    }
+            try {
+                val size = knownSize ?: offers[hash]?.size ?: return@launch
+                val input = withContext(Dispatchers.IO) { media.openForSending(hash) }
+                if (input == null) {
+                    sendMsg(peer, Msg.MediaFailed(hash, "The file isn't available."))
+                    return@launch
                 }
-                sent == size
-            }.getOrDefault(false)
-            if (ended) return@launch
-            sendMsg(peer, if (ok) Msg.MediaEnd(hash) else Msg.MediaFailed(hash, "The file couldn't be read."))
+                var sent = 0L
+                var index = 0
+                val buffer = ByteArray(Wire.CHUNK_BYTES)
+                val ok = runCatching {
+                    input.use {
+                        sendMsg(peer, Msg.MediaStart(hash, size))
+                        while (!ended) {
+                            val n = withContext(Dispatchers.IO) { readFully(input, buffer) }
+                            if (n <= 0) break
+                            sent += n
+                            if (sent > size) error("File changed")
+                            sendFrames(peer, listOf(Wire.chunk(hash, index++, buffer, n)))
+                        }
+                    }
+                    sent == size
+                }.getOrDefault(false)
+                if (ended) return@launch
+                sendMsg(peer, if (ok) Msg.MediaEnd(hash) else Msg.MediaFailed(hash, "The file couldn't be read."))
+            } finally {
+                activeStreams.remove(key)
+            }
         }
     }
 
