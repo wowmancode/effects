@@ -8,4 +8,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "effect-app"
-include(":app", ":core-effects", ":core-model", ":core-pipeline")
+include(":app", ":core-effects", ":core-model", ":core-online", ":core-pipeline")
