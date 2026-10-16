@@ -46,7 +46,8 @@ fun displacementMapMediaEffect(
     values: Map<String, Float>,
     waitForVideoMapFrames: Boolean = false,
 ): Effect? {
-    val source = uri?.takeIf(String::isNotBlank) ?: return null
+    // "lecsync:" is shared media from an online room that isn't on this phone (yet).
+    val source = uri?.takeIf { it.isNotBlank() && !it.startsWith("lecsync:") } ?: return null
     return DisplacementMapGlEffect(
         uri = source,
         strength = (values["strength"] ?: 0.06f).coerceIn(0f, 0.25f),

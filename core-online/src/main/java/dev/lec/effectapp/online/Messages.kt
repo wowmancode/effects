@@ -159,7 +159,7 @@ object Wire {
     }
 
     /** Joins fragments and decodes frames from one sender. Malformed input yields null. */
-    class Decoder {
+    class Decoder(private val maxBytes: Int = MAX_MESSAGE_BYTES) {
         private var fragmentId = -1
         private var expected = 0
         private val parts = mutableListOf<ByteArray>()
@@ -168,7 +168,7 @@ object Wire {
         fun decode(frame: ByteArray): Frame? {
             if (frame.isEmpty()) return null
             return when (frame[0]) {
-                KIND_JSON -> parse(frame.copyOfRange(1, frame.size))
+                KIND_JSON -> if (frame.size - 1 > maxBytes) null else parse(frame.copyOfRange(1, frame.size))
                 KIND_CHUNK -> {
                     if (frame.size < 1 + 32 + 4) return null
                     Frame.Chunk(
@@ -188,7 +188,7 @@ object Wire {
                     } else if (id != fragmentId || count != expected || index != parts.size) return reset()
                     val part = frame.copyOfRange(9, frame.size)
                     size += part.size
-                    if (size > MAX_MESSAGE_BYTES) return reset()
+                    if (size > maxBytes || count.toLong() * FRAGMENT_BYTES > maxBytes + FRAGMENT_BYTES) return reset()
                     parts += part
                     if (parts.size < expected) return null
                     val whole = ByteArray(size)

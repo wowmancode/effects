@@ -90,6 +90,30 @@ object ProjectSync {
         },
     )
 
+    /**
+     * Strips invisible and direction-flipping characters from names that other people will see
+     * (project, clips, overlays). Every phone applies it to what it sends and receives, so names
+     * can't be used to disguise one clip as another.
+     */
+    fun sanitize(project: EditProject): EditProject = project.copy(
+        name = Names.cleanLabel(project.name, 200),
+        clips = project.clips.map { clip ->
+            clip.copy(
+                displayName = Names.cleanLabel(clip.displayName),
+                overlays = clip.overlays.map { it.copy(displayName = Names.cleanLabel(it.displayName)) },
+            )
+        },
+    )
+
+    fun sanitize(ops: List<Op>): List<Op> = ops.map { op ->
+        when (op) {
+            is Op.SetName -> Op.SetName(Names.cleanLabel(op.name, 200))
+            is Op.PutClip -> Op.PutClip(op.clip.copy(displayName = Names.cleanLabel(op.clip.displayName)))
+            is Op.PutOverlay -> op.copy(overlay = op.overlay.copy(displayName = Names.cleanLabel(op.overlay.displayName)))
+            else -> op
+        }
+    }
+
     private fun Clip.core() = copy(effectSegments = emptyList(), audioSegments = emptyList(), overlays = emptyList())
     private fun Overlay.core() = copy(effectSegments = emptyList(), audioSegments = emptyList())
 

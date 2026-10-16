@@ -26,6 +26,13 @@ object Names {
         return cleaned.substring(0, end).trim().ifEmpty { null }
     }
 
+    /** Like [clean] for longer labels (clip and project names): [max] characters, "Untitled" if empty. */
+    fun cleanLabel(raw: String, max: Int = 120): String {
+        val cleaned = raw.take(max * 4).replace(INVISIBLE, "").replace(SPACES, " ").trim()
+        val end = if (cleaned.codePointCount(0, cleaned.length) > max) cleaned.offsetByCodePoints(0, max) else cleaned.length
+        return cleaned.substring(0, end).trim().ifEmpty { "Untitled" }
+    }
+
     private val ADJECTIVES = listOf(
         "Teal", "Amber", "Quiet", "Brave", "Lucky", "Swift", "Misty", "Sunny", "Cosmic", "Velvet",
         "Neon", "Silver", "Rusty", "Mellow", "Fuzzy", "Crimson", "Golden", "Frosty", "Jolly", "Witty",

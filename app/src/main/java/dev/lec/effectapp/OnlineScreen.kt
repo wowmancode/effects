@@ -156,6 +156,8 @@ private fun SetupContent(online: OnlineViewModel, editor: EditorViewModel) {
             label = { Text("Paste the invite") },
             modifier = Modifier.fillMaxWidth(),
         )
+        val parsed = remember(inviteText) { dev.lec.effectapp.online.Invite.parse(inviteText) }
+        if (parsed != null) Hint("Connects through ${parsed.host}, the server the owner chose. It can see your IP address, but not the edit or chat.")
         Hint("Joining replaces the edit open here with the room's. Save yours first if you want to keep it.")
         Button(
             onClick = { error = online.join(editor, inviteText) },
@@ -209,7 +211,12 @@ private fun RoomContent(online: OnlineViewModel, ui: OnlineUi) {
                 }) { Text("Share") }
                 OutlinedButton(onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("Room invite", invite))
+                    val clip = ClipData.newPlainText("Room invite", invite)
+                    // Keeps the invite out of the clipboard preview Android shows on screen.
+                    clip.description.extras = android.os.PersistableBundle().apply {
+                        putBoolean(if (android.os.Build.VERSION.SDK_INT >= 33) android.content.ClipDescription.EXTRA_IS_SENSITIVE else "android.content.extra.IS_SENSITIVE", true)
+                    }
+                    clipboard.setPrimaryClip(clip)
                     Toast.makeText(context, "Invite copied", Toast.LENGTH_SHORT).show()
                 }) { Text("Copy") }
             }

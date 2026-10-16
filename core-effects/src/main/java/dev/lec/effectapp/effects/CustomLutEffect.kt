@@ -29,7 +29,8 @@ class CustomLutEffect : LecEffect {
 
 @OptIn(UnstableApi::class)
 fun customLutMediaEffect(uri: String?, mix: Float): Effect? =
-    uri?.takeIf(String::isNotBlank)?.let { CustomLutGlEffect(it, mix.coerceIn(0f, 1f)) }
+    // "lecsync:" is shared media from an online room that isn't on this phone (yet).
+    uri?.takeIf { it.isNotBlank() && !it.startsWith("lecsync:") }?.let { CustomLutGlEffect(it, mix.coerceIn(0f, 1f)) }
 
 data class CubeLut(val size: Int, val rgb: FloatArray) {
     fun sample(red: Float, green: Float, blue: Float): FloatArray {

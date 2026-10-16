@@ -206,7 +206,10 @@ class PermissionCheck(private val catalog: EffectCatalog) {
                     val existing = list?.firstOrNull { it.id == op.segment.id }
                     val parentIsNew = op.at.clipId in newClips ||
                         (op.at.overlayId != null && (op.at.clipId to op.at.overlayId) in newOverlays)
+                    // Effects that come along with a copied or split clip are part of the copy;
+                    // anything else on a new clip or overlay still needs permission to add effects.
                     if (!parentIsNew) perms += if (existing == null) Perm.ADD_EFFECT else Perm.EDIT_EFFECT
+                    else if (!segmentCopiedFromProject(project, op.segment)) perms += Perm.ADD_EFFECT
                     if (catalog.isPlugin(op.segment.effectId)) {
                         val before = existing?.let { it.stringParams["source"] to it.stringParams["language"] }
                         val after = op.segment.stringParams["source"] to op.segment.stringParams["language"]
@@ -236,6 +239,13 @@ class PermissionCheck(private val catalog: EffectCatalog) {
         }
         return Needs(perms, ownerOnly != null, ownerOnly)
     }
+
+    /** True when an effect with the same settings is already in the project (a copied or split clip). */
+    private fun segmentCopiedFromProject(project: EditProject, segment: TimelineSegment): Boolean =
+        project.clips.any { clip ->
+            (clip.effectSegments + clip.audioSegments + clip.overlays.flatMap { it.effectSegments + it.audioSegments })
+                .any { it.effectId == segment.effectId && it.params == segment.params && it.stringParams == segment.stringParams }
+        }
 
     /** True when the same plug-in code is already in the project (a copied or split clip). */
     private fun pluginCopiedFromProject(project: EditProject, segment: TimelineSegment): Boolean {

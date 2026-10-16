@@ -157,6 +157,30 @@ class ProjectSyncTest {
     }
 
     @Test
+    fun effectsOnANewOverlayNeedAddEffectsUnlessCopied() {
+        val base = project(clip("1", segments = listOf(segment("s1"))))
+        val overlay = Overlay(id = "o", sourceUri = MediaRef.of(hashA), displayName = "o")
+        val fresh = project(clip("1", segments = listOf(segment("s1"))).copy(overlays = listOf(overlay.copy(effectSegments = listOf(segment("new", value = 42f))))))
+        assertTrue(Perm.ADD_EFFECT in permissions.needs(base, ProjectSync.diff(base, fresh)).perms)
+        val copied = project(clip("1", segments = listOf(segment("s1"))).copy(overlays = listOf(overlay.copy(effectSegments = listOf(segment("copy"))))))
+        assertFalse(Perm.ADD_EFFECT in permissions.needs(base, ProjectSync.diff(base, copied)).perms)
+    }
+
+    @Test
+    fun sanitizeStripsDisguisingCharacters() {
+        val sneaky = project(clip("1").copy(displayName = "intro\u202Egnp.exe"))
+        assertEquals("intrognp.exe", ProjectSync.sanitize(sneaky).clips[0].displayName)
+        assertEquals(ProjectSync.sanitize(sneaky), ProjectSync.apply(project(clip("1")), ProjectSync.sanitize(ProjectSync.diff(project(clip("1")), sneaky))))
+    }
+
+    @Test
+    fun decoderRejectsOversizedMessages() {
+        val big = Wire.encode(Msg.Snapshot(1, project(*Array(300) { clip("c$it", segments = List(20) { s -> segment("s$s") }) })), 3)
+        val small = Wire.Decoder(maxBytes = 64 * 1024)
+        assertTrue(big.map { small.decode(it) }.all { it == null })
+    }
+
+    @Test
     fun namesAreCleaned() {
         assertEquals("Rowan", Names.clean("  Ro​wan ‮ "))
         assertEquals(null, Names.clean("​​"))

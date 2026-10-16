@@ -138,13 +138,18 @@ internal class OnlineSession(
     private var ownerPeer: Peer? = null
     private var sync: GuestSync? = null
     private var batchId = 0L
+    /** Media this guest shared; the only files it will upload when the owner asks. */
+    private val myOffers = HashSet<String>()
 
     private enum class PeerState { NEW, AWAITING_APPROVAL, ADMITTED }
 
     private inner class Peer(val connectionId: String) {
         var state = PeerState.NEW
         var cipher: SessionCipher? = null
-        val decoder = Wire.Decoder()
+        // Guests never need to send the owner anything big (changes, chat, file chunks);
+        // only the owner sends whole projects.
+        val decoder = Wire.Decoder(if (owner) MAX_GUEST_MESSAGE_BYTES else Wire.MAX_MESSAGE_BYTES)
+        var publicKey: ByteArray? = null
         val sendLock = Mutex()
         var memberId = ""
         var name = ""
@@ -200,7 +205,7 @@ internal class OnlineSession(
             media.register(offer.hash, uri, offer.copy(from = OWNER_ID))
         }
         if (ended) return
-        hostProject = toWire(local)
+        hostProject = ProjectSync.sanitize(toWire(local))
         validator.checkProject(hostProject)?.let { end("This edit can't be shared: $it"); return }
         lastWire = hostProject
         ProjectSync.mediaHashes(hostProject).forEach { hash -> media.metaFor(hash)?.let { offers[hash] = it.copy(from = OWNER_ID) } }
@@ -312,16 +317,24 @@ internal class OnlineSession(
             val peer = peers[id] ?: return
             if (!peer.frames.tryTake()) return
             val payload = bytes.copyOfRange(ID_BYTES, bytes.size)
-            when (payload[0]) {
-                KIND_HANDSHAKE -> if (peer.state == PeerState.NEW) onGuestHello(peer, payload)
-                KIND_SESSION -> {
-                    val plain = peer.cipher?.open(payload.copyOfRange(1, payload.size)) ?: return
-                    when (val frame = peer.decoder.decode(plain)) {
-                        is Wire.Frame.Message -> onGuestMessage(peer, frame.msg)
-                        is Wire.Frame.Chunk -> if (peer.state == PeerState.ADMITTED) onChunk(peer.memberId, frame)
-                        null -> Unit
+            try {
+                when (payload[0]) {
+                    KIND_HANDSHAKE -> if (peer.state == PeerState.NEW) onGuestHello(peer, payload)
+                    KIND_SESSION -> {
+                        val plain = peer.cipher?.open(payload.copyOfRange(1, payload.size)) ?: return
+                        when (val frame = peer.decoder.decode(plain)) {
+                            is Wire.Frame.Message -> onGuestMessage(peer, frame.msg)
+                            is Wire.Frame.Chunk -> if (peer.state == PeerState.ADMITTED) onChunk(peer.memberId, frame)
+                            null -> Unit
+                        }
                     }
                 }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                // Something one guest sent broke; remove them rather than closing the room.
+                dropPeer(peer)
+                removePeer(peer.connectionId, left = false)
+                if (peer.state == PeerState.ADMITTED) systemChat("${peer.name} was disconnected (sent something invalid)")
             }
         } else {
             if (bytes.size < 2) return
@@ -346,6 +359,9 @@ internal class OnlineSession(
         val hello = HandshakeBox.open(keys.roomKey, aad(GUEST_TO_OWNER), payload.copyOfRange(1, payload.size))
             ?.let { Wire.handshake(it) } as? Handshake.GuestHello ?: return
         val guestKey = Codec.fromBase64Url(hello.key) ?: return
+        // A replayed hello (same key) can't do anything without the key's owner, but it would
+        // show a second join request; ignore it.
+        if (peers.values.any { it.publicKey?.contentEquals(guestKey) == true }) return
         val shared = identity.agree(guestKey) ?: return
         val refusal = when {
             hello.version != 1 -> "This app version can't join that room. Update the app."
@@ -363,6 +379,7 @@ internal class OnlineSession(
         }
         val pair = PairKeys.derive(shared, keys.roomKey, identity.publicBytes, guestKey)
         peer.cipher = SessionCipher(pair.ownerToGuest, pair.guestToOwner)
+        peer.publicKey = guestKey
         peer.safetyCode = pair.safetyCode
         peer.name = Names.clean(hello.name) ?: "Guest"
         peer.state = PeerState.AWAITING_APPROVAL
@@ -526,7 +543,8 @@ internal class OnlineSession(
         }
     }
 
-    private suspend fun onGuestBatch(peer: Peer, batch: Msg.Batch) {
+    private suspend fun onGuestBatch(peer: Peer, raw: Msg.Batch) {
+        val batch = raw.copy(ops = ProjectSync.sanitize(raw.ops))
         val refusal = validator.checkOps(batch.ops)
             ?: permissions.refusal(permissions.needs(hostProject, batch.ops), permsOf(peer.memberId), isOwner = false)
             ?: run {
@@ -563,10 +581,13 @@ internal class OnlineSession(
             }
             is Msg.Ops -> {
                 val sync = sync ?: return
-                if (validator.checkOps(msg.ops) != null) return end("The room sent a change this phone couldn't check, so it left.")
+                val ops = ProjectSync.sanitize(msg.ops)
+                if (validator.checkOps(ops) != null || validator.checkLimits(ProjectSync.apply(sync.confirmed, ops)) != null) {
+                    return end("The room sent a change this phone couldn't check, so it left.")
+                }
                 val before = sync.view
                 val own = msg.from == _ui.value.myMemberId
-                sync.onConfirmed(msg.version, msg.ops, own = own, batchId = msg.batchId)
+                sync.onConfirmed(msg.version, ops, own = own, batchId = msg.batchId)
                 applyWireChange(before, sync.view, alsoHistory = !own)
             }
             is Msg.BatchRefused -> {
@@ -578,9 +599,10 @@ internal class OnlineSession(
             }
             is Msg.Snapshot -> {
                 val sync = sync ?: return
-                if (validator.checkProject(msg.project) != null) return end("The room sent a project this phone couldn't check, so it left.")
+                val project = ProjectSync.sanitize(msg.project)
+                if (validator.checkProject(project) != null) return end("The room sent a project this phone couldn't check, so it left.")
                 val before = sync.view
-                sync.snapshot(msg.version, msg.project)
+                sync.snapshot(msg.version, project)
                 applyWireChange(before, sync.view, alsoHistory = true)
             }
             is Msg.ChatOut -> {
@@ -588,7 +610,7 @@ internal class OnlineSession(
                 appendChat(msg.copy(text = text, name = Names.clean(msg.name) ?: "Guest"))
             }
             is Msg.OfferOut -> onOffer(msg.offer)
-            is Msg.UploadRequest -> if (media.uriFor(msg.hash) != null && offers[msg.hash]?.from == _ui.value.myMemberId) {
+            is Msg.UploadRequest -> if (msg.hash in myOffers && media.uriFor(msg.hash) != null) {
                 ownerPeer?.let { streamTo(it, msg.hash) }
             }
             is Msg.MediaStart -> onMediaStart(OWNER_ID, msg)
@@ -605,8 +627,9 @@ internal class OnlineSession(
         }
     }
 
-    private fun onAdmitted(msg: Msg.Admitted) {
+    private fun onAdmitted(raw: Msg.Admitted) {
         if (sync != null) return
+        val msg = raw.copy(project = ProjectSync.sanitize(raw.project))
         if (validator.checkProject(msg.project) != null) return end("The room's project couldn't be checked, so this phone didn't join.")
         sync = GuestSync(msg.project, msg.version)
         _ui.update {
@@ -677,7 +700,13 @@ internal class OnlineSession(
             }
             return
         }
-        val wire = toWire(local)
+        val raw = toWire(local)
+        val wire = ProjectSync.sanitize(raw)
+        // Names with hidden characters are cleaned here too, so this phone shows what others see.
+        if (wire != raw) {
+            val fix = ProjectSync.diff(raw, wire).map(::opToLocal)
+            editor.applyRoomChange(alsoHistory = false) { ProjectSync.apply(it, fix) }
+        }
         val ops = ProjectSync.diff(lastWire, wire)
         if (ops.isEmpty()) return
         if (owner) ownerLocal(ops) else guestLocal(ops)
@@ -733,6 +762,7 @@ internal class OnlineSession(
         newMedia.forEach { hash ->
             val offer = (media.metaFor(hash) ?: return@forEach).copy(from = _ui.value.myMemberId)
             offers[hash] = offer
+            myOffers += hash
             sendMsg(peer, Msg.Offer(offer))
         }
         refreshMediaUi()
@@ -921,13 +951,13 @@ internal class OnlineSession(
     private fun validOffer(offer: MediaOffer): MediaOffer? {
         if (!HASH.matches(offer.hash)) return null
         if (offer.size <= 0 || offer.size > RoomState.MEDIA_CAPS_MB.last().toLong() * 1024 * 1024) return null
-        return offer.copy(name = Names.clean(offer.name)?.take(100) ?: "Media")
+        return offer.copy(name = Names.cleanLabel(offer.name, 100))
     }
 
     private suspend fun onGuestOffer(peer: Peer, raw: MediaOffer) {
         if (Perm.ADD_MEDIA !in permsOf(peer.memberId)) return
         val offer = validOffer(raw)?.copy(from = peer.memberId) ?: return
-        if (offer.size > capBytes || offer.hash in offers) return
+        if (offer.size > capBytes || offer.hash in offers || offers.size >= MAX_OFFERS) return
         offers[offer.hash] = offer
         admitted().filter { it !== peer }.forEach { sendMsg(it, Msg.OfferOut(offer)) }
         considerOffer(offer)
@@ -935,6 +965,7 @@ internal class OnlineSession(
 
     private fun onOffer(raw: MediaOffer) {
         val offer = validOffer(raw) ?: return
+        if (offer.hash !in offers && offers.size >= MAX_OFFERS) return
         offers[offer.hash] = offer
         considerOffer(offer)
     }
@@ -1216,6 +1247,8 @@ internal class OnlineSession(
         const val MAX_CHAT_CHARS = 1_000
         private const val MAX_CHAT_LINES = 300
         private const val MAX_CONNECTIONS = 24
+        private const val MAX_OFFERS = 500
+        private const val MAX_GUEST_MESSAGE_BYTES = 4 * 1024 * 1024
         private const val LOCAL_DEBOUNCE_MS = 90L
         private const val ID_BYTES = 8
         private const val KIND_HANDSHAKE: Byte = 1
