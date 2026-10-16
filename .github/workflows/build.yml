@@ -35,6 +35,8 @@ jobs:
           # become annotations, readable on the run page without opening the raw log.
           grep -E '^e: ' build-output.txt | head -40 | sed -E 's#^e: (file://)?([^:]+):([0-9]+):([0-9]+) (.*)#::error file=\2,line=\3,col=\4::\5#' || true
           grep -E 'FAILED|What went wrong|Lint found|Error: ' -A4 build-output.txt | head -60 | sed 's/^/::error::/' || true
+      - name: Build and test the online relay server
+        run: gradle --no-daemon -p relay-server build
       - name: Test portable split-pitch C processor
         run: |
           for t in split_pitch_modes expressfx_drums; do

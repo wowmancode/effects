@@ -9,6 +9,15 @@ import org.junit.Test
 
 class PluginEffectsTest {
     @Test
+    fun rejectsDeeplyNestedOrHugePlugins() {
+        // These would overflow the stack or stall rendering if they reached the parser unbounded.
+        assertNotNull(validatePluginSource("red = " + "(".repeat(3_000) + "red" + ")".repeat(3_000) + ";", audio = false))
+        assertNotNull(validatePluginSource("red = " + "-".repeat(5_000) + "red;", audio = false))
+        assertNotNull(validatePluginSource("sample = " + List(3_000) { "sample" }.joinToString("+") + ";", audio = true))
+        assertNull(validatePluginSource("red = ((((red))));", audio = false))
+    }
+
+    @Test
     fun validatesTheDocumentedVideoVariables() {
         val source = """
             red = 1.0 - red;

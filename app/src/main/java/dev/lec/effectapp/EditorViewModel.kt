@@ -119,8 +119,20 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
     }
 
+    /**
+     * Online mode gets first look at a relink: media shared in a room is identified by its
+     * content, so the picked file has to be checked before it's used. Returns true when
+     * handled (the room calls [relinkMediaNow] itself once the file checks out).
+     */
+    var relinkHook: ((oldUri: String, newUri: String, displayName: String, durationMs: Long) -> Boolean)? = null
+
     /** Points everything that reads [oldUri] at [newUri] (see EditProject.relinkSource). */
     fun relinkMedia(oldUri: String, newUri: String, displayName: String, durationMs: Long) {
+        if (relinkHook?.invoke(oldUri, newUri, displayName, durationMs) == true) return
+        relinkMediaNow(oldUri, newUri, displayName, durationMs)
+    }
+
+    fun relinkMediaNow(oldUri: String, newUri: String, displayName: String, durationMs: Long) {
         recordUndo()
         _project.value = _project.value.relinkSource(oldUri, newUri, displayName, durationMs)
         refreshMissingMedia()
@@ -549,6 +561,35 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     private fun updateClip(id: String, transform: Clip.() -> Clip) {
         recordUndo()
         _project.value = _project.value.copy(clips = _project.value.clips.map { if (it.id == id) it.transform() else it })
+    }
+
+    /**
+     * Online mode: applies a change that came from the room. [change] runs on the current
+     * project and, when [alsoHistory], on every undo/redo step too, so undoing only steps
+     * back through this person's own edits instead of reverting everyone else's. Presets
+     * are personal and never change here.
+     */
+    fun applyRoomChange(alsoHistory: Boolean, change: (EditProject) -> EditProject) {
+        val presets = _project.value.presets
+        if (alsoHistory) {
+            val undo = undoStack.map { change(it) }
+            val redo = redoStack.map { change(it) }
+            undoStack.clear(); undoStack.addAll(undo)
+            redoStack.clear(); redoStack.addAll(redo)
+        }
+        val next = change(_project.value).copy(presets = presets)
+        _project.value = next
+        _selection.value?.let { selected -> if (next.clips.none { it.id == selected.clipId }) _selection.value = null }
+        refreshMissingMedia()
+    }
+
+    /** Online mode: starts over from a room's project (joining a room). Undo history is cleared. */
+    fun replaceWithRoomProject(project: EditProject) {
+        undoStack.clear()
+        redoStack.clear()
+        _selection.value = null
+        _project.value = project.copy(presets = _project.value.presets)
+        refreshMissingMedia()
     }
 
     fun canUndo(): Boolean = undoStack.isNotEmpty()

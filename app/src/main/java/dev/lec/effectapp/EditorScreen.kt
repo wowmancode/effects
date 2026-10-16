@@ -106,7 +106,13 @@ private const val PIXELS_PER_SECOND = 48f
 
 @OptIn(UnstableApi::class)
 @Composable
-fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () -> Unit) {
+fun EditorScreen(
+    viewModel: EditorViewModel,
+    onBack: () -> Unit,
+    onExport: () -> Unit,
+    online: OnlineViewModel? = null,
+    onOnline: () -> Unit = {},
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val project by viewModel.project.collectAsState()
@@ -577,6 +583,13 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
                     TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } }, enabled = project.clips.isNotEmpty(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Del", fontSize = 10.sp) }
                     TextButton(onClick = { saveProject.launch("effect-project.json") }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Save", fontSize = 10.sp) }
                     TextButton(onClick = onExport, enabled = project.clips.isNotEmpty(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Export", fontSize = 10.sp) }
+                    if (online != null) {
+                        val onlineUi by online.ui.collectAsState()
+                        val people = onlineUi?.takeIf { it.phase == OnlinePhase.IN_ROOM }?.room?.members?.size
+                        TextButton(onClick = onOnline, contentPadding = PaddingValues(horizontal = 3.dp)) {
+                            Text(if (people != null) "Online·$people" else "Online", fontSize = 10.sp)
+                        }
+                    }
                 },
             )
         },
@@ -678,7 +691,12 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
     }
     }
 
-    val missingMedia by viewModel.missingMedia.collectAsState()
+    val allMissingMedia by viewModel.missingMedia.collectAsState()
+    val onlineUi = online?.ui?.collectAsState()?.value
+    // In a room, shared media that isn't here yet is offered for download instead (see Online).
+    val missingMedia = if (onlineUi != null && onlineUi.phase != OnlinePhase.ENDED) {
+        allMissingMedia.filterNot { it.uri.startsWith("lecsync:") }
+    } else allMissingMedia
     val openNotes by viewModel.openNotes.collectAsState()
     val missingPrompt by viewModel.missingPrompt.collectAsState()
     var dismissedPrompt by remember { mutableIntStateOf(-1) }
@@ -696,6 +714,7 @@ fun EditorScreen(viewModel: EditorViewModel, onBack: () -> Unit, onExport: () ->
             },
         )
     }
+    if (online != null) OnlinePrompts(online)
     if (opening) {
         AlertDialog(
             onDismissRequest = {},

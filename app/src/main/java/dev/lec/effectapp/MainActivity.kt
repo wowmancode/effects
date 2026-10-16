@@ -25,7 +25,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun EffectApp(editorViewModel: EditorViewModel = viewModel()) {
+private fun EffectApp(
+    editorViewModel: EditorViewModel = viewModel(),
+    onlineViewModel: OnlineViewModel = viewModel(),
+) {
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = "import") {
         composable("import") {
@@ -36,7 +39,12 @@ private fun EffectApp(editorViewModel: EditorViewModel = viewModel()) {
                 editorViewModel,
                 onBack = { navController.popBackStack() },
                 onExport = { navController.navigate("export") },
+                online = onlineViewModel,
+                onOnline = { navController.navigate("online") },
             )
+        }
+        composable("online") {
+            OnlineScreen(onlineViewModel, editorViewModel, onBack = { navController.popBackStack() })
         }
         composable("export") {
             ExportScreen(editorViewModel, onBack = { navController.popBackStack() })

@@ -286,12 +286,16 @@ private fun compilePlugin(source: String, audio: Boolean): Result<PluginProgram>
     val allowedFunctions = if (audio) AUDIO_FUNCTIONS else VIDEO_FUNCTIONS
     require(statements.isNotEmpty()) { "Add at least one assignment, such as red = 1.0 - red;" }
     require(statements.size <= 64) { "Plug-ins are limited to 64 assignments." }
+    var nodes = 0
     val assignments = statements.map { statement ->
         val match = ASSIGNMENT.matchEntire(statement)
             ?: error("Use assignments like red = 1.0 - red;")
         val target = match.groupValues[1]
         require(target in allowedTargets) { "'$target' cannot be written by this plug-in." }
-        val expression = ExpressionParser(match.groupValues[2], allowedVariables, allowedFunctions).parse()
+        val parser = ExpressionParser(match.groupValues[2], allowedVariables, allowedFunctions)
+        val expression = parser.parse()
+        nodes += parser.nodeCount
+        require(nodes <= MAX_PLUGIN_NODES) { "Plug-ins are limited to $MAX_PLUGIN_NODES operations." }
         PluginAssignment(target, expression)
     }
     PluginProgram(assignments)
@@ -299,12 +303,36 @@ private fun compilePlugin(source: String, audio: Boolean): Result<PluginProgram>
 
 private val ASSIGNMENT = Regex("([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.+)")
 
+// Plug-ins can come from other people (shared files, online rooms), so the parser bounds how
+// deep and how large an expression can get: a deeply nested one would overflow the stack when
+// it is parsed, drawn into GLSL or evaluated, and a huge one would stall audio rendering.
+private const val MAX_PLUGIN_DEPTH = 48
+private const val MAX_PLUGIN_NODES = 2_000
+
 private class ExpressionParser(
     private val source: String,
     private val allowedVariables: Set<String>,
     private val allowedFunctions: Map<String, Int>,
 ) {
     private var index = 0
+    private var depth = 0
+    var nodeCount = 0
+        private set
+
+    private inline fun <T> nested(block: () -> T): T {
+        depth++
+        require(depth <= MAX_PLUGIN_DEPTH) { "Expressions are nested too deeply." }
+        try {
+            return block()
+        } finally {
+            depth--
+        }
+    }
+
+    private fun node() {
+        nodeCount++
+        require(nodeCount <= MAX_PLUGIN_NODES) { "Plug-ins are limited to $MAX_PLUGIN_NODES operations." }
+    }
 
     fun parse(): PluginExpression {
         val expression = additive()
@@ -320,6 +348,7 @@ private class ExpressionParser(
             val operator = source.getOrNull(index)
             if (operator != '+' && operator != '-') return expression
             index++
+            node()
             expression = BinaryExpression(expression, operator, multiplicative())
         }
     }
@@ -331,6 +360,7 @@ private class ExpressionParser(
             val operator = source.getOrNull(index)
             if (operator != '*' && operator != '/') return expression
             index++
+            node()
             expression = BinaryExpression(expression, operator, unary())
         }
     }
@@ -340,7 +370,8 @@ private class ExpressionParser(
         val operator = source.getOrNull(index)
         if (operator == '+' || operator == '-') {
             index++
-            return UnaryExpression(operator, unary())
+            node()
+            return UnaryExpression(operator, nested { unary() })
         }
         return primary()
     }
@@ -350,7 +381,7 @@ private class ExpressionParser(
         val character = source.getOrNull(index) ?: error("Expression ended unexpectedly.")
         if (character == '(') {
             index++
-            val expression = additive()
+            val expression = nested { additive() }
             whitespace()
             require(source.getOrNull(index) == ')') { "Missing closing parenthesis." }
             index++
@@ -364,6 +395,7 @@ private class ExpressionParser(
     private fun number(): PluginExpression {
         val start = index
         while (source.getOrNull(index)?.let { it.isDigit() || it == '.' } == true) index++
+        node()
         return NumberExpression(source.substring(start, index).toFloatOrNull() ?: error("Invalid number."))
     }
 
@@ -371,6 +403,7 @@ private class ExpressionParser(
         val start = index
         while (source.getOrNull(index)?.let { it.isLetterOrDigit() || it == '_' } == true) index++
         val name = source.substring(start, index)
+        node()
         whitespace()
         if (source.getOrNull(index) != '(') {
             require(name in allowedVariables) { "Unknown variable '$name'." }
@@ -381,7 +414,7 @@ private class ExpressionParser(
         whitespace()
         if (source.getOrNull(index) != ')') {
             while (true) {
-                arguments += additive()
+                arguments += nested { additive() }
                 whitespace()
                 if (source.getOrNull(index) != ',') break
                 index++
