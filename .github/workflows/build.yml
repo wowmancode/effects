@@ -36,7 +36,14 @@ jobs:
           grep -E '^e: ' build-output.txt | head -40 | sed -E 's#^e: (file://)?([^:]+):([0-9]+):([0-9]+) (.*)#::error file=\2,line=\3,col=\4::\5#' || true
           grep -E 'FAILED|What went wrong|Lint found|Error: ' -A4 build-output.txt | head -60 | sed 's/^/::error::/' || true
       - name: Build and test the online relay server
-        run: gradle --no-daemon -p relay-server build
+        run: |
+          set -o pipefail
+          gradle --no-daemon -p relay-server build 2>&1 | tee relay-output.txt
+      - name: Annotate relay server errors
+        if: failure()
+        run: |
+          grep -E '^e: ' relay-output.txt | head -40 | sed -E 's#^e: (file://)?([^:]+):([0-9]+):([0-9]+) (.*)#::error file=\2,line=\3,col=\4::\5#' || true
+          grep -E 'FAILED|What went wrong|Exception|expected:' -A6 relay-output.txt | head -60 | sed 's/^/::error::/' || true
       - name: Test portable split-pitch C processor
         run: |
           for t in split_pitch_modes expressfx_drums; do

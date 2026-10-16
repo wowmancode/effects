@@ -83,15 +83,13 @@ private suspend fun serve(hub: RelayHub, session: DefaultWebSocketSession) {
         }
         peer.sendText("""{"ok":true,"id":"${peer.id}"}""")
         log.info("{} connected ({} rooms)", if (owner) "owner" else "guest", hub.roomCount())
-        val limiter = ByteBudget(bytesPerSecond = 8L * 1024 * 1024, burstBytes = 16L * 1024 * 1024)
+        val limiter = ByteBudget(bytesPerSecond = 16L * 1024 * 1024, burstBytes = 32L * 1024 * 1024)
         for (frame in session.incoming) {
             when (frame) {
                 is Frame.Binary -> {
                     val bytes = frame.readBytes()
-                    if (!limiter.take(bytes.size.toLong())) {
-                        peer.close("rate limit")
-                        break
-                    }
+                    // Slows a connection down (rather than dropping it) when it sends too fast.
+                    limiter.take(bytes.size.toLong())
                     if (owner) hub.fromOwner(peer, bytes) else hub.fromGuest(peer, bytes)
                 }
                 is Frame.Text -> if (owner) {
@@ -105,17 +103,22 @@ private suspend fun serve(hub: RelayHub, session: DefaultWebSocketSession) {
     }
 }
 
-/** Allows short bursts but caps the average rate of one connection. */
+/** Allows short bursts but caps the average rate of one connection by waiting. */
 private class ByteBudget(private val bytesPerSecond: Long, private val burstBytes: Long) {
     private var available = burstBytes.toDouble()
     private var last = System.nanoTime()
 
-    fun take(bytes: Long): Boolean {
-        val now = System.nanoTime()
-        available = minOf(burstBytes.toDouble(), available + (now - last) / 1e9 * bytesPerSecond)
-        last = now
-        if (available < bytes) return false
-        available -= bytes
-        return true
+    suspend fun take(bytes: Long) {
+        while (true) {
+            val now = System.nanoTime()
+            available = minOf(burstBytes.toDouble(), available + (now - last) / 1e9 * bytesPerSecond)
+            last = now
+            if (available >= bytes) {
+                available -= bytes
+                return
+            }
+            val waitMs = ((bytes - available) / bytesPerSecond * 1000).toLong().coerceIn(1, 1_000)
+            kotlinx.coroutines.delay(waitMs)
+        }
     }
 }

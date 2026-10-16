@@ -344,7 +344,7 @@ internal class OnlineSession(
 
     private suspend fun onGuestHello(peer: Peer, payload: ByteArray) {
         val hello = HandshakeBox.open(keys.roomKey, aad(GUEST_TO_OWNER), payload.copyOfRange(1, payload.size))
-            ?.let(Wire::handshake) as? Handshake.GuestHello ?: return
+            ?.let { Wire.handshake(it) } as? Handshake.GuestHello ?: return
         val guestKey = Codec.fromBase64Url(hello.key) ?: return
         val shared = identity.agree(guestKey) ?: return
         val refusal = when {
@@ -388,7 +388,7 @@ internal class OnlineSession(
         sendMsg(peer, Msg.Admitted(peer.memberId, version, hostProject, room))
         val used = ProjectSync.mediaHashes(hostProject)
         offers.values.filter { it.hash in used }.forEach { sendMsg(peer, Msg.OfferOut(it)) }
-        broadcastRoom(except = peer)
+        broadcastRoom()
         systemChat("${peer.name} joined")
     }
 
@@ -467,11 +467,10 @@ internal class OnlineSession(
         broadcastRoom()
     }
 
-    private suspend fun broadcastRoom(except: Peer? = null) {
+    private suspend fun broadcastRoom() {
         _ui.update { it.copy(room = room) }
-        admitted().filter { it !== except }.forEach { sendMsg(it, Msg.Room(room)) }
-        // Changing peers' own copies too keeps the member list the guest sees in step.
-        if (except != null) sendMsg(except, Msg.Room(room))
+        refreshMediaUi()
+        admitted().forEach { sendMsg(it, Msg.Room(room)) }
     }
 
     private fun broadcastRoomLater() = post { broadcastRoom() }
@@ -481,7 +480,7 @@ internal class OnlineSession(
     // ---------------------------------------------------------------- joining (guest side)
 
     private suspend fun onOwnerHello(peer: Peer, bytes: ByteArray) {
-        when (val reply = HandshakeBox.open(keys.roomKey, aad(OWNER_TO_GUEST), bytes.copyOfRange(1, bytes.size))?.let(Wire::handshake)) {
+        when (val reply = HandshakeBox.open(keys.roomKey, aad(OWNER_TO_GUEST), bytes.copyOfRange(1, bytes.size))?.let { Wire.handshake(it) }) {
             is Handshake.OwnerHello -> {
                 val ownerKey = Codec.fromBase64Url(reply.key) ?: return
                 val shared = identity.agree(ownerKey) ?: return
