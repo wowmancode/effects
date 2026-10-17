@@ -80,7 +80,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var progress by remember { mutableIntStateOf(0) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportsText by remember { mutableStateOf("1") }
-    var startText by remember { mutableStateOf("1") }
+    var startText by remember { mutableStateOf("0") }
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }

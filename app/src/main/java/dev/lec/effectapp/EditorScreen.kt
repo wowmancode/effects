@@ -557,10 +557,16 @@ fun EditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {},
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
-                actions = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically) {
+                // One row (Back, then the tools) so nothing can overlap; it scrolls sideways
+                // on screens too narrow to fit it all.
+                title = {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(0.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TopBarButton("Back", onClick = onBack)
+                        Spacer(Modifier.width(6.dp))
                         if (online != null) {
                             val onlineUi by online.ui.collectAsState()
                             val people = onlineUi?.takeIf { it.phase == OnlinePhase.IN_ROOM }?.room?.members?.size
@@ -1177,8 +1183,8 @@ private fun TopBarButton(label: String, onClick: () -> Unit, enabled: Boolean = 
         onClick = onClick,
         enabled = enabled,
         modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 36.dp),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
     ) {
-        Text(label, fontSize = if (large) 18.sp else 11.sp, maxLines = 1)
+        Text(label, fontSize = if (large) 17.sp else 10.sp, maxLines = 1, softWrap = false)
     }
 }
