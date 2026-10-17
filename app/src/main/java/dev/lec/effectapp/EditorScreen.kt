@@ -16,6 +16,8 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -555,48 +557,42 @@ fun EditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    if (portrait) {
-                        Row {
-                            TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↶", fontSize = 18.sp) }
-                            TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↷", fontSize = 18.sp) }
-                        }
-                    }
-                },
+                title = {},
                 navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
                 actions = {
-                    if (!portrait) {
-                        TextButton(onClick = viewModel::undo, enabled = viewModel.canUndo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↶", fontSize = 18.sp) }
-                        TextButton(onClick = viewModel::redo, enabled = viewModel.canRedo(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("↷", fontSize = 18.sp) }
-                    }
-                    TextButton(onClick = { loadProject.launch(arrayOf("*/*")) }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Load", fontSize = 10.sp) }
-                    TextButton(
-                        onClick = {
-                            project.clips.getOrNull(currentClipIndex)?.let { clip ->
-                                if (viewModel.duplicateClip(clip.id) != null) currentClipIndex++
-                            }
-                        },
-                        enabled = project.clips.isNotEmpty(),
-                        contentPadding = PaddingValues(horizontal = 3.dp),
-                    ) { Text("Copy", fontSize = 10.sp) }
-
-                    TextButton(onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } }, enabled = project.clips.isNotEmpty(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Del", fontSize = 10.sp) }
-                    TextButton(onClick = { saveProject.launch("effect-project.json") }, contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Save", fontSize = 10.sp) }
-                    TextButton(onClick = onExport, enabled = project.clips.isNotEmpty(), contentPadding = PaddingValues(horizontal = 3.dp)) { Text("Export", fontSize = 10.sp) }
-                    if (online != null) {
-                        val onlineUi by online.ui.collectAsState()
-                        val people = onlineUi?.takeIf { it.phase == OnlinePhase.IN_ROOM }?.room?.members?.size
-                        TextButton(onClick = onOnline, contentPadding = PaddingValues(horizontal = 3.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (online != null) {
+                            val onlineUi by online.ui.collectAsState()
+                            val people = onlineUi?.takeIf { it.phase == OnlinePhase.IN_ROOM }?.room?.members?.size
                             val reconnecting = onlineUi?.phase == OnlinePhase.RECONNECTING || onlineUi?.ownerAway == true
-                            Text(
+                            TopBarButton(
                                 when {
                                     reconnecting -> "Online…"
                                     people != null -> "Online·$people"
                                     else -> "Online"
                                 },
-                                fontSize = 10.sp,
+                                onClick = onOnline,
                             )
                         }
+                        TopBarButton("↶", onClick = viewModel::undo, enabled = viewModel.canUndo(), large = true)
+                        TopBarButton("↷", onClick = viewModel::redo, enabled = viewModel.canRedo(), large = true)
+                        TopBarButton("Load", onClick = { loadProject.launch(arrayOf("*/*")) })
+                        TopBarButton(
+                            "Copy",
+                            onClick = {
+                                project.clips.getOrNull(currentClipIndex)?.let { clip ->
+                                    if (viewModel.duplicateClip(clip.id) != null) currentClipIndex++
+                                }
+                            },
+                            enabled = project.clips.isNotEmpty(),
+                        )
+                        TopBarButton(
+                            "Del",
+                            onClick = { project.clips.getOrNull(currentClipIndex)?.let { viewModel.removeClip(it.id) } },
+                            enabled = project.clips.isNotEmpty(),
+                        )
+                        TopBarButton("Save", onClick = { saveProject.launch("effect-project.json") })
+                        TopBarButton("Export", onClick = onExport, enabled = project.clips.isNotEmpty())
                     }
                 },
             )
@@ -1172,4 +1168,17 @@ private fun MissingMediaDialog(
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text(if (missing.isEmpty()) "OK" else "Later") } },
     )
+}
+
+/** A compact top-bar button: no minimum width, so the row stays tight. */
+@Composable
+private fun TopBarButton(label: String, onClick: () -> Unit, enabled: Boolean = true, large: Boolean = false) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 36.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+    ) {
+        Text(label, fontSize = if (large) 18.sp else 11.sp, maxLines = 1)
+    }
 }

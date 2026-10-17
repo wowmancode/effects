@@ -5,6 +5,8 @@ import dev.lec.effectapp.model.TimelineSegment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import kotlin.math.abs
 import org.junit.Test
 
 class PluginEffectsTest {
@@ -113,5 +115,67 @@ class PluginEffectsTest {
     @Test
     fun acceptsAudioModulationAndPitchPrimitives() {
         assertNull(validatePluginSource("sample = mix(delay(20.0 + sine(control1)), pitch(control2), 0.5);", audio = true))
+    }
+
+    private fun audioPlugin(source: String, startMs: Long = 0, endMs: Long = 60_000, controls: Map<String, Float> = emptyMap()) =
+        requireNotNull(
+            createAudioDspState(
+                TimelineSegment(id = "p", effectId = "plugin_audio", startMs = startMs, endMs = endMs, params = controls, stringParams = mapOf("source" to source)),
+                48_000,
+                2,
+            ),
+        )
+
+    @Test
+    fun defaultAudioPluginChangesTheSound() {
+        val state = audioPlugin(DEFAULT_AUDIO_PLUGIN_SOURCE)
+        // Constant input through a tremolo comes out at varying levels.
+        val levels = (0 until 48_000).map { frame ->
+            val timeMs = frame * 1_000L / 48_000
+            state.process(16_000, timeMs, 0).also { state.process(16_000, timeMs, 1) }
+        }
+        assertTrue(levels.maxOrNull()!! - levels.minOrNull()!! > 5_000)
+    }
+
+    @Test
+    fun oscillatorsAreSmoothBetweenSamples() {
+        // time advances every sample, not once a millisecond, so a 440 Hz tone is a clean wave.
+        val state = audioPlugin("sample = sine(440.0) * 0.5;")
+        var previous = state.process(0, 0, 0).also { state.process(0, 0, 1) }
+        var largestStep = 0
+        for (frame in 1 until 4_800) {
+            val timeMs = frame * 1_000L / 48_000
+            val value = state.process(0, timeMs, 0)
+            state.process(0, timeMs, 1)
+            largestStep = maxOf(largestStep, abs(value - previous))
+            previous = value
+        }
+        // 440 Hz at half volume moves at most ~950 per sample at 48 kHz.
+        assertTrue("step $largestStep", largestStep < 1_200)
+    }
+
+    @Test
+    fun timeStartsAtZeroWhereTheEffectStarts() {
+        // Outputs time/10 so it fits in a sample; the effect starts 3 s into the clip.
+        val state = audioPlugin("sample = time / 10.0;", startMs = 3_000)
+        assertEquals(0f, state.process(0, 3_000, 0).toFloat(), 2f)
+        // Before the effect starts the sound passes through untouched.
+        val before = audioPlugin("sample = time / 10.0;", startMs = 3_000)
+        assertEquals(1_234f, before.process(1_234, 1_000, 0).toFloat(), 1f)
+    }
+
+    @Test
+    fun audioPluginIsFastEnoughForRealTime() {
+        val state = audioPlugin("temp1 = sine(control2 * 400.0 + 100.0); sample = mix(sample, sample * temp1, control1) + delay(20.0) * 0.3;")
+        val frames = 48_000 * 10
+        val started = System.nanoTime()
+        for (frame in 0 until frames) {
+            val timeMs = frame * 1_000L / 48_000
+            state.process(8_000, timeMs, 0)
+            state.process(8_000, timeMs, 1)
+        }
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        // Ten seconds of stereo sound; a phone needs this well under ten seconds.
+        assertTrue("took $elapsedMs ms", elapsedMs < 3_000)
     }
 }

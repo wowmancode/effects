@@ -247,74 +247,77 @@ private class BitcrushDspState(
         return (input * (1f - mix) + held[channel] * mix).toInt()
     }
 }
+/**
+ * Runs an audio plug-in. The program is compiled once (see compileAudio) so each sample is a
+ * few array reads and float operations. `time` counts seconds from the start of the effect
+ * (0 where the effect begins) and advances every sample, so oscillators like sine(440) are
+ * smooth instead of stepping once a millisecond.
+ */
 private class AudioPluginDspState(
     private val segment: TimelineSegment,
     private val sampleRate: Int,
     private val channels: Int,
-) : AudioDspState {
-    private val program = compileAudioPlugin(segment.stringParams["source"] ?: DEFAULT_AUDIO_PLUGIN_SOURCE)
+) : AudioDspState, AudioPluginHost {
+    private val plugin = compileAudioPlugin(segment.stringParams["source"] ?: DEFAULT_AUDIO_PLUGIN_SOURCE).compileAudio(this)
+    private val slots = plugin.slots
     private val history = FloatArray((sampleRate * 2 * channels).coerceAtLeast(channels * 2))
     private val pitchWindowFrames = (sampleRate * 0.05f).toInt().coerceIn(1024, 4096)
     private var writeIndex = 0
-    private var currentTimeMs = 0L
 
-    private val variables = mutableMapOf(
-        "sample" to 0f,
-        "channel" to 0f,
-        "time" to 0f,
-        "sample_rate" to sampleRate.toFloat(),
-    ).apply {
-        (1..8).forEach { index ->
-            this["control$index"] = segment.params["control$index"] ?: if (index == 1) 1f else 0f
-        }
-    }
+    /** Seconds since the effect started, for the frame being processed. */
+    private var timeSeconds = 0.0
+    private var started = false
+    private var elapsedFrames = 0L
+    private var lastChannel = -1
+    private val secondsPerFrame = 1.0 / sampleRate.coerceAtLeast(1)
 
-    private val runtime = PluginRuntime { name, arguments ->
-        when (name) {
-            "delay" -> readDelayMs(arguments[0])
-            "pitch" -> readPitch(arguments[0])
-            "sine" -> sin(oscillatorPhase(arguments[0]) * 2f * PI.toFloat())
-            "square" -> if (oscillatorPhase(arguments[0]) < 0.5f) 1f else -1f
-            "saw" -> oscillatorPhase(arguments[0]) * 2f - 1f
-            "triangle" -> 1f - 4f * abs(oscillatorPhase(arguments[0]) - 0.5f)
-            else -> null
+    init {
+        slots[plugin.sampleRateSlot] = sampleRate.toFloat()
+        // Controls don't change while a state lives (a change builds a new state).
+        plugin.controlSlots.forEachIndexed { index, slot ->
+            slots[slot] = segment.params["control${index + 1}"] ?: if (index == 0) 1f else 0f
         }
     }
 
     override fun process(input: Int, timeMs: Long, channel: Int): Int {
         val normalized = input / 32768f
-        currentTimeMs = timeMs
-        variables["sample"] = normalized
-        variables["channel"] = channel.toFloat()
-        variables["time"] = timeMs / 1_000f
-        (1..8).forEach { index ->
-            variables["control$index"] = segment.params["control$index"] ?: if (index == 1) 1f else 0f
+        if (!started) {
+            started = true
+            timeSeconds = (timeMs - segment.startMs).coerceAtLeast(0) / 1_000.0
+        } else if (channel <= lastChannel) {
+            // A new frame starts with the first channel.
+            timeSeconds += secondsPerFrame
+            elapsedFrames++
         }
-        if (timeMs in segment.startMs until segment.endMs) {
-            program.evaluateInPlace(variables, runtime)
-        }
-        val output = variables["sample"] ?: normalized
+        lastChannel = channel
+        val output = if (timeMs in segment.startMs until segment.endMs) {
+            slots[plugin.sampleSlot] = normalized
+            slots[plugin.channelSlot] = channel.toFloat()
+            slots[plugin.timeSlot] = timeSeconds.toFloat()
+            plugin.run()
+            slots[plugin.sampleSlot]
+        } else normalized
         val safe = if (output.isFinite()) output.coerceIn(-1f, 1f) else 0f
         history[writeIndex] = safe
         writeIndex = (writeIndex + 1) % history.size
         return (safe * 32767f).toInt()
     }
 
-    private fun oscillatorPhase(frequency: Float): Float {
-        val cycles = currentTimeMs / 1_000f * frequency.coerceIn(-20_000f, 20_000f)
-        return cycles - floor(cycles)
+    override fun oscillatorPhase(frequency: Float): Float {
+        val cycles = timeSeconds * frequency.coerceIn(-20_000f, 20_000f)
+        return (cycles - floor(cycles)).toFloat()
     }
 
-    private fun readDelayMs(delayMs: Float): Float {
-        val frames = sampleRate * delayMs.coerceIn(0f, 2_000f) / 1_000f
+    override fun delay(ms: Float): Float {
+        val frames = sampleRate * ms.coerceIn(0f, 2_000f) / 1_000f
         return readHistory(frames)
     }
 
-    private fun readPitch(semitones: Float): Float {
+    override fun pitch(semitones: Float): Float {
         val ratio = 2.0.pow(semitones.coerceIn(-24f, 24f).toDouble() / 12.0).toFloat()
         if (abs(ratio - 1f) < 0.0001f) return readHistory(1f)
-        val elapsedFrames = currentTimeMs * sampleRate / 1_000f
-        val firstPhase = wrapUnit(elapsedFrames * (1f - ratio) / pitchWindowFrames)
+        val cycles = elapsedFrames.toDouble() * (1.0 - ratio) / pitchWindowFrames
+        val firstPhase = wrapUnit((cycles - floor(cycles)).toFloat())
         val secondPhase = wrapUnit(firstPhase + 0.5f)
         val first = readHistory(firstPhase * (pitchWindowFrames - 2)) * hann(firstPhase)
         val second = readHistory(secondPhase * (pitchWindowFrames - 2)) * hann(secondPhase)

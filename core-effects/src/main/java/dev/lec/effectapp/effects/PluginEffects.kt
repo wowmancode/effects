@@ -599,3 +599,172 @@ private const val VERTEX_SHADER = """
       vTexSamplingCoord = aFramePosition.xy * 0.5 + 0.5;
     }
 """
+
+// ---------------------------------------------------------------------------------------------
+// Fast evaluation for audio plug-ins. Audio runs the program once per sample (~96,000 times a
+// second for stereo), so it is compiled into a tree of small nodes that read and write a
+// FloatArray: no maps, no boxing, no lists and no name lookups while the sound plays.
+
+/** What an audio plug-in can ask of the sound around it (echoes, pitch, oscillators). */
+internal interface AudioPluginHost {
+    fun delay(ms: Float): Float
+    fun pitch(semitones: Float): Float
+    fun oscillatorPhase(frequency: Float): Float
+}
+
+internal class CompiledAudioPlugin(
+    private val statements: Array<Pair<Int, AudioNode>>,
+    val slots: FloatArray,
+    val sampleSlot: Int,
+    val channelSlot: Int,
+    val timeSlot: Int,
+    val sampleRateSlot: Int,
+    val controlSlots: IntArray,
+) {
+    fun run() {
+        for ((target, node) in statements) slots[target] = node.eval(slots)
+    }
+}
+
+internal abstract class AudioNode {
+    abstract fun eval(v: FloatArray): Float
+}
+
+private class ConstNode(private val value: Float) : AudioNode() {
+    override fun eval(v: FloatArray) = value
+}
+
+private class SlotNode(private val slot: Int) : AudioNode() {
+    override fun eval(v: FloatArray) = v[slot]
+}
+
+private class NegNode(private val a: AudioNode) : AudioNode() {
+    override fun eval(v: FloatArray) = -a.eval(v)
+}
+
+private class BinNode(private val op: Char, private val a: AudioNode, private val b: AudioNode) : AudioNode() {
+    override fun eval(v: FloatArray): Float {
+        val x = a.eval(v)
+        val y = b.eval(v)
+        return when (op) {
+            '+' -> x + y
+            '-' -> x - y
+            '*' -> x * y
+            else -> if (abs(y) < 0.000001f) 0f else x / y
+        }
+    }
+}
+
+private class Fn1Node(private val op: Int, private val a: AudioNode) : AudioNode() {
+    override fun eval(v: FloatArray): Float = fn1(op, a.eval(v))
+}
+
+private class Fn2Node(private val op: Int, private val a: AudioNode, private val b: AudioNode) : AudioNode() {
+    override fun eval(v: FloatArray): Float = fn2(op, a.eval(v), b.eval(v))
+}
+
+private class Fn3Node(private val op: Int, private val a: AudioNode, private val b: AudioNode, private val c: AudioNode) : AudioNode() {
+    override fun eval(v: FloatArray): Float = fn3(op, a.eval(v), b.eval(v), c.eval(v))
+}
+
+private class HostNode(private val op: Int, private val a: AudioNode, private val host: AudioPluginHost) : AudioNode() {
+    override fun eval(v: FloatArray): Float {
+        val x = a.eval(v)
+        return when (op) {
+            H_DELAY -> host.delay(x)
+            H_PITCH -> host.pitch(x)
+            H_SINE -> sin(host.oscillatorPhase(x) * 2f * PI_F)
+            H_SQUARE -> if (host.oscillatorPhase(x) < 0.5f) 1f else -1f
+            H_SAW -> host.oscillatorPhase(x) * 2f - 1f
+            else -> 1f - 4f * abs(host.oscillatorPhase(x) - 0.5f)
+        }
+    }
+}
+
+private const val PI_F = 3.1415927f
+private const val H_DELAY = 0
+private const val H_PITCH = 1
+private const val H_SINE = 2
+private const val H_SQUARE = 3
+private const val H_SAW = 4
+private const val H_TRIANGLE = 5
+private val HOST_OPS = mapOf(
+    "delay" to H_DELAY, "pitch" to H_PITCH, "sine" to H_SINE,
+    "square" to H_SQUARE, "saw" to H_SAW, "triangle" to H_TRIANGLE,
+)
+
+private val FN1 = listOf("sin", "cos", "tan", "ceil", "exp", "log", "abs", "floor", "fract", "sqrt", "noise")
+private val FN2 = listOf("atan2", "pow", "mod", "min", "max", "step", "less", "greater", "equal")
+private val FN3 = listOf("clamp", "mix", "select", "smoothstep")
+
+private fun fn1(op: Int, x: Float): Float = when (op) {
+    0 -> sin(x)
+    1 -> cos(x)
+    2 -> tan(x)
+    3 -> ceil(x)
+    4 -> exp(x)
+    5 -> ln(x.coerceAtLeast(0.000001f))
+    6 -> abs(x)
+    7 -> floor(x)
+    8 -> x - floor(x)
+    9 -> sqrt(x.coerceAtLeast(0f))
+    else -> {
+        val s = sin(x * 12.9898f) * 43758.5453f
+        s - floor(s)
+    }
+}
+
+private fun fn2(op: Int, x: Float, y: Float): Float = when (op) {
+    0 -> atan2(x, y)
+    1 -> x.toDouble().pow(y.toDouble()).toFloat()
+    2 -> if (abs(y) < 0.000001f) 0f else x % y
+    3 -> min(x, y)
+    4 -> max(x, y)
+    5 -> if (y < x) 0f else 1f
+    6 -> if (x < y) 1f else 0f
+    7 -> if (x > y) 1f else 0f
+    else -> if (abs(x - y) < 0.000001f) 1f else 0f
+}
+
+private fun fn3(op: Int, x: Float, y: Float, z: Float): Float = when (op) {
+    // clamp with a min above its max returns the min instead of throwing mid-playback.
+    0 -> if (y > z) y else x.coerceIn(y, z)
+    1 -> x + (y - x) * z
+    2 -> if (x >= 0.5f) y else z
+    else -> {
+        val denominator = y - x
+        val amount = if (abs(denominator) < 0.000001f) 0f else ((z - x) / denominator).coerceIn(0f, 1f)
+        amount * amount * (3f - 2f * amount)
+    }
+}
+
+/** Compiles a parsed audio plug-in into its fast form (see [CompiledAudioPlugin]). */
+internal fun PluginProgram.compileAudio(host: AudioPluginHost): CompiledAudioPlugin {
+    val names = LinkedHashMap<String, Int>()
+    fun slot(name: String) = names.getOrPut(name) { names.size }
+    val sample = slot("sample")
+    val channel = slot("channel")
+    val time = slot("time")
+    val sampleRate = slot("sample_rate")
+    val controls = IntArray(8) { slot("control${it + 1}") }
+    (1..16).forEach { slot("temp$it") }
+
+    fun build(expression: PluginExpression): AudioNode = when (expression) {
+        is NumberExpression -> ConstNode(expression.value)
+        is VariableExpression -> SlotNode(slot(expression.name))
+        is UnaryExpression -> if (expression.operator == '-') NegNode(build(expression.value)) else build(expression.value)
+        is BinaryExpression -> BinNode(expression.operator, build(expression.left), build(expression.right))
+        is FunctionExpression -> {
+            val args = expression.arguments.map(::build)
+            val name = expression.name
+            HOST_OPS[name]?.let { HostNode(it, args[0], host) }
+                ?: FN1.indexOf(name).takeIf { it >= 0 && args.size == 1 }?.let { Fn1Node(it, args[0]) }
+                ?: FN2.indexOf(name).takeIf { it >= 0 && args.size == 2 }?.let { Fn2Node(it, args[0], args[1]) }
+                ?: FN3.indexOf(name).takeIf { it >= 0 && args.size == 3 }?.let { Fn3Node(it, args[0], args[1], args[2]) }
+                ?: ConstNode(0f)
+        }
+    }
+
+    val statements = assignments.map { slot(it.target) to build(it.expression) }.toTypedArray()
+    return CompiledAudioPlugin(statements, FloatArray(names.size), sample, channel, time, sampleRate, controls)
+}
