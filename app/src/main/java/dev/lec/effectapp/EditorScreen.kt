@@ -297,7 +297,7 @@ fun EditorScreen(
                 android.widget.Toast.makeText(context, "This clip needs a content:// source URI", android.widget.Toast.LENGTH_LONG).show()
             } else {
                 val request = Intent("com.wowman.bandvoc.action.RENDER_AUDIO")
-                    .setClassName("com.wowman.bandvoc", "com.wowman.bandvoc.RenderAudioActivity")
+                    .setClassName("com.wowman.bandvoc.bridge", "com.wowman.bandvoc.RenderAudioActivity")
                     .setData(input)
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     .putExtra("mode", mode)
