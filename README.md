@@ -49,3 +49,30 @@ gradle assembleDebug lint test
 ## License
 
 App code is licensed under GPL-3.0-only. See `LICENSE` and `NOTICE.md`.
+
+
+## Replace a clip's sound with Formulator (native Android integration)
+
+On this branch, open an imported video in the editor, select the clip, and tap
+**Formulator**. Enter either a Bandvoc effect number (1–32) or a Vocodex preset
+slug and tap the corresponding engine button. Formulator runs its audio
+renderer locally and returns a WAV to effect-app. The editor stores its own
+persistent copy and uses **that audio instead of the original video's audio**
+in both preview and Media3 export, while preserving the original video,
+trim and speed. Existing audio-effect segments remain applicable to the
+replaced audio. Tap **Restore audio** to switch back; undo/redo also works.
+
+Install the matching Formulator build from `wowmancode/formulator` branch
+`agent/intent-audio-render` (`com.wowman.bandvoc`). These two APKs run separately,
+communicating with explicit Android activity intents and read-granted
+`content://` URIs. They do **not** call a web API. The source must be an
+Android document/content URI, and Formulator's decoder limits it to five minutes.
+The replacement WAV is saved inside effect-app; do not uninstall or clear
+effect-app storage without backing up your media. Existing project JSON
+remains readable; the new optional `audioReplacementUri` field is used
+when an audio replacement exists.
+
+The user's VEGAS FX MacroDroid `.mdr` still generates *effect preset JSON*.
+That file by itself contains no video/audio media, and does not initiate
+the new render operation automatically. Automation requires an additional
+media-selection/render handoff; use the built-in **Formulator** button for now.
