@@ -21,6 +21,14 @@ android {
         buildConfigField("String", "RELAY_HOST", "\"$relayHost\"")
     }
 
+    buildTypes {
+        getByName("debug") {
+            // Debug integration APK installs beside the original editor.
+            // This avoids signature conflicts and preserves installed projects.
+            applicationIdSuffix = ".bridge"
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
