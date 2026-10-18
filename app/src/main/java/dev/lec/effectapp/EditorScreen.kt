@@ -1152,7 +1152,7 @@ private suspend fun buildPreviewEntries(context: Context, project: EditProject):
             val video = videoOverride?.let { source(it.uri, it.startMs, it.startMs + duration) } ?: plain
             val audio = when {
                 audioOverride != null -> source(audioOverride.uri, audioOverride.startMs, audioOverride.startMs + duration)
-                clip.audioReplacementUri != null -> source(clip.audioReplacementUri, clip.trimStartMs, clip.sourceEndMs)
+                clip.audioReplacementUri != null -> source(clip.audioReplacementUri!!, clip.trimStartMs, clip.sourceEndMs)
                 else -> source(clip.sourceUri, clip.trimStartMs, clip.sourceEndMs)
             }
             MergingMediaSource(
