@@ -63,7 +63,8 @@ trim and speed. Existing audio-effect segments remain applicable to the
 replaced audio. Tap **Restore audio** to switch back; undo/redo also works.
 
 Install the matching Formulator build from `wowmancode/formulator` branch
-`agent/intent-audio-render` (`com.wowman.bandvoc`). These two APKs run separately,
+`agent/intent-audio-render` (`com.wowman.bandvoc.bridge`). This debug editor APK uses
+`dev.lec.effectapp.bridge`. They install beside the originals,
 communicating with explicit Android activity intents and read-granted
 `content://` URIs. They do **not** call a web API. The source must be an
 Android document/content URI, and Formulator's decoder limits it to five minutes.
@@ -76,3 +77,10 @@ The user's VEGAS FX MacroDroid `.mdr` still generates *effect preset JSON*.
 That file by itself contains no video/audio media, and does not initiate
 the new render operation automatically. Automation requires an additional
 media-selection/render handoff; use the built-in **Formulator** button for now.
+
+**Installation:** Install both **Bridge** debug APKs, not old APKs from before
+the side-by-side change. The Formulator Bridge release is
+`https://github.com/wowmancode/formulator/releases/tag/audio-bridge-test`;
+the effect-app Bridge release is
+`https://github.com/wowmancode/effects/releases/tag/formulator-audio-bridge-test`.
+These debug APKs preserve the original installed packages and their data.
