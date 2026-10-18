@@ -32,6 +32,14 @@ jobs:
         run: |
           set -o pipefail
           gradle --no-daemon assembleDebug lint test 2>&1 | tee build-output.txt
+      - name: Verify installable bridge APK package and signature
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -n 14
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep -F "package: name='dev.lec.effectapp.bridge'"
       - name: Annotate build errors
         if: failure()
         run: |
