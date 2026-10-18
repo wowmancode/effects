@@ -119,6 +119,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
     }
 
+    /** Use the other app's rendered WAV as this clip's audio, leaving the video untouched. */
+    fun replaceClipAudio(id: String, renderedAudioUri: String) {
+        updateClip(id) { copy(audioReplacementUri = renderedAudioUri) }
+        refreshMissingMedia()
+    }
+
+    /** Revert to the video's original sound. */
+    fun restoreClipAudio(id: String) {
+        updateClip(id) { copy(audioReplacementUri = null) }
+        refreshMissingMedia()
+    }
+
     /**
      * Online mode gets first look at a relink: media shared in a room is identified by its
      * content, so the picked file has to be checked before it's used. Returns true when
@@ -156,6 +168,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         val names = buildMap {
             project.clips.forEach { clip ->
                 putIfAbsent(clip.sourceUri, clip.displayName)
+                clip.audioReplacementUri?.let { putIfAbsent(it, "Rendered audio for ${clip.displayName}") }
                 clip.overlays.forEach { putIfAbsent(it.sourceUri, it.displayName) }
             }
         }
