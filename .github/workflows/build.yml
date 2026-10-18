@@ -91,6 +91,6 @@ jobs:
             gh release create formulator-audio-bridge-test --target "$GITHUB_SHA" --prerelease \
               --title "effect-app Formulator Bridge Test" \
               --notes "Debug APK for agent/formulator-audio-bridge. Not yet device-verified."
-          gh release upload formulator-audio-bridge-test \
-            "app/build/outputs/apk/debug/app-debug.apk#effect-app-formulator-bridge-debug.apk" \
-            --clobber
+          cp app/build/outputs/apk/debug/app-debug.apk /tmp/effect-app-Bridge.apk
+          gh release upload formulator-audio-bridge-test /tmp/effect-app-Bridge.apk --clobber
+          gh release delete-asset formulator-audio-bridge-test app-debug.apk -y || true
