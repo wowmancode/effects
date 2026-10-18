@@ -106,7 +106,7 @@ object ProjectCompositionFactory {
         }
         // A clip that reads its sound from elsewhere (reversed, or offset in IHTX passes) needs
         // picture and sound in separate sequences.
-        val hasOverrides = project.clips.any { it.videoOverride != null || it.audioOverride != null }
+        val hasOverrides = project.clips.any { it.videoOverride != null || it.audioOverride != null || it.audioReplacementUri != null }
         val baseSequences = if (!hasReverse && !hasKeyframes && !hasOverrides) {
             val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, outputPresentationSize, includeAudio = !muteBaseAudio, placement = basePlacement) }
             listOf(
@@ -125,8 +125,8 @@ object ProjectCompositionFactory {
             }
             val audioItems = project.clips.flatMap { clip ->
                 // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
-                val source = clip.audioOverride
-                sourceSlices(clip, source == null && clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
+                val source = clip.audioOverride ?: clip.audioReplacementUri?.let { SourceOverride(it) }
+                sourceSlices(clip, clip.audioOverride == null && clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
                     editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source)
                 }
             }
@@ -263,9 +263,18 @@ object ProjectCompositionFactory {
         placement: Effect? = null,
     ): EditedMediaItem {
         // Reversed media is rendered at normal speed; otherwise the clip reads speed× as much source.
-        val speed = if (source == null) clip.playbackSpeed else 1f
-        val startPositionMs = source?.let { it.startMs + slice.startMs } ?: clip.sourceMsAt(slice.startMs)
-        val endPositionMs = source?.let { it.startMs + slice.endMs } ?: clip.sourceMsAt(slice.endMs)
+        // External WAVs cover the original source timeline, so trims and speed remain unchanged.
+        // Cached reverse overrides instead cover the clipped range and play at normal speed.
+        val replacedAudio = !includeVideo && source != null && source.uri == clip.audioReplacementUri
+        val speed = if (source == null || replacedAudio) clip.playbackSpeed else 1f
+        val startPositionMs = when {
+            replacedAudio || source == null -> clip.sourceMsAt(slice.startMs)
+            else -> source.startMs + slice.startMs
+        }
+        val endPositionMs = when {
+            replacedAudio || source == null -> clip.sourceMsAt(slice.endMs)
+            else -> source.startMs + slice.endMs
+        }
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(source?.uri ?: clip.sourceUri))
             .setClippingConfiguration(
