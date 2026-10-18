@@ -81,7 +81,10 @@ object ReverseMediaCache {
             reversedVideo(context, clip.sourceUri, clip.trimStartMs, clip.trimEndMs)?.let { SourceOverride(it) }
         } else clip.videoOverride
         val audio = if (clip.reversesAudio() && clip.audioOverride == null) {
-            reversedAudio(context, clip.sourceUri, clip.trimStartMs, clip.trimEndMs)?.let { SourceOverride(it) }
+            reversedAudio(
+                context, clip.audioReplacementUri ?: clip.sourceUri,
+                clip.trimStartMs, clip.sourceEndMs,
+            )?.let { SourceOverride(it) }
         } else clip.audioOverride
         return clip.copy(videoOverride = video, audioOverride = audio)
     }
