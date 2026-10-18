@@ -17,6 +17,7 @@ data class EditProject(
     fun sourceUris(): Set<String> = buildSet {
         clips.forEach { clip ->
             add(clip.sourceUri)
+            clip.audioReplacementUri?.let { add(it) }
             clip.overlays.forEach { add(it.sourceUri) }
         }
     }
@@ -31,8 +32,11 @@ data class EditProject(
                 val relinked = if (clip.sourceUri == oldUri) {
                     clip.copy(sourceUri = newUri, displayName = displayName, mediaMissing = false)
                 } else clip
-                relinked.copy(
-                    overlays = relinked.overlays.map { overlay ->
+                val withAudio = if (relinked.audioReplacementUri == oldUri) {
+                    relinked.copy(audioReplacementUri = newUri)
+                } else relinked
+                withAudio.copy(
+                    overlays = withAudio.overlays.map { overlay ->
                         if (overlay.sourceUri != oldUri) overlay
                         else overlay.copy(
                             sourceUri = newUri,
@@ -71,6 +75,8 @@ data class Clip(
      * [speed] times as much source from trimStartMs (see [sourceEndMs]). 1 = normal speed.
      */
     val speed: Float = 1f,
+    /** Rendered external audio, replacing (not mixing with) the source's audio track. */
+    val audioReplacementUri: String? = null,
     /** Pre-reversed video for this clip's range (see ReverseMediaCache). Never saved. */
     @Transient val videoOverride: SourceOverride? = null,
     /** Pre-reversed audio for this clip's range (see ReverseMediaCache). Never saved. */
@@ -96,6 +102,7 @@ data class Clip(
             trimEndMs = replacementDuration,
             mediaMissing = false,
             speed = 1f,
+            audioReplacementUri = null,
             effectSegments = effectSegments.map { it.forWholeClip(replacementDuration) },
             audioSegments = audioSegments.map { it.forWholeClip(replacementDuration) },
         )
