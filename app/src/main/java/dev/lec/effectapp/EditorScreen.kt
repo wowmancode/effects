@@ -1,5 +1,7 @@
 package dev.lec.effectapp
 
+import android.content.ClipData
+import android.content.Intent
 import android.content.res.Configuration
 import android.content.Context
 import android.os.Handler
@@ -36,6 +38,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -83,6 +86,7 @@ import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -102,6 +106,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.UUID
 import kotlin.coroutines.resume
 
 private const val PIXELS_PER_SECOND = 48f
@@ -125,6 +131,10 @@ fun EditorScreen(
     var pendingSegment by remember { mutableStateOf<PendingSegment?>(null) }
     var pendingPresetExportId by remember { mutableStateOf<String?>(null) }
     var pendingReplaceClipId by remember { mutableStateOf<String?>(null) }
+    var pendingFormulatorClipId by remember { mutableStateOf<String?>(null) }
+    var showFormulatorDialog by remember { mutableStateOf(false) }
+    var bandvocEffectText by remember { mutableStateOf("8") }
+    var vocodexPresetText by remember { mutableStateOf("default") }
     var pendingOverlayClipId by remember { mutableStateOf<String?>(null) }
     val overlayResolver = remember { OverlayBitmapCache.resolver(context.applicationContext) }
 
@@ -239,6 +249,75 @@ fun EditorScreen(
             viewModel.replaceClipMedia(clipId, uri.toString(), metadata.first, metadata.second)
         }
     }
+    // Formulator renders on-device and returns a one-time read-granted WAV URI.
+    // Copy to our own persistent files, so saved projects keep working when that grant expires.
+    val formulatorRender = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val clipId = pendingFormulatorClipId
+        pendingFormulatorClipId = null
+        if (clipId != null && result.resultCode == android.app.Activity.RESULT_OK) {
+            val wavUri = result.data?.data
+            if (wavUri == null) {
+                android.widget.Toast.makeText(context, "Formulator did not return audio", android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                scope.launch {
+                    val saved = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val directory = File(context.filesDir, "formulator-audio").apply { mkdirs() }
+                            val file = File(directory, "audio-${UUID.randomUUID()}.wav")
+                            try {
+                                context.contentResolver.openInputStream(wavUri)?.use { input ->
+                                    file.outputStream().use { output -> input.copyTo(output) }
+                                } ?: error("Cannot read rendered WAV")
+                                check(file.length() > 44L) { "Rendered WAV is empty" }
+                                file
+                            } catch (error: Exception) {
+                                file.delete()
+                                throw error
+                            }
+                        }.getOrNull()
+                    }
+                    if (saved != null) {
+                        viewModel.replaceClipAudio(clipId, Uri.fromFile(saved).toString())
+                        android.widget.Toast.makeText(context, "Replaced clip audio with Formulator WAV", android.widget.Toast.LENGTH_LONG).show()
+                    } else {
+                        android.widget.Toast.makeText(context, "Could not copy Formulator audio", android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        } else if (clipId != null) {
+            val error = result.data?.getStringExtra("error") ?: "Formulator render cancelled or unavailable"
+            android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    val startFormulator: (String, Int, String) -> Unit = { mode, effect, preset ->
+        val clip = project.clips.getOrNull(currentClipIndex)
+        if (clip != null) {
+            val input = Uri.parse(clip.sourceUri)
+            if (input.scheme != "content") {
+                android.widget.Toast.makeText(context, "This clip needs a content:// source URI", android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                val request = Intent("com.wowman.bandvoc.action.RENDER_AUDIO")
+                    .setClassName("com.wowman.bandvoc", "com.wowman.bandvoc.RenderAudioActivity")
+                    .setData(input)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    .putExtra("mode", mode)
+                    .putExtra("effect", effect)
+                    .putExtra("preset", preset)
+                // Forward read permission held through OpenDocument to Formulator.
+                request.clipData = ClipData.newUri(context.contentResolver, "Source media", input)
+                pendingFormulatorClipId = clip.id
+                runCatching { formulatorRender.launch(request) }
+                    .onFailure { e ->
+                        pendingFormulatorClipId = null
+                        android.widget.Toast.makeText(context,
+                            "Install the Formulator build with the render API. ${e.message}",
+                            android.widget.Toast.LENGTH_LONG).show()
+                    }
+            }
+        }
+    }
+
     val addImageOverlay = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val clipId = pendingOverlayClipId
         pendingOverlayClipId = null
@@ -408,6 +487,7 @@ fun EditorScreen(
     val playlistKey = project.clips.map { clip ->
         listOf(
             clip.sourceUri,
+            clip.audioReplacementUri,
             clip.trimStartMs,
             clip.trimEndMs,
             clip.speed,
@@ -598,6 +678,11 @@ fun EditorScreen(
                             enabled = project.clips.isNotEmpty(),
                         )
                         TopBarButton("Save", onClick = { saveProject.launch("effect-project.json") })
+                        TopBarButton("Formulator", onClick = { showFormulatorDialog = true },
+                            enabled = project.clips.isNotEmpty())
+                        TopBarButton("Restore audio", onClick = {
+                            project.clips.getOrNull(currentClipIndex)?.let { viewModel.restoreClipAudio(it.id) }
+                        }, enabled = project.clips.getOrNull(currentClipIndex)?.audioReplacementUri != null)
                         TopBarButton("Export", onClick = onExport, enabled = project.clips.isNotEmpty())
                     }
                 },
@@ -722,6 +807,40 @@ fun EditorScreen(
                 dismissedPrompt = missingPrompt
                 viewModel.dismissOpenNotes()
             },
+        )
+    }
+    if (showFormulatorDialog) {
+        AlertDialog(
+            onDismissRequest = { showFormulatorDialog = false },
+            title = { Text("Replace audio with Formulator") },
+            text = {
+                Column {
+                    Text("Process the current clip's original sound with Formulator. Its video is unchanged.")
+                    OutlinedTextField(
+                        value = bandvocEffectText,
+                        onValueChange = { bandvocEffectText = it },
+                        label = { Text("Bandvoc effect (1–32)") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = vocodexPresetText,
+                        onValueChange = { vocodexPresetText = it },
+                        label = { Text("Vocodex preset slug") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showFormulatorDialog = false
+                    startFormulator("bandvoc", bandvocEffectText.toIntOrNull() ?: 8, "default")
+                }) { Text("Bandvoc") }
+                TextButton(onClick = {
+                    showFormulatorDialog = false
+                    startFormulator("vocodex", 8, vocodexPresetText.trim())
+                }) { Text("Vocodex") }
+            },
+            dismissButton = { TextButton(onClick = { showFormulatorDialog = false }) { Text("Cancel") } },
         )
     }
     if (online != null) OnlinePrompts(online)
@@ -1027,13 +1146,16 @@ private suspend fun buildPreviewEntries(context: Context, project: EditProject):
             return@forEachIndexed
         }
         val plain = source(clip.sourceUri, clip.trimStartMs, clip.sourceEndMs)
-        val mediaSource = if (videoOverride == null && audioOverride == null) {
+        val mediaSource = if (videoOverride == null && audioOverride == null && clip.audioReplacementUri == null) {
             plain
         } else {
             // Video and audio come from different files; each contributes only its own track.
             val video = videoOverride?.let { source(it.uri, it.startMs, it.startMs + duration) } ?: plain
-            val audio = audioOverride?.let { source(it.uri, it.startMs, it.startMs + duration) }
-                ?: source(clip.sourceUri, clip.trimStartMs, clip.trimEndMs)
+            val audio = when {
+                audioOverride != null -> source(audioOverride.uri, audioOverride.startMs, audioOverride.startMs + duration)
+                clip.audioReplacementUri != null -> source(clip.audioReplacementUri, clip.trimStartMs, clip.sourceEndMs)
+                else -> source(clip.sourceUri, clip.trimStartMs, clip.sourceEndMs)
+            }
             MergingMediaSource(
                 FilteringMediaSource(video, C.TRACK_TYPE_VIDEO),
                 FilteringMediaSource(audio, C.TRACK_TYPE_AUDIO),
