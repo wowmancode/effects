@@ -1,0 +1,171 @@
+package dev.lec.effectapp
+
+import android.content.Context
+import android.graphics.Paint
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.IhtxDirection
+import dev.lec.effectapp.model.IhtxGridCell
+import dev.lec.effectapp.model.IhtxOverlayPattern
+import dev.lec.effectapp.model.IhtxPatternKind
+import dev.lec.effectapp.model.IhtxPatternLibraryJson
+import java.util.UUID
+
+@Composable
+internal fun IhtxPresetQueue(
+    presets: List<EffectPreset>,
+    queue: List<EffectPreset>,
+    onChange: (List<EffectPreset>) -> Unit,
+) {
+    Text("Preset order", style = MaterialTheme.typography.titleMedium)
+    Text("Each preset runs for the selected number of exports, then the next preset takes over. Every export uses the previous output.")
+    if (queue.isEmpty()) Text("Add at least one saved preset to the queue.")
+    queue.forEachIndexed { index, preset ->
+        Column {
+            Text("${index + 1}. ${preset.name}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onChange(queue.movedIhtxItem(index, -1)) }, enabled = index > 0) { Text("Up") }
+                TextButton(onClick = { onChange(queue.movedIhtxItem(index, 1)) }, enabled = index < queue.lastIndex) { Text("Down") }
+                TextButton(onClick = { onChange(queue.filterIndexed { i, _ -> i != index }) }) { Text("Remove") }
+            }
+        }
+    }
+    if (presets.isEmpty()) Text("Save presets in the editor first, then return here.")
+    presets.forEach { preset ->
+        OutlinedButton(onClick = { onChange(queue + preset) }, modifier = Modifier.fillMaxWidth()) {
+            Text("+ ${preset.name}")
+        }
+    }
+}
+
+internal fun <T> List<T>.movedIhtxItem(index: Int, delta: Int): List<T> {
+    val destination = index + delta
+    if (index !in indices || destination !in indices) return this
+    return toMutableList().apply { add(destination, removeAt(index)) }
+}
+
+@Composable
+internal fun IhtxPatternEditor(
+    gridSize: Int,
+    cells: List<IhtxGridCell>,
+    onChange: (List<IhtxGridCell>) -> Unit,
+    onLoad: (IhtxOverlayPattern) -> Unit,
+) {
+    val context = LocalContext.current
+    val preferences = remember { context.getSharedPreferences("ihtx-patterns", Context.MODE_PRIVATE) }
+    var saved by remember {
+        mutableStateOf(runCatching { IhtxPatternLibraryJson.decode(preferences.getString("patterns", "[]") ?: "[]") }.getOrDefault(emptyList()))
+    }
+    var cursor by remember(gridSize) { mutableStateOf(IhtxGridCell(0, 0)) }
+    var name by remember { mutableStateOf("") }
+    fun store(patterns: List<IhtxOverlayPattern>) {
+        saved = patterns
+        preferences.edit().putString("patterns", IhtxPatternLibraryJson.encode(patterns)).apply()
+    }
+
+    Text("Overlay placement pattern", style = MaterialTheme.typography.titleMedium)
+    Text("Directions move the cursor. New overlay records where the next overlay video goes. Positions repeat if there are more overlays than positions.")
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        IhtxPatternKind.entries.forEach { kind ->
+            OutlinedButton(onClick = { onChange(kind.cells(gridSize)); cursor = IhtxGridCell(0, 0) }) { Text(kind.label) }
+        }
+    }
+    PatternGrid(gridSize, cells, cursor)
+    Text("Cursor: row ${cursor.row + 1}, column ${cursor.column + 1} · ${cells.size} recorded positions")
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        IhtxDirection.entries.forEach { direction ->
+            val next = cursor.move(direction, gridSize)
+            OutlinedButton(onClick = { next?.let { cursor = it } }, enabled = next != null) {
+                Text(when (direction) {
+                    IhtxDirection.UP -> "↑ Up"
+                    IhtxDirection.DOWN -> "↓ Down"
+                    IhtxDirection.LEFT -> "← Left"
+                    IhtxDirection.RIGHT -> "→ Right"
+                })
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { onChange(cells + cursor) }, enabled = cells.size < 256) { Text("New overlay") }
+        TextButton(onClick = { onChange(cells.dropLast(1)) }, enabled = cells.isNotEmpty()) { Text("Undo") }
+        TextButton(onClick = { onChange(emptyList()); cursor = IhtxGridCell(0, 0) }) { Text("Reset") }
+    }
+    if (cells.isEmpty()) Text("Record the first overlay position, or choose a pattern above.")
+    Text("Reset clears the current order. Saved patterns stay in your library.")
+    OutlinedTextField(
+        value = name, onValueChange = { name = it.take(60) }, label = { Text("Pattern name") },
+        singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedButton(
+        onClick = {
+            val label = name.trim()
+            val existing = saved.firstOrNull { it.name == label }
+            val pattern = IhtxOverlayPattern(existing?.id ?: UUID.randomUUID().toString(), label, gridSize, cells.toList())
+            store(saved.filterNot { it.id == pattern.id } + pattern)
+        },
+        enabled = name.isNotBlank() && cells.isNotEmpty(),
+    ) { Text("Save pattern") }
+    saved.forEach { pattern ->
+        Column {
+            Text("${pattern.name} · ${pattern.gridSize} × ${pattern.gridSize} · ${pattern.cells.size} positions")
+            Row {
+                TextButton(onClick = { onLoad(pattern); name = pattern.name; cursor = IhtxGridCell(0, 0) }) { Text("Load") }
+                TextButton(onClick = { store(saved.filterNot { it.id == pattern.id }) }) { Text("Delete") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PatternGrid(gridSize: Int, cells: List<IhtxGridCell>, cursor: IhtxGridCell) {
+    val colors = MaterialTheme.colorScheme
+    val description = cells.mapIndexed { index, cell -> "Overlay ${index + 1}: row ${cell.row + 1}, column ${cell.column + 1}" }.joinToString("; ")
+    Canvas(Modifier.fillMaxWidth().height(260.dp).semantics { contentDescription = description.ifEmpty { "Empty overlay pattern" } }) {
+        val edge = minOf(size.width, size.height)
+        val cellSize = edge / gridSize
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = colors.onSecondaryContainer.toArgb()
+            textAlign = Paint.Align.CENTER
+            textSize = cellSize * .3f
+        }
+        for (row in 0 until gridSize) for (column in 0 until gridSize) {
+            val cell = IhtxGridCell(row, column)
+            val at = Offset(column * cellSize, row * cellSize)
+            val numbers = cells.withIndex().filter { it.value == cell }.map { it.index + 1 }
+            drawRect(if (numbers.isEmpty()) colors.surfaceVariant else colors.secondaryContainer, at, Size(cellSize, cellSize))
+            drawRect(colors.outline, at, Size(cellSize, cellSize), style = Stroke(1.dp.toPx()))
+            if (cell == cursor) drawRect(colors.primary, at + Offset(3f, 3f), Size(cellSize - 6f, cellSize - 6f), style = Stroke(3.dp.toPx()))
+            if (numbers.isNotEmpty()) {
+                val label = if (numbers.size > 2) "${numbers.first()}…" else numbers.joinToString(",")
+                drawContext.canvas.nativeCanvas.drawText(label, at.x + cellSize / 2, at.y + cellSize * .6f, paint)
+            }
+        }
+    }
+}

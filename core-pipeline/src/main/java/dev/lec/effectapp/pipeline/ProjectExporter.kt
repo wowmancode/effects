@@ -18,10 +18,12 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.IhtxGridCell
+import dev.lec.effectapp.model.IhtxPlan
 import dev.lec.effectapp.model.EffectKeyframe
 import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.OverlayKeyframe
-import dev.lec.effectapp.model.SourceOverride
 import dev.lec.effectapp.model.TimelineSegment
 import java.io.File
 import java.util.UUID
@@ -66,7 +68,7 @@ class ProjectExporter(private val context: Context) {
    b.ihtx?.let { plan ->
     if (b.done < b.projects.size) {
      val previous=b.files[b.done - 1]
-     b.projects[b.done] = plan.nextProject(previous, b.done, audioLeadMs(previous, plan.base.durationMs))
+     b.projects[b.done] = plan.nextProject(Uri.fromFile(previous).toString(), b.done, audioLeadMs(previous, plan.base.durationMs))
     }
    }
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
@@ -128,8 +130,14 @@ class ProjectExporter(private val context: Context) {
   * [veryFast]: every pass is rendered at up to 720p and encoded at a modest bitrate with fewer
   * keyframes, so effects, encoder and disk all have far less to push through per pass.
   */
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true) {
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList()) {
   check(this.callback==null) { "An export is already running" }
+  val planned=runCatching { IhtxPlan(project,exports,presets,overlays,overlayGridSize,overlayPattern) }
+  val plan=planned.getOrNull()
+  if(plan==null) {
+   main.post { callback.onError(ExportException.createForUnexpected(IllegalArgumentException(planned.exceptionOrNull()?.message))) }
+   return
+  }
   videoMimeType=codec.mimeType
   this.veryFast=veryFast
   failedIhtxStatus=null
@@ -138,7 +146,7 @@ class ProjectExporter(private val context: Context) {
   background {
    // Reverse the whole clips first so trimming the start keeps what the preview shows.
    // Fit clips to their files' real lengths first: a start past the end of a file fails the export.
-   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,project)).takeForExport(startMs,lengthMs) }
+   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,plan.firstProject())).takeForExport(startMs,lengthMs) }
    queue.post {
     preparing=false
     if(this.callback!==callback) return@post
@@ -148,21 +156,26 @@ class ProjectExporter(private val context: Context) {
      return@post
     }
     transformer=newTransformer()
-    beginIhtx(base,exports,outputPath,overlays,overlayGridSize,exportAspectRatio)
+    beginIhtx(plan.copy(base=base),outputPath,exportAspectRatio)
     queue.removeCallbacks(progressPoll); queue.post(progressPoll)
    }
   }
  }
- private fun beginIhtx(base: EditProject,exports:Int,outputPath:String,overlays:List<Overlay>,overlayGridSize:Int,exportAspectRatio:Float?) {
-  val passes=exports.coerceAtLeast(1); val total=(overlays.size+1)*passes
+ private fun beginIhtx(plan:IhtxPlan,outputPath:String,exportAspectRatio:Float?) {
+  val base=plan.base; val total=plan.totalExports
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
   val fullSize=outputSizeForAspect(videoSize(base.clips.first().sourceUri),exportAspectRatio)
   val outputSize=if(veryFast) fullSize?.let(::capForVeryFast) else fullSize
-  val plan=IhtxPlan(base,overlays,passes,overlayGridSize.coerceAtLeast(1),outputSize?.let { it.width.toFloat() / it.height.toFloat() },outputSize)
-  batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
+  batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan,outputSize=outputSize,overlayAspectRatio=outputSize?.let { it.width.toFloat()/it.height.toFloat() }); startStage(requireNotNull(batch),0)
  }
- fun ihtxStatus():IhtxStatus? { val b=batch ?: return null; return if(b.concat) IhtxStatus(b.projects.size,b.projects.size,true) else IhtxStatus(b.done+1,b.projects.size,false) }
+ fun ihtxStatus():IhtxStatus? {
+  val b=batch ?: return null
+  val done=b.done
+  if(b.concat || done>=b.projects.size) return IhtxStatus(b.projects.size,b.projects.size,true)
+  val plan=b.ihtx
+  return IhtxStatus(done+1,b.projects.size,false,plan?.presetForPass(done)?.name,plan?.let { done%it.exportsPerPreset+1 },plan?.exportsPerPreset)
+ }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
  /** Latest progress (0..100), sampled on the export thread; null when not known. */
  fun progress():Int? = lastProgress
@@ -190,7 +203,7 @@ class ProjectExporter(private val context: Context) {
   } else startTransformer(b,index)
  }
  private fun background(block:()->Unit) { Thread(block,"export-prepare").start() }
- private fun startTransformer(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.ihtx?.outputSize,outputPresentationSize=b.ihtx?.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
+ private fun startTransformer(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.outputSize,outputPresentationSize=b.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
  /**
   * The priming silence (ms, 0..250) an AAC encoder put in front of a pass's sound when the device
   * doesn't report it for removal: how much longer the sound track is than the length the pass was
@@ -297,8 +310,8 @@ class ProjectExporter(private val context: Context) {
    .setTransmuxAudio(false)
    .build()
  }
- data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
- private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0)
+ data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean,val presetName:String?=null,val exportInPreset:Int?=null,val exportsPerPreset:Int?=null)
+ private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0,val outputSize:Size?=null,val overlayAspectRatio:Float?=null)
  private fun EditProject.takeForExport(start:Long,length:Long):EditProject {
   // Start inside the project (at least the last millisecond) and keep the length within what's left.
   var skip=start.coerceIn(0,(durationMs-1).coerceAtLeast(0))
@@ -345,29 +358,6 @@ class ProjectExporter(private val context: Context) {
    // An overlay video already playing at the cut continues from where it was.
    sourceOffsetMs=sourceOffsetMs+((cut-startMs).coerceAtLeast(0)*playbackSpeed.toDouble()).roundToLong(),
   )
- }
- private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?,val outputSize:Size?) {
-  private companion object { const val GRID_COVERAGE = 1.02f }
-  fun mutesBaseAudio(index:Int):Boolean = index>0 && index%passes==0
-  /**
-   * The next pass: the previous pass's file as one clip, with the first clip's effects again.
-   * [audioLeadMs] is the silence the audio encoder put in front of that file's sound; the next
-   * pass reads the sound from just after it, so picture and sound stay together however many
-   * passes are stacked (otherwise every pass pushes the sound a little later).
-   */
-  fun nextProject(previous:File,index:Int,audioLeadMs:Long = 0):EditProject {
-   val stage=index/passes
-   val template=base.clips.first()
-   val uri=Uri.fromFile(previous).toString()
-   val audio=if(audioLeadMs>0 && !template.audioSegments.any { it.enabled && it.effectId=="reverse_audio" }) SourceOverride(uri,audioLeadMs) else null
-   val first=template.copy(sourceUri=uri,trimStartMs=0,trimEndMs=base.durationMs,speed=1f,overlays=emptyList(),videoOverride=null,audioOverride=audio)
-   val project=base.copy(clips=listOf(first))
-   if(index%passes!=0 || stage==0) return project
-   val overlay=overlays[stage-1]
-   val column=(stage-1)%gridSize; val row=(stage-1)/gridSize
-   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=GRID_COVERAGE/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
-   return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
-  }
  }
 
  private companion object {

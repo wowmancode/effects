@@ -44,6 +44,9 @@ import dev.lec.effectapp.effects.CarrierAudioStore
 import dev.lec.effectapp.pipeline.ExportCodec
 import dev.lec.effectapp.pipeline.ProjectExporter
 import dev.lec.effectapp.model.Overlay
+import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.IhtxPatternKind
+import dev.lec.effectapp.model.IhtxPlan
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -80,13 +83,18 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var progress by remember { mutableIntStateOf(0) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportsText by remember { mutableStateOf("1") }
+    var multiEffect by remember { mutableStateOf(false) }
+    var exportsPerPresetText by remember { mutableStateOf("10") }
+    var presetQueue by remember { mutableStateOf<List<EffectPreset>>(emptyList()) }
     var startText by remember { mutableStateOf("0") }
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }
     var overlayGridSizeText by remember { mutableStateOf("2") }
+    var overlayPattern by remember { mutableStateOf(IhtxPatternKind.ROWS.cells(2)) }
     var exportAspectRatio by remember { mutableStateOf(ExportAspectRatio.ORIGINAL) }
-    val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
+    val activeAudioSegments = if (multiEffect) presetQueue.flatMap { it.audioSegments } else project.clips.flatMap { it.audioSegments }
+    val carrierUris = activeAudioSegments.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
     var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
     var carrierError by remember(carrierUris) { mutableStateOf<String?>(null) }
@@ -120,6 +128,18 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         }
     }
 
+    val planned = remember(project, multiEffect, presetQueue, exportsText, exportsPerPresetText, ihtxOverlays, overlayGridSizeText, overlayPattern) {
+        runCatching {
+            require(!multiEffect || presetQueue.isNotEmpty()) { "Add at least one preset to the queue." }
+            require(ihtxOverlays.isEmpty() || overlayPattern.isNotEmpty()) { "Record an overlay position or choose a pattern." }
+            val count = (if (multiEffect) exportsPerPresetText else exportsText).toIntOrNull()
+            require(count != null && count in 1..1_000) { "Exports must be between 1 and 1000." }
+            val grid = overlayGridSizeText.toIntOrNull()
+            require(grid != null && grid in 1..16) { "Grid size must be between 1 and 16." }
+            IhtxPlan(project, count, if (multiEffect) presetQueue else emptyList(), ihtxOverlays, grid, overlayPattern)
+        }
+    }
+
     DisposableEffect(exporter) { onDispose { exporter.release() } }
     LaunchedEffect(carrierUris) {
         carriersReady = carrierUris.isEmpty()
@@ -134,7 +154,10 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         while (state == ExportState.RUNNING) {
             exporter.progress()?.let { progress = it }
             exportStatus = exporter.ihtxStatus()?.let { status ->
-                if (status.concatenating) "Concatenating…" else "Export " + status.current + "/" + status.total
+                if (status.concatenating) "Concatenating…" else {
+                    "Export ${status.current}/${status.total}" +
+                        (status.presetName?.let { " · $it ${status.exportInPreset}/${status.exportsPerPreset}" } ?: "")
+                }
             }
             if (exporter.preparing()) exportStatus = listOfNotNull(exportStatus, "Reversing clips…").joinToString(" · ")
             delay(200)
@@ -156,13 +179,29 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
             when (state) {
                 ExportState.IDLE -> {
                     Text("IHTX · cumulative effect passes, then concatenate")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { multiEffect = false }, modifier = Modifier.weight(1f)) {
+                            Text(if (!multiEffect) "✓ Standard IHTX" else "Standard IHTX")
+                        }
+                        OutlinedButton(onClick = { multiEffect = true }, modifier = Modifier.weight(1f)) {
+                            Text(if (multiEffect) "✓ Multi-effect IHTX" else "Multi-effect IHTX")
+                        }
+                    }
                     OutlinedTextField(
-                        value = exportsText,
-                        onValueChange = { value -> if (value.all(Char::isDigit)) exportsText = value },
-                        label = { Text("Exports") },
+                        value = if (multiEffect) exportsPerPresetText else exportsText,
+                        onValueChange = { value ->
+                            if (value.all(Char::isDigit)) {
+                                if (multiEffect) exportsPerPresetText = value else exportsText = value
+                            }
+                        },
+                        label = { Text(if (multiEffect) "Exports per preset" else "Exports") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (multiEffect) {
+                        IhtxPresetQueue(project.presets, presetQueue) { presetQueue = it }
+                        Text("The next overlay is added between preset blocks, just like standard IHTX. The preset queue repeats if more overlays remain.")
+                    }
                     OutlinedTextField(
                         value = startText,
                         onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) startText = value },
@@ -178,7 +217,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("Export " + project.clips.size + " clips with hard cuts and all enabled effects.")
+                    Text(if (multiEffect) "Export ${project.clips.size} clips using the queued presets." else "Export ${project.clips.size} clips with hard cuts and all enabled effects.")
                     Text("Aspect ratio")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         listOf(ExportAspectRatio.ORIGINAL, ExportAspectRatio.LANDSCAPE, ExportAspectRatio.PORTRAIT).forEach { option ->
@@ -217,22 +256,47 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     Text("IHTX animated overlays")
                     OutlinedTextField(
                         value = overlayGridSizeText,
-                        onValueChange = { value -> if (value.all(Char::isDigit)) overlayGridSizeText = value },
+                        onValueChange = { value ->
+                            if (value.all(Char::isDigit)) {
+                                val old = overlayGridSizeText.toIntOrNull()
+                                overlayGridSizeText = value
+                                val size = value.toIntOrNull()
+                                if (size != null && size in 1..16 && size != old) overlayPattern = IhtxPatternKind.ROWS.cells(size)
+                            }
+                        },
                         label = { Text("Overlay grid size") },
-                        supportingText = { Text("Tiles per row and column (the original script’s scale divisor).") },
+                        supportingText = { Text("1–16 tiles per row and column. Changing the size starts a new row-order pattern.") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    IhtxPatternEditor(
+                        gridSize = overlayGridSizeText.toIntOrNull()?.takeIf { it in 1..16 } ?: 2,
+                        cells = overlayPattern,
+                        onChange = { overlayPattern = it },
+                        onLoad = { pattern -> overlayGridSizeText = pattern.gridSize.toString(); overlayPattern = pattern.cells },
                     )
                     OutlinedButton(onClick = { ihtxOverlayPicker.launch(arrayOf("video/*")) }, modifier = Modifier.fillMaxWidth()) {
                         Text("+ Overlay videos")
                     }
                     if (ihtxOverlays.isEmpty()) Text("No IHTX overlays selected.")
-                    ihtxOverlays.forEach { overlay ->
+                    ihtxOverlays.forEachIndexed { index, overlay ->
                         Column(Modifier.fillMaxWidth()) {
-                            Text(overlay.displayName)
-                            TextButton(onClick = { ihtxOverlays = ihtxOverlays.filterNot { it.id == overlay.id } }) { Text("Delete") }
+                            Text("${index + 1}. ${overlay.displayName}")
+                            overlayPattern.takeIf { it.isNotEmpty() }?.let { cells ->
+                                val cell = cells[index % cells.size]
+                                Text("Row ${cell.row + 1}, column ${cell.column + 1}")
+                            }
+                            Row {
+                                TextButton(onClick = { ihtxOverlays = ihtxOverlays.movedIhtxItem(index, -1) }, enabled = index > 0) { Text("Up") }
+                                TextButton(onClick = { ihtxOverlays = ihtxOverlays.movedIhtxItem(index, 1) }, enabled = index < ihtxOverlays.lastIndex) { Text("Down") }
+                                TextButton(onClick = { ihtxOverlays = ihtxOverlays.filterNot { it.id == overlay.id } }) { Text("Delete") }
+                            }
                         }
                     }
+                    planned.getOrNull()?.let { plan ->
+                        Text("${plan.totalExports} exports total · ${plan.exportsPerStage} before each new overlay")
+                    }
+                    planned.exceptionOrNull()?.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
                     carrierError?.let { Text("Carrier audio error: $it") }
                     if (missingMedia.isNotEmpty()) {
@@ -245,17 +309,16 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     }
                     Button(
                         onClick = {
+                            val plan = requireNotNull(planned.getOrNull())
                             output.delete()
                             state = ExportState.RUNNING
                             progress = 0
                             exportStatus = null
-                            val exports = exportsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
                             val lengthMs = ((lengthText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(1)
                             val startMs = ((startText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(0)
-                            val overlayGridSize = overlayGridSizeText.toIntOrNull()?.coerceAtLeast(1) ?: 2
                             exporter.startIhtx(
                                 project,
-                                exports,
+                                plan.exportsPerPreset,
                                 lengthMs,
                                 output.absolutePath,
                                 object : ProjectExporter.Callback {
@@ -272,15 +335,17 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                         state = ExportState.ERROR
                                     }
                                 },
-                                overlays = ihtxOverlays,
-                                overlayGridSize = overlayGridSize,
+                                overlays = plan.overlays,
+                                overlayGridSize = plan.gridSize,
+                                presets = plan.presets,
+                                overlayPattern = plan.pattern,
                                 exportAspectRatio = exportAspectRatio.ratio,
                                 startMs = startMs,
                                 codec = codec,
                                 veryFast = veryFast,
                             )
                         },
-                        enabled = project.clips.isNotEmpty() && carriersReady && missingMedia.isEmpty(),
+                        enabled = planned.isSuccess && carriersReady && missingMedia.isEmpty(),
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {
@@ -329,3 +394,4 @@ private fun causeMessages(error: Throwable): List<String> {
     }
     return messages
 }
+
