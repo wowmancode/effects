@@ -144,6 +144,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     fun relinkMediaNow(oldUri: String, newUri: String, displayName: String, durationMs: Long) {
         recordUndo()
         _project.value = _project.value.relinkSource(oldUri, newUri, displayName, durationMs)
+        persistPresets()
         refreshMissingMedia()
     }
 
@@ -460,12 +461,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
 
     fun savePreset(name: String, clipId: String, thumbnailPath: String?) {
         val clip = _project.value.clips.find { it.id == clipId } ?: return
-        val preset = EffectPreset(
+        val preset = clip.toPreset(
             id = UUID.randomUUID().toString(),
             name = name.trim().ifEmpty { "Untitled preset" },
             thumbnailPath = thumbnailPath,
-            effectSegments = clip.effectSegments.map { it.copy(id = "") },
-            audioSegments = clip.audioSegments.map { it.copy(id = "") },
         )
         _project.value = _project.value.copy(presets = deduplicatePresets(_project.value.presets + preset))
         persistPresets()
@@ -481,10 +480,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
             it.copy(id = UUID.randomUUID().toString()).forWholeClip(clip.durationMs)
         }
         updateClip(clipId) {
-            copy(
+            val updated = copy(
                 effectSegments = effectSegments + visual,
                 audioSegments = audioSegments + audio,
             )
+            preset.replacementAudio?.applyTo(updated, UUID.randomUUID().toString()) ?: updated
         }
         val selected = visual.lastOrNull() ?: audio.lastOrNull()
         if (selected != null) {
@@ -493,6 +493,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
                 segmentId = selected.id,
                 category = if (selected in visual) EffectCategory.EFFECTS else EffectCategory.AUDIO,
             )
+        } else if (preset.replacementAudio != null) {
+            _selection.value = Selection(clipId, null, EffectCategory.AUDIO)
+        }
+        if (preset.replacementAudio != null) {
+            refreshMissingMedia()
+            if (_missingMedia.value.isNotEmpty()) _missingPrompt.value++
         }
     }
 
