@@ -125,6 +125,7 @@ fun EditorScreen(
     var pendingSegment by remember { mutableStateOf<PendingSegment?>(null) }
     var pendingPresetExportId by remember { mutableStateOf<String?>(null) }
     var pendingReplaceClipId by remember { mutableStateOf<String?>(null) }
+    var pendingReplaceAudioClipId by remember { mutableStateOf<String?>(null) }
     var pendingOverlayClipId by remember { mutableStateOf<String?>(null) }
     val overlayResolver = remember { OverlayBitmapCache.resolver(context.applicationContext) }
 
@@ -237,6 +238,33 @@ fun EditorScreen(
             }
             val metadata = editorMetadata(context, uri)
             viewModel.replaceClipMedia(clipId, uri.toString(), metadata.first, metadata.second)
+        }
+    }
+    val replaceAudio = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val clipId = pendingReplaceAudioClipId
+        pendingReplaceAudioClipId = null
+        if (uri != null && clipId != null) {
+            scope.launch {
+                val metadata = withContext(Dispatchers.IO) {
+                    runCatching {
+                        MediaMetadataRetriever().use { retriever ->
+                            retriever.setDataSource(context, uri)
+                            require(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes")
+                            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+                            require(duration != null && duration > 0)
+                            editorDisplayName(context, uri) to duration
+                        }
+                    }.getOrNull()
+                }
+                if (metadata == null) {
+                    android.widget.Toast.makeText(context, "Could not open this audio file.", android.widget.Toast.LENGTH_LONG).show()
+                } else {
+                    runCatching {
+                        context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    viewModel.replaceClipAudio(clipId, uri.toString(), metadata.first, metadata.second)
+                }
+            }
         }
     }
     val addImageOverlay = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -411,6 +439,7 @@ fun EditorScreen(
             clip.trimStartMs,
             clip.trimEndMs,
             clip.speed,
+            clip.hasReplacementAudio,
             clip.effectSegments.any { it.enabled && it.effectId == "reverse_video" },
             clip.audioSegments.any { it.enabled && it.effectId == "reverse_audio" },
         )
@@ -473,6 +502,9 @@ fun EditorScreen(
     val previewClip = project.clips.getOrNull(currentClipIndex)
     LaunchedEffect(previewAudioProcessor, previewClip?.audioSegments) {
         previewAudioProcessor.setSegments(previewClip?.audioSegments.orEmpty())
+    }
+    LaunchedEffect(player, previewClip?.hasReplacementAudio) {
+        player.volume = if (previewClip?.hasReplacementAudio == true) 0f else 1f
     }
     val previewCarrierUris = previewClip?.audioSegments.orEmpty()
         .filter { it.effectId == "vocoder_custom" }
@@ -648,6 +680,10 @@ fun EditorScreen(
             onReplaceMedia = { clipId ->
                 pendingReplaceClipId = clipId
                 replaceMedia.launch(arrayOf("video/*"))
+            },
+            onReplaceAudio = { clipId ->
+                pendingReplaceAudioClipId = clipId
+                replaceAudio.launch(arrayOf("audio/*"))
             },
             onAddOverlayEffect = { clipId, overlayId, category ->
                 pendingSegment = PendingSegment(clipId, 0, category, overlayId)

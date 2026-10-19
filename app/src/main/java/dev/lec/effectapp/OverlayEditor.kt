@@ -48,6 +48,7 @@ internal fun OverlayEditor(
     if (clip.overlays.isEmpty()) Text("No overlays on this clip yet.")
     val maxSeconds = (clip.durationMs / 1_000f).coerceAtLeast(0.1f)
     clip.overlays.forEachIndexed { index, overlay ->
+        if (overlay.replacesClipAudio) return@forEachIndexed
         var editingKeyframeTime by remember(overlay.id) { mutableStateOf<Long?>(null) }
         val editingKeyframe = editingKeyframeTime?.let { time -> overlay.keyframes.find { it.timeMs == time } }
         val displayed = editingKeyframe?.values ?: OverlayValues(overlay.alpha, overlay.scale, overlay.offsetX, overlay.offsetY)
@@ -225,3 +226,4 @@ private fun OverlayEffectControls(viewModel: EditorViewModel, clipId: String, ov
         else -> EffectParameterControls(effect, segment.params, updateParams)
     }
 }
+

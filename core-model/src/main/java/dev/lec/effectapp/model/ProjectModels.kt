@@ -87,6 +87,26 @@ data class Clip(
     /** End of the source range the clip reads (equals trimEndMs at normal speed). */
     val sourceEndMs: Long get() = sourceMsAt(durationMs)
 
+    val hasReplacementAudio: Boolean get() = overlays.any { it.replacesClipAudio }
+
+    /** Replacement sound uses the clip's audio stack and the existing looping audio lane. */
+    fun playbackOverlays(): List<Overlay> = overlays.map { overlay ->
+        if (overlay.replacesClipAudio) overlay.copy(audioSegments = audioSegments) else overlay
+    }
+
+    fun withReplacedAudio(id: String, uri: String, name: String, sourceDurationMs: Long): Clip = copy(
+        overlays = overlays.filterNot { it.replacesClipAudio } + Overlay(
+            id = id,
+            sourceUri = uri,
+            displayName = name,
+            sourceDurationMs = sourceDurationMs,
+            audioOnly = true,
+            includeAudio = true,
+            endMs = durationMs,
+            replacesClipAudio = true,
+        ),
+    )
+
     fun withReplacedMedia(sourceUri: String, displayName: String, durationMs: Long): Clip {
         val replacementDuration = durationMs.coerceAtLeast(1)
         return copy(
@@ -98,6 +118,7 @@ data class Clip(
             speed = 1f,
             effectSegments = effectSegments.map { it.forWholeClip(replacementDuration) },
             audioSegments = audioSegments.map { it.forWholeClip(replacementDuration) },
+            overlays = overlays.map { if (it.replacesClipAudio) it.copy(startMs = 0, endMs = replacementDuration) else it },
         )
     }
 }
@@ -136,6 +157,8 @@ data class Overlay(
     val speed: Float = 1f,
     /** Sound only: plays the source's audio and draws nothing. */
     val audioOnly: Boolean = false,
+    /** Soundtrack selected with Replace audio; suppresses the clip's original sound. */
+    val replacesClipAudio: Boolean = false,
     /**
      * Overlays sharing a lane (>= 0) never overlap in time and play through one shared player in
      * export; lane 0 is drawn on top of lane 1 and so on. -1 = the overlay gets a lane of its own.

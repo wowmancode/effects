@@ -119,6 +119,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
     }
 
+    fun replaceClipAudio(id: String, uri: String, displayName: String, durationMs: Long) {
+        if (durationMs <= 0 || _project.value.clips.none { it.id == id }) return
+        updateClip(id) { withReplacedAudio(UUID.randomUUID().toString(), uri, displayName, durationMs) }
+    }
+
+    fun restoreClipAudio(id: String) {
+        updateClip(id) { copy(overlays = overlays.filterNot { it.replacesClipAudio }) }
+    }
+
     /**
      * Online mode gets first look at a relink: media shared in a room is identified by its
      * content, so the picked file has to be checked before it's used. Returns true when
