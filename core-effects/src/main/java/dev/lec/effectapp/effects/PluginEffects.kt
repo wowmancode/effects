@@ -35,7 +35,7 @@ const val PLUGIN_LANGUAGE_GLSL = "glsl"
 
 class VideoPluginEffect : LecEffect {
     override val id = "plugin_video"
-    override val displayName = "Plug-In · video (C-style)"
+    override val displayName = "Plug-In · video"
     override val category = EffectCategory.EFFECTS
     override val params = pluginControlParams()
     @OptIn(UnstableApi::class)
@@ -45,7 +45,7 @@ class VideoPluginEffect : LecEffect {
 
 class AudioPluginEffect : LecEffect {
     override val id = "plugin_audio"
-    override val displayName = "Plug-In · audio (C-style)"
+    override val displayName = "Plug-In · audio"
     override val category = EffectCategory.AUDIO
     override val params = pluginControlParams()
     @OptIn(UnstableApi::class)

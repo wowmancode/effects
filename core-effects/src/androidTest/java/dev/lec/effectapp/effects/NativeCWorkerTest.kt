@@ -60,6 +60,21 @@ class NativeCWorkerTest {
         assertTrue(NativeCClient.approved(code, false))
     }
 
+    @Test fun runawayCodeTimesOutWithoutStoppingTheEditor() {
+        val loop = "void lec_audio(float *p, int n, int c, int r, double t, const float v[8], void *s) { for (;;) {} }"
+        NativeCClient.compileAndApprove(loop, true)
+        NativeCClient.open(loop, true, 4).use { session ->
+            try { session.process(1,1,48000,0.0,FloatArray(8)); fail("Runaway code did not time out") }
+            catch (expected: IllegalStateException) { assertTrue(expected.message.orEmpty().contains("timed out")) }
+        }
+        val recovered = "void lec_audio(float *p, int n, int c, int r, double t, const float v[8], void *s) { p[0] = 0.75f; }"
+        NativeCClient.compileAndApprove(recovered, true)
+        NativeCClient.open(recovered, true, 4).use { session ->
+            session.process(1,1,48000,0.0,FloatArray(8))
+            assertEquals(.75f, session.buffer.getFloat(0), .0001f)
+        }
+    }
+
     @Test fun compileErrorsNeverGrantApproval() {
         val bad = "void lec_audio( { /* Android compiler error */"
         try { NativeCClient.compileAndApprove(bad, true); fail("Invalid C compiled") }

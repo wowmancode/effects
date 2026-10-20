@@ -52,11 +52,24 @@ jobs:
         run: |
           for apk in app/build/outputs/apk/release/*.apk; do
             echo "$(basename "$apk"): $(stat -c%s "$apk") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+            unzip -l "$apk" | awk '/liblec_native_c.so/ {print "  Native C compiler: " $1 " bytes (uncompressed)"}' | tee -a "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: effect-app-release
-          path: app/build/outputs/apk/release/*.apk
+          name: effect-app-arm64-v8a-release
+          path: app/build/outputs/apk/release/app-arm64-v8a-release-unsigned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: effect-app-armeabi-v7a-release
+          path: app/build/outputs/apk/release/app-armeabi-v7a-release-unsigned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: effect-app-x86-release
+          path: app/build/outputs/apk/release/app-x86-release-unsigned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: effect-app-x86_64-release
+          path: app/build/outputs/apk/release/app-x86_64-release-unsigned.apk
       - name: Test portable split-pitch C processor
         run: |
           for t in split_pitch_modes expressfx_drums; do

@@ -85,19 +85,8 @@ internal fun PluginSourceEditor(
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { selectedLanguage = PLUGIN_LANGUAGE_C_STYLE; draft = if (audio) AUDIO_CHORUS_TEMPLATE else VIDEO_WARP_TEMPLATE }, enabled = !compiling) { Text("C-style") }
+            if (!audio) OutlinedButton(onClick = { selectedLanguage = PLUGIN_LANGUAGE_GLSL; draft = GLSL_WARP_TEMPLATE }, enabled = !compiling) { Text("GLSL") }
             OutlinedButton(onClick = { selectedLanguage = NATIVE_C_PLUGIN_LANGUAGE; draft = if (audio) NATIVE_AUDIO_TEMPLATE else NATIVE_VIDEO_TEMPLATE }, enabled = !online && !compiling) { Text("Native C") }
-        }
-        if (!audio && !native) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { selectedLanguage = PLUGIN_LANGUAGE_C_STYLE; draft = VIDEO_WARP_TEMPLATE },
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (selectedLanguage == PLUGIN_LANGUAGE_C_STYLE) "✓ C-style" else "C-style") }
-                OutlinedButton(
-                    onClick = { selectedLanguage = PLUGIN_LANGUAGE_GLSL; draft = GLSL_WARP_TEMPLATE },
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (selectedLanguage == PLUGIN_LANGUAGE_GLSL) "✓ Full GLSL" else "Full GLSL") }
-            }
         }
         if (native) {
             Text(NativePluginPolicy.WARNING, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium)

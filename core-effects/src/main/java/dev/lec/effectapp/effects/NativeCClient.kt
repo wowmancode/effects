@@ -50,6 +50,7 @@ object NativeCClient {
     fun projectError(project: EditProject): String? = NativePluginPolicy.segments(project).firstNotNullOfOrNull { segment ->
         when {
             onlineBlocked -> "Native C plug-ins are offline-only. Leave the online room before exporting them."
+            !segment.enabled -> null
             !approved(segment.stringParams["source"].orEmpty(), segment.effectId == "plugin_audio") ->
                 "A native C plug-in needs local approval. Open its source, review the warning, then compile and apply it."
             else -> null
