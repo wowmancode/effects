@@ -202,6 +202,7 @@ internal class OnlineSession(
     // ---------------------------------------------------------------- lifecycle
 
     fun start() {
+        editor.setOnlineMode(this, true)
         scope.launch { for (event in events) if (!ended) runCatching { handle(event) }.onFailure { failSafely(it) } }
         if (start is RoomStart.Create) {
             room = RoomState(
@@ -329,6 +330,7 @@ internal class OnlineSession(
     fun shutdown() {
         ended = true
         relay?.close()
+        editor.setOnlineMode(this, false)
         media.clear()
     }
 
@@ -345,6 +347,7 @@ internal class OnlineSession(
         scope.launch {
             delay(300)
             client?.close()
+            editor.setOnlineMode(this@OnlineSession, false)
             media.clear()
             scope.cancel()
         }
@@ -1532,3 +1535,4 @@ internal class OnlineSession(
         private val CHAT_INVISIBLE = Regex("[\\p{Cf}\\p{Co}\\p{Cn}\\u0000-\\u0009\\u000B-\\u001F\\u007F-\\u009F]")
     }
 }
+

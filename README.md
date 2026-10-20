@@ -32,7 +32,22 @@ code.
   a guest's phone until the guest allows them.
 - **Text chat**, and Leave / End room. Everyone keeps their own copy of the edit afterwards.
 
-Online rooms need the app's `INTERNET` permission, which is only used to reach the relay server.
+Online rooms need the app's `INTERNET` permission, used to reach the relay server. Trusted native C plug-ins also run with this permission.
+
+## Trusted native C plug-ins
+
+Audio and video plug-in editors offer an offline **Native C** mode. Paste C source, review
+**Only put in code you trust!**, select the trust checkbox, then **Compile and apply**.
+TinyCC compiles on the phone; no compiler download, Clang toolchain, or full SDK is bundled.
+This code runs with the app’s granted Android permissions (files and network), without root.
+A separate private worker contains crashes and has a timeout; it is not a security sandbox.
+Imported projects, presets and plug-ins never carry approval: each source and audio/video kind
+must be approved locally. Native plug-ins are rejected from online messages and prevent joining
+or creating rooms until removed. Entering a room stops the native worker.
+
+See [the C API and build notes](core-effects/src/main/c/NATIVE_PLUGINS.md). Release APKs are
+shrunk and split by CPU architecture; install the APK matching the device (usually arm64-v8a).
+The app compiles one target architecture at runtime and does not package other targets in that APK.
 
 ## Project status
 
@@ -43,7 +58,8 @@ This is a personal hobby project maintained on a best-effort basis. It comes wit
 Builds run on GitHub Actions. The repository intentionally does not commit the binary Gradle wrapper JAR. Locally, use Gradle 8.11.1 and Android SDK 36:
 
 ```text
-gradle assembleDebug lint test
+git submodule update --init --recursive
+gradle assembleDebug assembleRelease lint test
 ```
 
 ## License

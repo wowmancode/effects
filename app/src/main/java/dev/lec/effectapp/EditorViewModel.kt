@@ -48,7 +48,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     private val _missingPrompt = MutableStateFlow(0)
     val missingPrompt: StateFlow<Int> = _missingPrompt.asStateFlow()
 
+    private val _onlineActive = MutableStateFlow(false)
+    val onlineActive = _onlineActive.asStateFlow()
+    private var onlineOwner: Any? = null
+
+    fun setOnlineMode(owner: Any, active: Boolean) {
+        if (!active && onlineOwner !== owner) return
+        onlineOwner = if (active) owner else null
+        dev.lec.effectapp.effects.NativeCClient.setOnlineMode(active)
+        _onlineActive.value = active
+    }
+
     init {
+        dev.lec.effectapp.effects.NativeCClient.initialize(application)
         val savedPresets = runCatching {
             if (presetFile.exists()) PresetLibraryJson.decode(presetFile.readText()) else emptyList()
         }.getOrDefault(emptyList())

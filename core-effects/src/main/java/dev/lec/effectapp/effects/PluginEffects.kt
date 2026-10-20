@@ -1,5 +1,7 @@
 package dev.lec.effectapp.effects
 
+import dev.lec.effectapp.model.NATIVE_C_PLUGIN_LANGUAGE
+import dev.lec.effectapp.model.NativePluginPolicy
 import android.content.Context
 import android.opengl.GLES20
 import androidx.annotation.OptIn
@@ -59,6 +61,7 @@ fun validatePluginSource(
     audio: Boolean,
     language: String = PLUGIN_LANGUAGE_C_STYLE,
 ): String? = when (language) {
+    NATIVE_C_PLUGIN_LANGUAGE -> NativePluginPolicy.validateSource(source, audio)
     PLUGIN_LANGUAGE_C_STYLE -> compilePlugin(source, audio).exceptionOrNull()?.message
     PLUGIN_LANGUAGE_GLSL -> validateGlslFragment(source, audio)
     else -> "Unknown plug-in language."
@@ -70,6 +73,7 @@ fun videoPluginEffect(
     controls: Map<String, Float> = emptyMap(),
     language: String = PLUGIN_LANGUAGE_C_STYLE,
 ): Effect {
+    if (language == NATIVE_C_PLUGIN_LANGUAGE) return NativeCVideoEffect(source, controls)
     if (language == PLUGIN_LANGUAGE_GLSL && validateGlslFragment(source, audio = false) == null) {
         return RawGlslVideoGlEffect(source, controls)
     }

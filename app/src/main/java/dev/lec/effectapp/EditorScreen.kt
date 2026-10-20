@@ -517,9 +517,11 @@ fun EditorScreen(
     val previewClipStartMs = project.clips.take(currentClipIndex).sumOf { it.durationMs }
     val previewLocalMs = (playerPositionMs - previewClipStartMs).coerceAtLeast(0)
     // Only the stack's shape needs a pipeline rebuild; parameter values flow in live.
+    val nativeApproval by dev.lec.effectapp.effects.NativeCClient.approvalRevision.collectAsState()
     val previewStructureKey = previewClip?.let { clip ->
         listOf<Any?>(
             clip.id,
+            nativeApproval,
             clip.effectSegments.filter { it.enabled }.map { it.id to it.effectId },
         )
     }

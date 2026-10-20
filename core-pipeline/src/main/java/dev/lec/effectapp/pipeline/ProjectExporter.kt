@@ -105,6 +105,7 @@ class ProjectExporter(private val context: Context) {
   .addListener(transformerListener)
   .build()
  fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264) {
+  if (rejectNative(project, callback)) return
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   videoMimeType=codec.mimeType
   preparing=true
@@ -132,6 +133,10 @@ class ProjectExporter(private val context: Context) {
   */
  fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList()) {
   check(this.callback==null) { "An export is already running" }
+  val allSources = project.copy(clips = project.clips + presets.map { preset ->
+   dev.lec.effectapp.model.Clip(id="native-check", sourceUri="", displayName=preset.name, trimEndMs=1, effectSegments=preset.effectSegments, audioSegments=preset.audioSegments)
+  } + dev.lec.effectapp.model.Clip(id="native-check-overlays", sourceUri="", displayName="IHTX overlays", trimEndMs=1, overlays=overlays))
+  if (rejectNative(allSources, callback)) return
   val planned=runCatching { IhtxPlan(project,exports,presets,overlays,overlayGridSize,overlayPattern) }
   val plan=planned.getOrNull()
   if(plan==null) {
@@ -160,6 +165,11 @@ class ProjectExporter(private val context: Context) {
     queue.removeCallbacks(progressPoll); queue.post(progressPoll)
    }
   }
+ }
+ private fun rejectNative(project: EditProject, callback: Callback): Boolean {
+  val error = dev.lec.effectapp.effects.NativeCClient.projectError(project) ?: return false
+  main.post { callback.onError(ExportException.createForUnexpected(IllegalStateException(error))) }
+  return true
  }
  private fun beginIhtx(plan:IhtxPlan,outputPath:String,exportAspectRatio:Float?) {
   val base=plan.base; val total=plan.totalExports

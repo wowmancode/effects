@@ -195,7 +195,9 @@ private fun OverlayEffectControls(viewModel: EditorViewModel, clipId: String, ov
 
     when (effect.id) {
         "plugin_video", "plugin_audio" -> {
+            val online by viewModel.onlineActive.collectAsState()
             PluginSourceEditor(
+                online = online,
                 source = segment.stringParams["source"].orEmpty(),
                 audio = effect.category == EffectCategory.AUDIO,
                 language = segment.stringParams["language"] ?: PLUGIN_LANGUAGE_C_STYLE,

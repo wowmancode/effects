@@ -6,6 +6,7 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import dev.lec.effectapp.model.TimelineSegment
+import dev.lec.effectapp.model.NativePluginPolicy
 import java.nio.ByteBuffer
 import kotlin.math.PI
 import kotlin.math.abs
@@ -51,6 +52,8 @@ fun audioProcessorFor(segment: TimelineSegment, timeOffsetMs: Long = 0): AudioPr
 
 internal interface AudioDspState {
     fun process(input: Int, timeMs: Long, channel: Int): Int
+    fun processBuffer(samples: IntArray, timeMs: Long, sampleRate: Int, channels: Int): Boolean = false
+    fun close() {}
 }
 
 internal fun createAudioDspState(
@@ -70,7 +73,7 @@ internal fun createAudioDspState(
     "filter" -> FilterDspState(segment, sampleRate, channels)
     "auto_pan" -> AutoPanDspState(segment, channels)
     "vocoder_lab" -> VocoderLabDspState(segment, sampleRate, channels)
-    "plugin_audio" -> AudioPluginDspState(segment, sampleRate, channels)
+    "plugin_audio" -> if (NativePluginPolicy.isNative(segment)) NativeCAudioState(segment) else AudioPluginDspState(segment, sampleRate, channels)
     "pitch_change" -> PitchDspState.single(segment, sampleRate, channels)
     "split_pitch" -> PitchDspState.split(segment, sampleRate, channels)
     "vocoder_square", "vocoder_saw", "vocoder_sine", "vocoder_triangle", "vocoder_custom" ->
@@ -114,12 +117,14 @@ private class SegmentedDspProcessor(
     override fun onReset() {
         SplitPitchNativeBridge.destroy(nativePitchHandle)
         nativePitchHandle = 0L
+        state?.close()
         state = null
         sampleIndex = 0L
     }
 
     private fun configureState(sampleRate: Int, channels: Int) {
         SplitPitchNativeBridge.destroy(nativePitchHandle)
+        state?.close()
         val resolved = segment.copy(params = segment.paramsAt(timeOffsetMs), keyframes = emptyList())
         nativePitchHandle = if (resolved.effectId == "split_pitch") {
             SplitPitchNativeBridge.create(sampleRate, channels, resolved.params)
@@ -131,6 +136,15 @@ private class SegmentedDspProcessor(
     override fun queueInput(inputBuffer: ByteBuffer) {
         val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
+        if (state is NativeCAudioState) {
+            val samples = IntArray(inputBuffer.remaining() / 2) { inputBuffer.short.toInt() }
+            val timeMs = timeOffsetMs + (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
+            state?.processBuffer(samples, timeMs, inputAudioFormat.sampleRate, channels)
+            samples.forEach { output.putShort(it.coerceToShort()) }
+            sampleIndex += samples.size
+            output.flip()
+            return
+        }
         if (nativePitchHandle != 0L) {
             val inputSamples = ShortArray(inputBuffer.remaining() / 2) { inputBuffer.short }
             val outputSamples = inputSamples.copyOf()
@@ -534,3 +548,4 @@ private fun wrapUnit(value: Float): Float {
 
 private fun Int.coerceToShort(): Short =
     coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+

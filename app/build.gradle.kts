@@ -21,6 +21,22 @@ android {
         buildConfigField("String", "RELAY_HOST", "\"$relayHost\"")
     }
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = false
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -59,3 +75,4 @@ dependencies {
     implementation(libs.okhttp)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+
