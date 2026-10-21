@@ -40,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Export encoding settings: resolution cap (4K to 360p), video bitrate (Mbps, with quick
+  picks), variable or constant bitrate mode, keyframe interval (KEY_I_FRAME_INTERVAL; 0 for
+  all keyframes), max B-frames (Android 10+), AAC audio bitrate and encoder speed (maximum or
+  real time). Anything left on Auto falls back to Very fast's values or the encoder's default.
 - Load opens layered projects from other editors as well as effect-app projects. Each layer
   becomes an overlay that keeps its in-point, speed, crop window and position; sounds become
   sound-only overlays, with pitch shifts. Solid colours, text and noise layers are drawn as

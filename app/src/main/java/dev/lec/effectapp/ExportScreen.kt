@@ -42,6 +42,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.ExportException
 import dev.lec.effectapp.effects.CarrierAudioStore
 import dev.lec.effectapp.pipeline.ExportCodec
+import dev.lec.effectapp.pipeline.ExportEncoderSettings
 import dev.lec.effectapp.pipeline.ProjectExporter
 import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.EffectPreset
@@ -54,6 +55,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private enum class ExportState { IDLE, RUNNING, DONE, ERROR }
+
+/** Output size caps (long edge in px); null keeps the source size. */
+private enum class ExportResolution(val label: String, val longEdge: Int?) {
+    ORIGINAL("Original", null),
+    P2160("4K", 3840),
+    P1080("1080p", 1920),
+    P720("720p", 1280),
+    P480("480p", 854),
+    P360("360p", 640),
+}
+
+private val VIDEO_BITRATE_PICKS_MBPS = listOf("2", "4", "8", "16", "32", "50")
+private val AUDIO_BITRATE_PICKS_KBPS = listOf<Int?>(null, 96, 128, 192, 256, 320)
+private val KEYFRAME_PICKS_SECONDS = listOf("0", "0.5", "1", "2", "5", "10")
 
 private enum class ExportAspectRatio(val label: String, val ratio: Float?) {
     ORIGINAL("Original", null),
@@ -76,6 +91,29 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     }
     var codec by remember { mutableStateOf(ExportCodec.H264) }
     var veryFast by remember { mutableStateOf(true) }
+    var resolution by remember { mutableStateOf(ExportResolution.ORIGINAL) }
+    var videoBitrateText by remember { mutableStateOf("") }
+    var bitrateMode by remember { mutableStateOf(ExportEncoderSettings.BitrateMode.VBR) }
+    var keyframeText by remember { mutableStateOf("") }
+    var bFramesText by remember { mutableStateOf("") }
+    var audioBitrateKbps by remember { mutableStateOf<Int?>(null) }
+    var encoderSpeed by remember { mutableStateOf(ExportEncoderSettings.EncoderSpeed.MAXIMUM) }
+    // Blank fields mean "not chosen"; text that isn't a number becomes an error below.
+    val encoderSettings = remember(resolution, videoBitrateText, bitrateMode, keyframeText, bFramesText, audioBitrateKbps, encoderSpeed) {
+        runCatching {
+            fun <T> parse(text: String, name: String, convert: (String) -> T?): T? =
+                text.trim().takeIf { it.isNotEmpty() }?.let { convert(it) ?: throw IllegalArgumentException("$name isn't a number.") }
+            ExportEncoderSettings(
+                videoBitrate = parse(videoBitrateText, "Video bitrate") { it.toDoubleOrNull()?.let { mbps -> (mbps * 1_000_000).toInt() } },
+                bitrateMode = bitrateMode,
+                keyframeIntervalSeconds = parse(keyframeText, "Keyframe interval") { it.toFloatOrNull() },
+                maxBFrames = parse(bFramesText, "B-frames") { it.toIntOrNull() },
+                audioBitrate = audioBitrateKbps?.let { it * 1_000 },
+                maxLongEdge = resolution.longEdge,
+                encoderSpeed = encoderSpeed,
+            ).also { settings -> settings.problem()?.let { throw IllegalArgumentException(it) } }
+        }
+    }
     LaunchedEffect(project) { viewModel.checkMedia() }
     val exporter = remember { ProjectExporter(context.applicationContext) }
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
@@ -252,7 +290,56 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                             Text(if (!veryFast) "✓ Normal" else "Normal", maxLines = 1)
                         }
                     }
-                    Text(if (veryFast) "Up to 720p at a lighter bitrate: much quicker, slightly softer." else "Full resolution and quality.")
+                    Text(if (veryFast) "Up to 720p at a lighter bitrate: much quicker, slightly softer. Encoding choices below override it." else "Full resolution and quality.")
+                    Text("Encoding", style = MaterialTheme.typography.titleMedium)
+                    Text("Resolution")
+                    ExportResolution.entries.chunked(3).forEach { row ->
+                        ChoiceRow(row, resolution, { it.label }) { resolution = it }
+                    }
+                    Text("Long edge cap; smaller sources keep their size.${if (veryFast) " Very fast caps at 720p." else ""}")
+                    OutlinedTextField(
+                        value = videoBitrateText,
+                        onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) videoBitrateText = value },
+                        label = { Text("Video bitrate (Mbps)") },
+                        placeholder = { Text(if (veryFast) "4 (Very fast)" else "Auto") },
+                        supportingText = { Text("Blank lets the encoder choose for the resolution.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    (listOf("") + VIDEO_BITRATE_PICKS_MBPS).chunked(4).forEach { row ->
+                        ChoiceRow(row, videoBitrateText, { if (it.isEmpty()) "Auto" else it }) { videoBitrateText = it }
+                    }
+                    Text("Bitrate mode")
+                    ChoiceRow(ExportEncoderSettings.BitrateMode.entries, bitrateMode, { it.label }) { bitrateMode = it }
+                    OutlinedTextField(
+                        value = keyframeText,
+                        onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) keyframeText = value },
+                        label = { Text("Keyframe interval (seconds)") },
+                        placeholder = { Text(if (veryFast) "5 (Very fast)" else "1") },
+                        supportingText = { Text("KEY_I_FRAME_INTERVAL. 0 makes every frame a keyframe (big files, exact seeking).") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    (listOf("") + KEYFRAME_PICKS_SECONDS).chunked(4).forEach { row ->
+                        ChoiceRow(row, keyframeText, { if (it.isEmpty()) "Default" else it + "s" }) { keyframeText = it }
+                    }
+                    OutlinedTextField(
+                        value = bFramesText,
+                        onValueChange = { value -> if (value.all(Char::isDigit)) bFramesText = value },
+                        label = { Text("Max B-frames") },
+                        placeholder = { Text("0") },
+                        supportingText = { Text("KEY_MAX_B_FRAMES, Android 10+. Smaller files; not every encoder honours it.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("Audio bitrate (AAC)")
+                    AUDIO_BITRATE_PICKS_KBPS.chunked(3).forEach { row ->
+                        ChoiceRow(row, audioBitrateKbps, { it?.let { kbps -> "$kbps kbps" } ?: "Auto" }) { audioBitrateKbps = it }
+                    }
+                    Text("Encoder speed")
+                    ChoiceRow(ExportEncoderSettings.EncoderSpeed.entries, encoderSpeed, { it.label }) { encoderSpeed = it }
+                    Text("Real time runs the encoder at playback pace: slower, but cooler on long exports.")
+                    encoderSettings.exceptionOrNull()?.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     Text("IHTX animated overlays")
                     OutlinedTextField(
                         value = overlayGridSizeText,
@@ -343,9 +430,10 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 startMs = startMs,
                                 codec = codec,
                                 veryFast = veryFast,
+                                settings = requireNotNull(encoderSettings.getOrNull()),
                             )
                         },
-                        enabled = planned.isSuccess && carriersReady && missingMedia.isEmpty(),
+                        enabled = planned.isSuccess && encoderSettings.isSuccess && carriersReady && missingMedia.isEmpty(),
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {
@@ -376,6 +464,22 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     Text("Export failed: ${error ?: "Unknown error"}")
                     Button(onClick = { state = ExportState.IDLE }) { Text("Try again") }
                 }
+            }
+        }
+    }
+}
+
+/** A row of equal-width choices with a check on the selected one. */
+@Composable
+private fun <T> ChoiceRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        options.forEach { option ->
+            OutlinedButton(
+                onClick = { onSelect(option) },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (option == selected) "✓ ${label(option)}" else label(option), maxLines = 1)
             }
         }
     }

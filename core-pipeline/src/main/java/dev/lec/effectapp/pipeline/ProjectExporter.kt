@@ -42,7 +42,7 @@ class ProjectExporter(private val context: Context) {
  @Volatile private var failedIhtxStatus: IhtxStatus? = null
  @Volatile private var lastProgress: Int? = null
  @Volatile private var videoMimeType: String = MimeTypes.VIDEO_H264
- @Volatile private var veryFast: Boolean = false
+ @Volatile private var encoderSettings: ExportEncoderSettings = ExportEncoderSettings()
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
  private val progressPoll = object : Runnable {
   override fun run() {
@@ -101,13 +101,14 @@ class ProjectExporter(private val context: Context) {
   .setLooper(exportThread.looper)
   .setVideoMimeType(videoMimeType)
   .setAudioMimeType(MimeTypes.AUDIO_AAC)
-  .apply { if (veryFast) setEncoderFactory(veryFastEncoderFactory()) }
+  .apply { encoderSettings.takeUnless { it.isDefault }?.let { setEncoderFactory(encoderFactory(it)) } }
   .addListener(transformerListener)
   .build()
- fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264) {
+ fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264, settings: ExportEncoderSettings = ExportEncoderSettings()) {
   if (rejectNative(project, callback)) return
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   videoMimeType=codec.mimeType
+  encoderSettings=settings
   preparing=true
   background {
    val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
@@ -115,7 +116,8 @@ class ProjectExporter(private val context: Context) {
     preparing=false
     if(this.callback===callback) {
      transformer=newTransformer()
-     transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap),outputPath)
+     val size=settings.maxLongEdge?.let { edge -> prepared.clips.firstOrNull()?.let { videoSize(it.sourceUri) }?.let { capLongEdge(it,edge) } }
+     transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap,outputPresentationSize=size),outputPath)
      queue.removeCallbacks(progressPoll); queue.post(progressPoll)
     }
    }
@@ -129,9 +131,12 @@ class ProjectExporter(private val context: Context) {
   */
  /**
   * [veryFast]: every pass is rendered at up to 720p and encoded at a modest bitrate with fewer
-  * keyframes, so effects, encoder and disk all have far less to push through per pass.
+  * keyframes, so effects, encoder and disk all have far less to push through per pass. Anything
+  * chosen in [settings] (bitrate, keyframe interval, B-frames, audio bitrate, resolution…) wins
+  * over those defaults.
   */
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList()) {
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList(),settings:ExportEncoderSettings = ExportEncoderSettings()) {
+  settings.problem()?.let { message -> main.post { callback.onError(ExportException.createForUnexpected(IllegalArgumentException(message))) }; return }
   check(this.callback==null) { "An export is already running" }
   val allSources = project.copy(clips = project.clips + presets.map { preset ->
    dev.lec.effectapp.model.Clip(id="native-check", sourceUri="", displayName=preset.name, trimEndMs=1, effectSegments=preset.effectSegments, audioSegments=preset.audioSegments)
@@ -144,7 +149,7 @@ class ProjectExporter(private val context: Context) {
    return
   }
   videoMimeType=codec.mimeType
-  this.veryFast=veryFast
+  encoderSettings=settings.resolved(veryFast)
   failedIhtxStatus=null
   this.callback=callback
   preparing=true
@@ -176,7 +181,7 @@ class ProjectExporter(private val context: Context) {
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
   val fullSize=outputSizeForAspect(videoSize(base.clips.first().sourceUri),exportAspectRatio)
-  val outputSize=if(veryFast) fullSize?.let(::capForVeryFast) else fullSize
+  val outputSize=encoderSettings.maxLongEdge?.let { edge -> fullSize?.let { capLongEdge(it,edge) } } ?: fullSize
   batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan,outputSize=outputSize,overlayAspectRatio=outputSize?.let { it.width.toFloat()/it.height.toFloat() }); startStage(requireNotNull(batch),0)
  }
  fun ihtxStatus():IhtxStatus? {
@@ -251,22 +256,39 @@ class ProjectExporter(private val context: Context) {
    if(rotation % 180 == 0) Size(width,height) else Size(height,width)
   } catch (_:RuntimeException) { null } finally { retriever.release() }
  }
- /** Fits [size] within 1280 px on its long edge (even dimensions); smaller sizes are kept. */
- private fun capForVeryFast(size:Size):Size {
+ /** Fits [size] within [longEdge] px on its long edge (even dimensions); smaller sizes are kept. */
+ private fun capLongEdge(size:Size,longEdge:Int):Size {
   val longest=maxOf(size.width,size.height)
-  if(longest<=VERY_FAST_LONG_EDGE) return size
-  val scale=VERY_FAST_LONG_EDGE.toFloat()/longest
+  if(longest<=longEdge) return size
+  val scale=longEdge.toFloat()/longest
   fun even(value:Float):Int = (((value.roundToInt().coerceAtLeast(2)+1)/2)*2)
   return Size(even(size.width*scale),even(size.height*scale))
  }
- /** Encoder settings for Very fast: modest bitrate, a keyframe every few seconds, no B-frames. */
- private fun veryFastEncoderFactory()=androidx.media3.transformer.DefaultEncoderFactory.Builder(context)
+ /**
+  * An encoder asking for [settings]: KEY_BIT_RATE and KEY_BITRATE_MODE, KEY_I_FRAME_INTERVAL,
+  * KEY_MAX_B_FRAMES, KEY_OPERATING_RATE/KEY_PRIORITY and the AAC bitrate. Fallback stays on, so a
+  * value the phone's encoder can't do is brought into its range instead of failing the export.
+  */
+ private fun encoderFactory(settings:ExportEncoderSettings)=androidx.media3.transformer.DefaultEncoderFactory.Builder(context)
   .setRequestedVideoEncoderSettings(
    androidx.media3.transformer.VideoEncoderSettings.Builder()
-    .setBitrate(VERY_FAST_BITRATE)
-    .setiFrameIntervalSeconds(VERY_FAST_KEYFRAME_SECONDS)
+    .apply {
+     settings.videoBitrate?.let { setBitrate(it) }
+     setBitrateMode(settings.bitrateMode.mediaCodecValue)
+     settings.keyframeIntervalSeconds?.let { setiFrameIntervalSeconds(it) }
+     settings.maxBFrames?.takeIf { it>0 }?.let { setMaxBFrames(it) }
+     if(settings.encoderSpeed==ExportEncoderSettings.EncoderSpeed.REALTIME) {
+      // Priority 0 = real time; the operating rate is left to the encoder.
+      setEncoderPerformanceParameters(androidx.media3.transformer.VideoEncoderSettings.RATE_UNSET,0)
+     }
+    }
     .build(),
   )
+  .apply {
+   settings.audioBitrate?.let { bitrate ->
+    setRequestedAudioEncoderSettings(androidx.media3.transformer.AudioEncoderSettings.Builder().setBitrate(bitrate).build())
+   }
+  }
   .setEnableFallback(true)
   .build()
  private fun outputSizeForAspect(source:Size?,aspectRatio:Float?):Size? {
@@ -373,9 +395,6 @@ class ProjectExporter(private val context: Context) {
  private companion object {
   const val PROGRESS_POLL_MS = 200L
   const val MAX_AUDIO_LEAD_MS = 250L
-  const val VERY_FAST_LONG_EDGE = 1280
-  const val VERY_FAST_BITRATE = 4_000_000
-  const val VERY_FAST_KEYFRAME_SECONDS = 5f
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
  }
