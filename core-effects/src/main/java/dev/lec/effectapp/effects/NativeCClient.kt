@@ -196,7 +196,7 @@ object NativeCClient {
                 cause is android.os.DeadObjectException ->
                     "The native C worker crashed or was stopped by Android: the plug-in code crashed, it ran out of memory, or the app was in the background too long."
                 error is java.util.concurrent.TimeoutException ->
-                    "A native C plug-in took longer than $timeoutMs ms on one frame or buffer. Check the plug-in code for slow or endless loops."
+                    "Native C plug-in timed out after $timeoutMs ms on one frame or buffer. Check the plug-in code for slow or endless loops."
                 else -> cause.message ?: "Native C worker stopped or timed out. Check the plug-in code."
             }
             throw IllegalStateException(message, error)
