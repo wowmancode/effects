@@ -100,11 +100,14 @@ class ProjectExporter(private val context: Context) {
     return
    }
    val b=batch
-   if (b != null && !b.concat && b.done < b.projects.size && b.retries < MAX_STAGE_RETRIES) {
+   // A crashed or killed plug-in worker gets more tries, each with a fresh worker and a pause.
+   val nativeFailure=isNativeWorkerFailure(exportException)
+   if (b != null && !b.concat && b.done < b.projects.size && b.retries < (if(nativeFailure) MAX_NATIVE_RETRIES else MAX_STAGE_RETRIES)) {
     b.retries++
     b.files.getOrNull(b.done)?.delete()
+    if(nativeFailure) dev.lec.effectapp.effects.NativeCClient.restartWorker()
     transformer=newTransformer()
-    queue.postDelayed({ if (batch===b) startStage(b,b.done) }, RETRY_COOLDOWN_MS)
+    queue.postDelayed({ if (batch===b) startStage(b,b.done) }, if(nativeFailure) NATIVE_RETRY_COOLDOWN_MS else RETRY_COOLDOWN_MS)
     return
    }
    failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; transformer=newTransformer(); finish { it.onError(exportException) }
@@ -116,6 +119,10 @@ class ProjectExporter(private val context: Context) {
   .setLooper(exportThread.looper)
   .setVideoMimeType(videoMimeType)
   .setAudioMimeType(MimeTypes.AUDIO_AAC)
+  // Media3 gives up after 10 s without output ("no output sample written in the last 10000
+  // milliseconds"). Starting a plug-in worker and compiling can take longer than that; real hangs
+  // are still caught by the plug-in's own per-frame timeout.
+  .setMaxDelayBetweenMuxerSamplesMs(MAX_DELAY_BETWEEN_SAMPLES_MS)
   .apply { encoderSettings.takeUnless { it.isDefault }?.let { setEncoderFactory(encoderFactory(it)) } }
   .addListener(transformerListener)
   .build()
@@ -224,6 +231,16 @@ class ProjectExporter(private val context: Context) {
  /** Cancels anything running and ends the export thread; the exporter can't be used afterwards. */
  fun release(){ cancel(); queue.post { exportThread.quitSafely() } }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
+ /** True when [error] came from the native C plug-in worker dying or not answering. */
+ private fun isNativeWorkerFailure(error:Throwable):Boolean {
+  var cause:Throwable?=error; var depth=0
+  while(cause!=null && depth<10) {
+   if(cause is android.os.DeadObjectException) return true
+   if(cause.message?.contains("native C worker",ignoreCase=true)==true) return true
+   cause=cause.cause; depth++
+  }
+  return false
+ }
  /** True while the anti-desync pass is rewriting the finished export. */
  fun syncing():Boolean = syncSource!=null
  /** What anti-desync did to the last export (speed and track lengths), or null when it was off. */
@@ -265,6 +282,8 @@ class ProjectExporter(private val context: Context) {
   return Composition.Builder(listOf(video,audio)).setTransmuxAudio(true).build()
  }
  private fun startStage(b:Batch,index:Int){
+  // A fresh plug-in worker every few passes, so leaked memory can't build up over a long export.
+  if(index>0 && index%WORKER_RECYCLE_PASSES==0 && b.retries==0) dev.lec.effectapp.effects.NativeCClient.restartWorker()
   if(index>0) {
    // Later passes re-apply the clip's effects to the previous pass, including any reverse.
    preparing=true
@@ -455,6 +474,10 @@ class ProjectExporter(private val context: Context) {
   const val MAX_AUDIO_LEAD_MS = 250L
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
+  const val MAX_NATIVE_RETRIES = 5
+  const val NATIVE_RETRY_COOLDOWN_MS = 1_500L
+  const val WORKER_RECYCLE_PASSES = 10
+  const val MAX_DELAY_BETWEEN_SAMPLES_MS = 60_000L
   /** Under ~half a frame at 30 fps the tracks count as in sync and the export isn't re-encoded. */
   const val SYNC_TOLERANCE_US = 15_000L
   const val MIN_SYNC_SPEED = 0.5

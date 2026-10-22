@@ -57,6 +57,13 @@ object NativeCClient {
         }
     }
 
+    /**
+     * Stops the worker so the next plug-in call starts a fresh one. Long exports call this between
+     * passes, so memory a plug-in (or the compiler) never gives back can't pile up until Android
+     * kills the worker partway through.
+     */
+    fun restartWorker() = disconnect()
+
     /** The caller must obtain explicit user approval before calling this method. */
     fun compileAndApprove(source: String, audio: Boolean) {
         check(!onlineBlocked) { "Native C plug-ins are offline-only." }
@@ -184,7 +191,15 @@ object NativeCClient {
         return try { task.get(timeoutMs, TimeUnit.MILLISECONDS) } catch (error: Exception) {
             task.cancel(true)
             disconnect(remote)
-            throw IllegalStateException(error.cause?.message ?: "Native C worker stopped or timed out. Check the plug-in code.", error)
+            val cause = (error as? java.util.concurrent.ExecutionException)?.cause ?: error
+            val message = when {
+                cause is android.os.DeadObjectException ->
+                    "The native C worker crashed or was stopped by Android: the plug-in code crashed, it ran out of memory, or the app was in the background too long."
+                error is java.util.concurrent.TimeoutException ->
+                    "A native C plug-in took longer than $timeoutMs ms on one frame or buffer. Check the plug-in code for slow or endless loops."
+                else -> cause.message ?: "Native C worker stopped or timed out. Check the plug-in code."
+            }
+            throw IllegalStateException(message, error)
         }
     }
 }

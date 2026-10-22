@@ -99,6 +99,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Long IHTX exports with native C plug-ins failing partway (e.g. 122/170) with "Native C worker
+  stopped or timed out … DeadObjectException". The plug-in worker is restarted every 10 passes
+  so leaked memory can't build up, a pass whose worker crashed or was killed is retried up to
+  5 times with a fresh worker, and the screen stays on while exporting so Android is less likely
+  to stop the worker in the background. The error now says why the worker stopped.
+- Exports aborting with "no output sample written in the last 10000 milliseconds" while a
+  plug-in worker starts or compiles: Media3's stall limit is raised to 60 s (plug-ins keep their
+  own per-frame timeout).
 - Gradient-map alpha could expose a purple preview surface or freeze playback by
   emitting partially transparent video frames.
 

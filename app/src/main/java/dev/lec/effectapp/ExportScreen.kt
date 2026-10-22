@@ -185,6 +185,12 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     }
 
     DisposableEffect(exporter) { onDispose { exporter.release() } }
+    // Long IHTX runs: keep the screen on so Android doesn't stop the plug-in worker in the background.
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(state) {
+        view.keepScreenOn = state == ExportState.RUNNING
+        onDispose { view.keepScreenOn = false }
+    }
     LaunchedEffect(carrierUris) {
         carriersReady = carrierUris.isEmpty()
         carrierError = null
