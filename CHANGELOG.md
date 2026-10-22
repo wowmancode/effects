@@ -99,6 +99,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The editor preview no longer stops for about a second at every cut between clips. Effect
+  slots are now positional and sized for the clip with the most effects, so moving to the next
+  clip swaps its effects into the running pipeline (at the moment the player changes item)
+  instead of stopping and rebuilding it. A full rebuild only happens where multi-pass effects
+  (ghost trail, freeze frame, displacement map) sit in different places.
 - When a native C plug-in prints a reason and stops the worker (abort(), a crash after writing to
   stderr), the export error now shows "Plug-in said: …" with its last lines instead of a bare
   DeadObjectException, and the pass isn't pointlessly retried.

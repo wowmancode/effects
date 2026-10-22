@@ -516,14 +516,27 @@ fun EditorScreen(
     }
     val previewClipStartMs = project.clips.take(currentClipIndex).sumOf { it.durationMs }
     val previewLocalMs = (playerPositionMs - previewClipStartMs).coerceAtLeast(0)
-    // Only the stack's shape needs a pipeline rebuild; parameter values flow in live.
+    // Only the stack's shape needs a pipeline rebuild; parameter values flow in live. Slots are
+    // positional and sized for the busiest clip, so moving between clips usually keeps the shape
+    // and the next clip's effects are swapped in live instead of stopping playback at each cut.
     val nativeApproval by dev.lec.effectapp.effects.NativeCClient.approvalRevision.collectAsState()
+    val previewSlots = project.clips.maxOfOrNull { clip -> clip.effectSegments.count { it.enabled } }?.coerceAtMost(MAX_PREVIEW_SLOTS) ?: 0
     val previewStructureKey = previewClip?.let { clip ->
-        listOf<Any?>(
-            clip.id,
-            nativeApproval,
-            clip.effectSegments.filter { it.enabled }.map { it.id to it.effectId },
-        )
+        listOf<Any?>(nativeApproval, liveEffects.layoutKey(clip, previewSlots))
+    }
+    // Swap the next clip's effects in the moment the player moves to it, not on the next UI poll.
+    val latestProject by rememberUpdatedState(project)
+    DisposableEffect(player, liveEffects) {
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val entry = latestEntries.getOrNull(player.currentMediaItemIndex) ?: return
+                val clip = latestProject.clips.getOrNull(entry.clipIndex) ?: return
+                liveEffects.timeMs = entry.outputStartMs
+                liveEffects.update(clip)
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
     val latestPreviewClip by rememberUpdatedState(previewClip)
     // Keyframes on live effects are evaluated from this on the GL thread.
@@ -533,13 +546,13 @@ fun EditorScreen(
     var appliedPreviewStructure by remember(player) { mutableStateOf<List<Any?>?>(null) }
     // Frame count at the last effect reconfiguration; the next live update waits for a newer frame.
     var lastReconfigureFrame by remember(player) { mutableLongStateOf(-1L) }
-    LaunchedEffect(player, currentClipIndex, previewStructureKey) {
+    LaunchedEffect(player, previewStructureKey) {
         val clip = previewClip ?: return@LaunchedEffect
         // Only stack shape changes tear down the decoder/GL pipeline.
         delay(160)
         freezeWatchdog.expectFrame()
         // Build from the newest edit: values changed during the delay must not be lost.
-        rebuildPreviewPipeline(player, liveEffects.build(latestPreviewClip ?: clip, previewLocalMs, overlayResolver))
+        rebuildPreviewPipeline(player, liveEffects.build(latestPreviewClip ?: clip, previewLocalMs, overlayResolver, previewSlots))
         lastReconfigureFrame = freezeWatchdog.frameCount
         appliedPreviewStructure = previewStructureKey
     }
@@ -559,7 +572,7 @@ fun EditorScreen(
         freezeWatchdog.awaitFrameAfter(lastReconfigureFrame, timeoutMs = 750)
         if (appliedPreviewStructure == previewStructureKey) {
             runCatching {
-                val effects = liveEffects.build(latestPreviewClip ?: clip, previewLocalMs, overlayResolver)
+                val effects = liveEffects.build(latestPreviewClip ?: clip, previewLocalMs, overlayResolver, previewSlots)
                 freezeWatchdog.expectFrame()
                 updatePreviewEffects(player, effects)
                 lastReconfigureFrame = freezeWatchdog.frameCount
@@ -570,7 +583,7 @@ fun EditorScreen(
         val clip = previewClip ?: return@LaunchedEffect
         if (staticAnimationFrame < 0 || appliedPreviewStructure != previewStructureKey) return@LaunchedEffect
         delay(24)
-        runCatching { player.setVideoEffects(liveEffects.build(clip, previewLocalMs, overlayResolver)) }
+        runCatching { player.setVideoEffects(liveEffects.build(clip, previewLocalMs, overlayResolver, previewSlots)) }
     }
     val seekToClip: (Int) -> Unit = { requestedIndex ->
         if (project.clips.isNotEmpty()) {
@@ -785,6 +798,9 @@ fun EditorScreen(
         )
     }
 }
+
+/** Effect slots in the preview pipeline; clips with more effects than this rebuild at their cut. */
+private const val MAX_PREVIEW_SLOTS = 24
 
 @OptIn(UnstableApi::class)
 private fun updatePreviewEffects(player: ExoPlayer, effects: List<androidx.media3.common.Effect>) {
