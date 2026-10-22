@@ -43,6 +43,11 @@ class ProjectExporter(private val context: Context) {
  @Volatile private var lastProgress: Int? = null
  @Volatile private var videoMimeType: String = MimeTypes.VIDEO_H264
  @Volatile private var encoderSettings: ExportEncoderSettings = ExportEncoderSettings()
+ @Volatile private var antiDesync: Boolean = false
+ @Volatile private var outputPath: String? = null
+ /** The unsynced export while the anti-desync pass rewrites it; null otherwise. */
+ @Volatile private var syncSource: File? = null
+ @Volatile private var syncNote: String? = null
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
  private val progressPoll = object : Runnable {
   override fun run() {
@@ -61,8 +66,9 @@ class ProjectExporter(private val context: Context) {
  }
  private val transformerListener = object : Transformer.Listener {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+   syncSource?.let { source -> source.delete(); syncSource=null; transformer=newTransformer(); finish { it.onCompleted() }; return }
    val b=batch
-   if (b==null) { transformer=newTransformer(); finish { it.onCompleted() }; return }
+   if (b==null) { transformer=newTransformer(); finishOrSync(outputPath); return }
    b.retries=0
    b.done++
    b.ihtx?.let { plan ->
@@ -74,16 +80,25 @@ class ProjectExporter(private val context: Context) {
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
-    batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() }
+    batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finishOrSync(b.output)
    }
    else if (!b.concat) {
     b.concat=true
     transformer=newTransformer()
     queue.post { if (batch===b) transformer.start(concatenate(b.files,b.ihtx?.base?.durationMs),b.output) }
    }
-   else { batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() } }
+   else { batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finishOrSync(b.output) }
   }
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+   syncSource?.let { source ->
+    // The export itself worked: keep it as it was rather than losing it to the sync pass.
+    syncSource=null
+    val target=outputPath?.let(::File)
+    if(target!=null) { target.delete(); source.renameTo(target) }
+    syncNote="Anti-desync failed, saved without it: "+(exportException.message ?: exportException.javaClass.simpleName)
+    transformer=newTransformer(); finish { it.onCompleted() }
+    return
+   }
    val b=batch
    if (b != null && !b.concat && b.done < b.projects.size && b.retries < MAX_STAGE_RETRIES) {
     b.retries++
@@ -104,11 +119,12 @@ class ProjectExporter(private val context: Context) {
   .apply { encoderSettings.takeUnless { it.isDefault }?.let { setEncoderFactory(encoderFactory(it)) } }
   .addListener(transformerListener)
   .build()
- fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264, settings: ExportEncoderSettings = ExportEncoderSettings()) {
+ fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264, settings: ExportEncoderSettings = ExportEncoderSettings(), antiDesync: Boolean = false) {
   if (rejectNative(project, callback)) return
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   videoMimeType=codec.mimeType
   encoderSettings=settings
+  this.antiDesync=antiDesync; this.outputPath=outputPath; syncNote=null
   preparing=true
   background {
    val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
@@ -135,7 +151,7 @@ class ProjectExporter(private val context: Context) {
   * chosen in [settings] (bitrate, keyframe interval, B-frames, audio bitrate, resolution…) wins
   * over those defaults.
   */
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList(),settings:ExportEncoderSettings = ExportEncoderSettings()) {
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList(),settings:ExportEncoderSettings = ExportEncoderSettings(),antiDesync:Boolean = false) {
   settings.problem()?.let { message -> main.post { callback.onError(ExportException.createForUnexpected(IllegalArgumentException(message))) }; return }
   check(this.callback==null) { "An export is already running" }
   val allSources = project.copy(clips = project.clips + presets.map { preset ->
@@ -150,6 +166,7 @@ class ProjectExporter(private val context: Context) {
   }
   videoMimeType=codec.mimeType
   encoderSettings=settings.resolved(veryFast)
+  this.antiDesync=antiDesync; this.outputPath=outputPath; syncNote=null
   failedIhtxStatus=null
   this.callback=callback
   preparing=true
@@ -200,12 +217,53 @@ class ProjectExporter(private val context: Context) {
   queue.post {
    runCatching { transformer.cancel() }
    batch?.files?.forEach(File::delete); batch=null
+   syncSource?.delete(); syncSource=null
    transformer=newTransformer()
   }
  }
  /** Cancels anything running and ends the export thread; the exporter can't be used afterwards. */
  fun release(){ cancel(); queue.post { exportThread.quitSafely() } }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
+ /** True while the anti-desync pass is rewriting the finished export. */
+ fun syncing():Boolean = syncSource!=null
+ /** What anti-desync did to the last export (speed and track lengths), or null when it was off. */
+ fun lastSyncNote():String? = syncNote
+ /**
+  * Ends the export, or with anti-desync on first measures the finished file's tracks: when the
+  * picture and sound lengths differ, the picture is re-timed to exactly the sound's length (the
+  * sound is copied through untouched), so they start and end together with no drift between.
+  */
+ private fun finishOrSync(output:String?) {
+  if(!antiDesync || output==null) { finish { it.onCompleted() }; return }
+  val file=File(output)
+  val (audioUs,videoUs)=trackDurationsUs(file)
+  fun s(us:Long)=String.format(java.util.Locale.ROOT,"%.3f s",us/1_000_000.0)
+  if(audioUs<=0 || videoUs<=0) { syncNote="Anti-desync: nothing to sync (no ${if(audioUs<=0) "sound" else "picture"} track)."; finish { it.onCompleted() }; return }
+  val diffUs=videoUs-audioUs
+  if(kotlin.math.abs(diffUs)<SYNC_TOLERANCE_US) { syncNote="Anti-desync: already in sync · video ${s(videoUs)}, audio ${s(audioUs)}"; finish { it.onCompleted() }; return }
+  // Playing the picture at video/audio speed makes it last exactly as long as the sound.
+  val speed=videoUs.toDouble()/audioUs
+  if(speed !in MIN_SYNC_SPEED..MAX_SYNC_SPEED) { syncNote="Anti-desync skipped: tracks differ too much to stretch (video ${s(videoUs)}, audio ${s(audioUs)})"; finish { it.onCompleted() }; return }
+  val source=File(file.parentFile,"desync-"+UUID.randomUUID()+".mp4")
+  if(!file.renameTo(source)) { syncNote="Anti-desync failed: couldn't stage the export."; finish { it.onCompleted() }; return }
+  syncNote="Anti-desync · video speed ${String.format(java.util.Locale.ROOT,"%.6f",speed)} · video ${s(videoUs)}, audio ${s(audioUs)}, diff ${String.format(java.util.Locale.ROOT,"%+.3f s",diffUs/1_000_000.0)}"
+  syncSource=source
+  queue.post { if(syncSource===source && callback!=null) transformer.start(syncComposition(source,speed.toFloat()),output) }
+ }
+ /** The picture of [source] re-timed by [speed] (re-encoded), with its sound copied as it is. */
+ private fun syncComposition(source:File,speed:Float):Composition {
+  val uri=Uri.fromFile(source)
+  val video=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_VIDEO))
+   .addItem(EditedMediaItem.Builder(MediaItem.fromUri(uri)).setRemoveAudio(true).setSpeed(object:androidx.media3.common.audio.SpeedProvider {
+    override fun getSpeed(timeUs:Long):Float = speed
+    override fun getNextSpeedChangeTimeUs(timeUs:Long):Long = androidx.media3.common.C.TIME_UNSET
+   }).build())
+   .build()
+  val audio=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_AUDIO))
+   .addItem(EditedMediaItem.Builder(MediaItem.fromUri(uri)).setRemoveVideo(true).build())
+   .build()
+  return Composition.Builder(listOf(video,audio)).setTransmuxAudio(true).build()
+ }
  private fun startStage(b:Batch,index:Int){
   if(index>0) {
    // Later passes re-apply the clip's effects to the previous pass, including any reverse.
@@ -397,6 +455,10 @@ class ProjectExporter(private val context: Context) {
   const val MAX_AUDIO_LEAD_MS = 250L
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
+  /** Under ~half a frame at 30 fps the tracks count as in sync and the export isn't re-encoded. */
+  const val SYNC_TOLERANCE_US = 15_000L
+  const val MIN_SYNC_SPEED = 0.5
+  const val MAX_SYNC_SPEED = 2.0
  }
 
 }

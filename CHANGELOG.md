@@ -40,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Anti-desync export switch. After the export, the picture and sound track lengths are
+  measured; if they differ by more than 15 ms, the picture is re-timed to exactly the sound's
+  length (sound copied untouched), like `setpts=audio/video*PTS`. The finished screen shows the
+  speed used and both lengths; if the extra pass fails, the unsynced export is kept.
 - IHTX exports list the native C plug-ins (from the project, queued presets and overlays) that
   aren't approved on this phone yet, with an "Allow all plug-ins" checkbox. Ticking it asks for
   confirmation with the trust warning, then compiles and approves each one. Start export stays

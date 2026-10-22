@@ -91,6 +91,8 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     }
     var codec by remember { mutableStateOf(ExportCodec.H264) }
     var veryFast by remember { mutableStateOf(true) }
+    var antiDesync by remember { mutableStateOf(false) }
+    var syncNote by remember { mutableStateOf<String?>(null) }
     var resolution by remember { mutableStateOf(ExportResolution.ORIGINAL) }
     var videoBitrateText by remember { mutableStateOf("") }
     var bitrateMode by remember { mutableStateOf(ExportEncoderSettings.BitrateMode.VBR) }
@@ -201,6 +203,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         (status.presetName?.let { " · $it ${status.exportInPreset}/${status.exportsPerPreset}" } ?: "")
                 }
             }
+            if (exporter.syncing()) exportStatus = "Fixing audio/video sync… " + progress + "%"
             if (exporter.preparing()) exportStatus = listOfNotNull(exportStatus, "Reversing clips…").joinToString(" · ")
             delay(200)
         }
@@ -295,6 +298,13 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         }
                     }
                     Text(if (veryFast) "Up to 720p at a lighter bitrate: much quicker, slightly softer. Encoding choices below override it." else "Full resolution and quality.")
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Anti-desync")
+                            Text("After exporting, stretches the picture to exactly the sound's length so they end together. Re-encodes the video once.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        androidx.compose.material3.Switch(checked = antiDesync, onCheckedChange = { antiDesync = it })
+                    }
                     Text("Encoding", style = MaterialTheme.typography.titleMedium)
                     Text("Resolution")
                     ExportResolution.entries.chunked(3).forEach { row ->
@@ -414,7 +424,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 lengthMs,
                                 output.absolutePath,
                                 object : ProjectExporter.Callback {
-                                    override fun onCompleted() { state = ExportState.DONE; progress = 100 }
+                                    override fun onCompleted() { syncNote = exporter.lastSyncNote(); state = ExportState.DONE; progress = 100 }
                                     override fun onError(errorValue: ExportException) {
                                         error = (
                                             listOfNotNull(
@@ -436,6 +446,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 codec = codec,
                                 veryFast = veryFast,
                                 settings = requireNotNull(encoderSettings.getOrNull()),
+                                antiDesync = antiDesync,
                             )
                         },
                         enabled = planned.isSuccess && encoderSettings.isSuccess && pendingPlugins.isEmpty() && carriersReady && missingMedia.isEmpty(),
@@ -448,6 +459,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                 }
                 ExportState.DONE -> {
                     Text("Export complete")
+                    syncNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Button(onClick = { save.launch("effect-app.mp4") }) { Text("Save video") }
                     OutlinedButton(
                         onClick = {
