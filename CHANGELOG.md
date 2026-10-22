@@ -99,6 +99,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- When a native C plug-in prints a reason and stops the worker (abort(), a crash after writing to
+  stderr), the export error now shows "Plug-in said: …" with its last lines instead of a bare
+  DeadObjectException, and the pass isn't pointlessly retried.
 - An IHTX export that looked stuck on a pass now shows how long the current pass has run, its
   own progress when Media3 can report it, and, while a failed pass is being retried, the retry
   number and the error that caused it. The bar also moves by completed passes when a layered

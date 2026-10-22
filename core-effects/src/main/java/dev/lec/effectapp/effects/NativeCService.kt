@@ -20,8 +20,17 @@ class NativeCService : Service() {
     private var nextSession = 1
     private lateinit var root: File
 
+    private var stderrLog: java.io.FileOutputStream? = null
+
     override fun onCreate() {
         super.onCreate()
+        // A plug-in that prints to stderr and then abort()s (or crashes) takes this process down;
+        // its last words go to a file the editor reads to explain the failure.
+        runCatching {
+            val log = java.io.FileOutputStream(File(cacheDir, NativeCWire.STDERR_LOG), false)
+            android.system.Os.dup2(log.fd, 2)
+            stderrLog = log
+        }
         root = File(filesDir, "native-c/tinycc-e23dab-api1")
         if (!File(root, ".complete").exists()) {
             fun copy(path: String, destination: File) {
@@ -152,4 +161,6 @@ internal object NativeCWire {
     const val PROCESS = HELLO + 3
     const val CLOSE = HELLO + 4
     const val MAX_BUFFER_BYTES = 128 * 1024 * 1024
+    /** In the app's cache folder: the worker's stderr, truncated each time a worker starts. */
+    const val STDERR_LOG = "native-c-stderr.log"
 }

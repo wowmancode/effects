@@ -177,6 +177,12 @@ object NativeCClient {
         context?.let { app -> runCatching { app.unbindService(old.connection) } }
     }
 
+    /** The last thing the dead worker's plug-ins wrote to stderr (e.g. before abort()), if anything. */
+    private fun pluginOutput(): String? = runCatching {
+        val file = File(requireNotNull(context).cacheDir, NativeCWire.STDERR_LOG)
+        file.readText().lines().map { it.trim() }.filter { it.isNotEmpty() }.takeLast(3).joinToString(" · ").takeLast(400)
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+
     private fun <T> request(remote: IBinder, code: Int, timeoutMs: Long, write: Parcel.() -> Unit, read: Parcel.() -> T): T {
         check(!onlineBlocked) { "Native C plug-ins are offline-only." }
         val task = executor.submit(Callable {
@@ -192,7 +198,9 @@ object NativeCClient {
             task.cancel(true)
             disconnect(remote)
             val cause = (error as? java.util.concurrent.ExecutionException)?.cause ?: error
+            val said = if (cause is android.os.DeadObjectException) pluginOutput() else null
             val message = when {
+                said != null -> "A native C plug-in stopped the worker. Plug-in said: $said"
                 cause is android.os.DeadObjectException ->
                     "The native C worker crashed or was stopped by Android: the plug-in code crashed, it ran out of memory, or the app was in the background too long."
                 error is java.util.concurrent.TimeoutException ->

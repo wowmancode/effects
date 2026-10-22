@@ -108,7 +108,9 @@ class ProjectExporter(private val context: Context) {
    val b=batch
    // A crashed or killed plug-in worker gets more tries, each with a fresh worker and a pause.
    val nativeFailure=isNativeWorkerFailure(exportException)
-   if (b != null && !b.concat && b.done < b.projects.size && b.retries < (if(nativeFailure) MAX_NATIVE_RETRIES else MAX_STAGE_RETRIES)) {
+   val pluginStopped=generateSequence<Throwable>(exportException) { it.cause }.take(10).any { it.message?.contains("Plug-in said:")==true }
+   val maxRetries=when { pluginStopped -> 0; nativeFailure -> MAX_NATIVE_RETRIES; else -> MAX_STAGE_RETRIES }
+   if (b != null && !b.concat && b.done < b.projects.size && b.retries < maxRetries) {
     b.retries++
     b.lastError=listOfNotNull(exportException.message)+generateSequence(exportException.cause) { it.cause }.take(4).mapNotNull { it.message ?: it.javaClass.simpleName }
     b.files.getOrNull(b.done)?.delete()
@@ -244,6 +246,8 @@ class ProjectExporter(private val context: Context) {
  private fun isNativeWorkerFailure(error:Throwable):Boolean {
   var cause:Throwable?=error; var depth=0
   while(cause!=null && depth<10) {
+   // The plug-in stopped the worker on purpose and said why: trying again won't change that.
+   if(cause.message?.contains("Plug-in said:")==true) return false
    if(cause is android.os.DeadObjectException) return true
    if(cause.message?.contains("native C worker",ignoreCase=true)==true) return true
    cause=cause.cause; depth++
