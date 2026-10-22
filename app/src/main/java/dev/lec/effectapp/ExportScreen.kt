@@ -42,8 +42,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.transformer.ExportException
 import dev.lec.effectapp.effects.CarrierAudioStore
 import dev.lec.effectapp.pipeline.ExportCodec
+import dev.lec.effectapp.pipeline.ExportEncoderSettings
 import dev.lec.effectapp.pipeline.ProjectExporter
 import dev.lec.effectapp.model.Overlay
+import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.IhtxPatternKind
+import dev.lec.effectapp.model.IhtxPlan
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +55,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 private enum class ExportState { IDLE, RUNNING, DONE, ERROR }
+
+/** Output size caps (long edge in px); null keeps the source size. */
+private enum class ExportResolution(val label: String, val longEdge: Int?) {
+    ORIGINAL("Original", null),
+    P2160("4K", 3840),
+    P1080("1080p", 1920),
+    P720("720p", 1280),
+    P480("480p", 854),
+    P360("360p", 640),
+}
+
+private val VIDEO_BITRATE_PICKS_MBPS = listOf("2", "4", "8", "16", "32", "50")
+private val AUDIO_BITRATE_PICKS_KBPS = listOf<Int?>(null, 96, 128, 192, 256, 320)
+private val KEYFRAME_PICKS_SECONDS = listOf("0", "0.5", "1", "2", "5", "10")
 
 private enum class ExportAspectRatio(val label: String, val ratio: Float?) {
     ORIGINAL("Original", null),
@@ -73,6 +91,31 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     }
     var codec by remember { mutableStateOf(ExportCodec.H264) }
     var veryFast by remember { mutableStateOf(true) }
+    var antiDesync by remember { mutableStateOf(false) }
+    var syncNote by remember { mutableStateOf<String?>(null) }
+    var resolution by remember { mutableStateOf(ExportResolution.ORIGINAL) }
+    var videoBitrateText by remember { mutableStateOf("") }
+    var bitrateMode by remember { mutableStateOf(ExportEncoderSettings.BitrateMode.VBR) }
+    var keyframeText by remember { mutableStateOf("") }
+    var bFramesText by remember { mutableStateOf("") }
+    var audioBitrateKbps by remember { mutableStateOf<Int?>(null) }
+    var encoderSpeed by remember { mutableStateOf(ExportEncoderSettings.EncoderSpeed.MAXIMUM) }
+    // Blank fields mean "not chosen"; text that isn't a number becomes an error below.
+    val encoderSettings = remember(resolution, videoBitrateText, bitrateMode, keyframeText, bFramesText, audioBitrateKbps, encoderSpeed) {
+        runCatching {
+            fun <T> parse(text: String, name: String, convert: (String) -> T?): T? =
+                text.trim().takeIf { it.isNotEmpty() }?.let { convert(it) ?: throw IllegalArgumentException("$name isn't a number.") }
+            ExportEncoderSettings(
+                videoBitrate = parse(videoBitrateText, "Video bitrate") { it.toDoubleOrNull()?.let { mbps -> (mbps * 1_000_000).toInt() } },
+                bitrateMode = bitrateMode,
+                keyframeIntervalSeconds = parse(keyframeText, "Keyframe interval") { it.toFloatOrNull() },
+                maxBFrames = parse(bFramesText, "B-frames") { it.toIntOrNull() },
+                audioBitrate = audioBitrateKbps?.let { it * 1_000 },
+                maxLongEdge = resolution.longEdge,
+                encoderSpeed = encoderSpeed,
+            ).also { settings -> settings.problem()?.let { throw IllegalArgumentException(it) } }
+        }
+    }
     LaunchedEffect(project) { viewModel.checkMedia() }
     val exporter = remember { ProjectExporter(context.applicationContext) }
     val output = remember { File(context.cacheDir, "effect-app-export.mp4") }
@@ -80,13 +123,22 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var progress by remember { mutableIntStateOf(0) }
     var exportStatus by remember { mutableStateOf<String?>(null) }
     var exportsText by remember { mutableStateOf("1") }
+    var multiEffect by remember { mutableStateOf(false) }
+    var exportsPerPresetText by remember { mutableStateOf("10") }
+    var presetQueue by remember { mutableStateOf<List<EffectPreset>>(emptyList()) }
     var startText by remember { mutableStateOf("0") }
     var lengthText by remember(project.durationMs) { mutableStateOf((project.durationMs / 1000.0).toString()) }
     var error by remember { mutableStateOf<String?>(null) }
     var ihtxOverlays by remember { mutableStateOf<List<Overlay>>(emptyList()) }
     var overlayGridSizeText by remember { mutableStateOf("2") }
+    var overlayPattern by remember { mutableStateOf(IhtxPatternKind.ROWS.cells(2)) }
     var exportAspectRatio by remember { mutableStateOf(ExportAspectRatio.ORIGINAL) }
-    val carrierUris = project.clips.flatMap { it.audioSegments }.filter { it.effectId == "vocoder_custom" }
+    val nativeApprovals by dev.lec.effectapp.effects.NativeCClient.approvalRevision.collectAsState()
+    val pendingPlugins = remember(project, multiEffect, presetQueue, ihtxOverlays, nativeApprovals) {
+        pendingNativePlugins(project, if (multiEffect) presetQueue else emptyList(), ihtxOverlays)
+    }
+    val activeAudioSegments = if (multiEffect) presetQueue.flatMap { it.audioSegments } else project.clips.flatMap { it.audioSegments }
+    val carrierUris = activeAudioSegments.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
     var carriersReady by remember(carrierUris) { mutableStateOf(carrierUris.isEmpty()) }
     var carrierError by remember(carrierUris) { mutableStateOf<String?>(null) }
@@ -120,7 +172,25 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         }
     }
 
+    val planned = remember(project, multiEffect, presetQueue, exportsText, exportsPerPresetText, ihtxOverlays, overlayGridSizeText, overlayPattern) {
+        runCatching {
+            require(!multiEffect || presetQueue.isNotEmpty()) { "Add at least one preset to the queue." }
+            require(ihtxOverlays.isEmpty() || overlayPattern.isNotEmpty()) { "Record an overlay position or choose a pattern." }
+            val count = (if (multiEffect) exportsPerPresetText else exportsText).toIntOrNull()
+            require(count != null && count in 1..1_000) { "Exports must be between 1 and 1000." }
+            val grid = overlayGridSizeText.toIntOrNull()
+            require(grid != null && grid in 1..16) { "Grid size must be between 1 and 16." }
+            IhtxPlan(project, count, if (multiEffect) presetQueue else emptyList(), ihtxOverlays, grid, overlayPattern)
+        }
+    }
+
     DisposableEffect(exporter) { onDispose { exporter.release() } }
+    // Long IHTX runs: keep the screen on so Android doesn't stop the plug-in worker in the background.
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(state) {
+        view.keepScreenOn = state == ExportState.RUNNING
+        onDispose { view.keepScreenOn = false }
+    }
     LaunchedEffect(carrierUris) {
         carriersReady = carrierUris.isEmpty()
         carrierError = null
@@ -134,8 +204,14 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
         while (state == ExportState.RUNNING) {
             exporter.progress()?.let { progress = it }
             exportStatus = exporter.ihtxStatus()?.let { status ->
-                if (status.concatenating) "Concatenating…" else "Export " + status.current + "/" + status.total
+                if (status.concatenating) "Concatenating…" else {
+                    "Export ${status.current}/${status.total}" +
+                        (status.presetName?.let { " · $it ${status.exportInPreset}/${status.exportsPerPreset}" } ?: "") +
+                        "\nThis pass: " + (status.passProgress?.let { "$it% · " } ?: "") + "${status.passSeconds} s" +
+                        (status.retryReason?.let { "\nRetry ${status.retry} after: $it" } ?: "")
+                }
             }
+            if (exporter.syncing()) exportStatus = "Fixing audio/video sync… " + progress + "%"
             if (exporter.preparing()) exportStatus = listOfNotNull(exportStatus, "Reversing clips…").joinToString(" · ")
             delay(200)
         }
@@ -156,13 +232,29 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
             when (state) {
                 ExportState.IDLE -> {
                     Text("IHTX · cumulative effect passes, then concatenate")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { multiEffect = false }, modifier = Modifier.weight(1f)) {
+                            Text(if (!multiEffect) "✓ Standard IHTX" else "Standard IHTX")
+                        }
+                        OutlinedButton(onClick = { multiEffect = true }, modifier = Modifier.weight(1f)) {
+                            Text(if (multiEffect) "✓ Multi-effect IHTX" else "Multi-effect IHTX")
+                        }
+                    }
                     OutlinedTextField(
-                        value = exportsText,
-                        onValueChange = { value -> if (value.all(Char::isDigit)) exportsText = value },
-                        label = { Text("Exports") },
+                        value = if (multiEffect) exportsPerPresetText else exportsText,
+                        onValueChange = { value ->
+                            if (value.all(Char::isDigit)) {
+                                if (multiEffect) exportsPerPresetText = value else exportsText = value
+                            }
+                        },
+                        label = { Text(if (multiEffect) "Exports per preset" else "Exports") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (multiEffect) {
+                        IhtxPresetQueue(project.presets, presetQueue) { presetQueue = it }
+                        Text("The next overlay is added between preset blocks, just like standard IHTX. The preset queue repeats if more overlays remain.")
+                    }
                     OutlinedTextField(
                         value = startText,
                         onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) startText = value },
@@ -178,7 +270,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("Export " + project.clips.size + " clips with hard cuts and all enabled effects.")
+                    Text(if (multiEffect) "Export ${project.clips.size} clips using the queued presets." else "Export ${project.clips.size} clips with hard cuts and all enabled effects.")
                     Text("Aspect ratio")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                         listOf(ExportAspectRatio.ORIGINAL, ExportAspectRatio.LANDSCAPE, ExportAspectRatio.PORTRAIT).forEach { option ->
@@ -213,26 +305,108 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                             Text(if (!veryFast) "✓ Normal" else "Normal", maxLines = 1)
                         }
                     }
-                    Text(if (veryFast) "Up to 720p at a lighter bitrate: much quicker, slightly softer." else "Full resolution and quality.")
+                    Text(if (veryFast) "Up to 720p at a lighter bitrate: much quicker, slightly softer. Encoding choices below override it." else "Full resolution and quality.")
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Anti-desync")
+                            Text("After exporting, stretches the picture to exactly the sound's length so they end together. Re-encodes the video once.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        androidx.compose.material3.Switch(checked = antiDesync, onCheckedChange = { antiDesync = it })
+                    }
+                    Text("Encoding", style = MaterialTheme.typography.titleMedium)
+                    Text("Resolution")
+                    ExportResolution.entries.chunked(3).forEach { row ->
+                        ChoiceRow(row, resolution, { it.label }) { resolution = it }
+                    }
+                    Text("Long edge cap; smaller sources keep their size.${if (veryFast) " Very fast caps at 720p." else ""}")
+                    OutlinedTextField(
+                        value = videoBitrateText,
+                        onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) videoBitrateText = value },
+                        label = { Text("Video bitrate (Mbps)") },
+                        placeholder = { Text(if (veryFast) "4 (Very fast)" else "Auto") },
+                        supportingText = { Text("Blank lets the encoder choose for the resolution.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    (listOf("") + VIDEO_BITRATE_PICKS_MBPS).chunked(4).forEach { row ->
+                        ChoiceRow(row, videoBitrateText, { if (it.isEmpty()) "Auto" else it }) { videoBitrateText = it }
+                    }
+                    Text("Bitrate mode")
+                    ChoiceRow(ExportEncoderSettings.BitrateMode.entries, bitrateMode, { it.label }) { bitrateMode = it }
+                    OutlinedTextField(
+                        value = keyframeText,
+                        onValueChange = { value -> if (value.all { it.isDigit() || it == '.' }) keyframeText = value },
+                        label = { Text("Keyframe interval (seconds)") },
+                        placeholder = { Text(if (veryFast) "5 (Very fast)" else "1") },
+                        supportingText = { Text("KEY_I_FRAME_INTERVAL. 0 makes every frame a keyframe (big files, exact seeking).") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    (listOf("") + KEYFRAME_PICKS_SECONDS).chunked(4).forEach { row ->
+                        ChoiceRow(row, keyframeText, { if (it.isEmpty()) "Default" else it + "s" }) { keyframeText = it }
+                    }
+                    OutlinedTextField(
+                        value = bFramesText,
+                        onValueChange = { value -> if (value.all(Char::isDigit)) bFramesText = value },
+                        label = { Text("Max B-frames") },
+                        placeholder = { Text("0") },
+                        supportingText = { Text("KEY_MAX_B_FRAMES, Android 10+. Smaller files; not every encoder honours it.") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("Audio bitrate (AAC)")
+                    AUDIO_BITRATE_PICKS_KBPS.chunked(3).forEach { row ->
+                        ChoiceRow(row, audioBitrateKbps, { it?.let { kbps -> "$kbps kbps" } ?: "Auto" }) { audioBitrateKbps = it }
+                    }
+                    Text("Encoder speed")
+                    ChoiceRow(ExportEncoderSettings.EncoderSpeed.entries, encoderSpeed, { it.label }) { encoderSpeed = it }
+                    Text("Real time runs the encoder at playback pace: slower, but cooler on long exports.")
+                    encoderSettings.exceptionOrNull()?.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     Text("IHTX animated overlays")
                     OutlinedTextField(
                         value = overlayGridSizeText,
-                        onValueChange = { value -> if (value.all(Char::isDigit)) overlayGridSizeText = value },
+                        onValueChange = { value ->
+                            if (value.all(Char::isDigit)) {
+                                val old = overlayGridSizeText.toIntOrNull()
+                                overlayGridSizeText = value
+                                val size = value.toIntOrNull()
+                                if (size != null && size in 1..16 && size != old) overlayPattern = IhtxPatternKind.ROWS.cells(size)
+                            }
+                        },
                         label = { Text("Overlay grid size") },
-                        supportingText = { Text("Tiles per row and column (the original script’s scale divisor).") },
+                        supportingText = { Text("1–16 tiles per row and column. Changing the size starts a new row-order pattern.") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    IhtxPatternEditor(
+                        gridSize = overlayGridSizeText.toIntOrNull()?.takeIf { it in 1..16 } ?: 2,
+                        cells = overlayPattern,
+                        onChange = { overlayPattern = it },
+                        onLoad = { pattern -> overlayGridSizeText = pattern.gridSize.toString(); overlayPattern = pattern.cells },
                     )
                     OutlinedButton(onClick = { ihtxOverlayPicker.launch(arrayOf("video/*")) }, modifier = Modifier.fillMaxWidth()) {
                         Text("+ Overlay videos")
                     }
                     if (ihtxOverlays.isEmpty()) Text("No IHTX overlays selected.")
-                    ihtxOverlays.forEach { overlay ->
+                    ihtxOverlays.forEachIndexed { index, overlay ->
                         Column(Modifier.fillMaxWidth()) {
-                            Text(overlay.displayName)
-                            TextButton(onClick = { ihtxOverlays = ihtxOverlays.filterNot { it.id == overlay.id } }) { Text("Delete") }
+                            Text("${index + 1}. ${overlay.displayName}")
+                            overlayPattern.takeIf { it.isNotEmpty() }?.let { cells ->
+                                val cell = cells[index % cells.size]
+                                Text("Row ${cell.row + 1}, column ${cell.column + 1}")
+                            }
+                            Row {
+                                TextButton(onClick = { ihtxOverlays = ihtxOverlays.movedIhtxItem(index, -1) }, enabled = index > 0) { Text("Up") }
+                                TextButton(onClick = { ihtxOverlays = ihtxOverlays.movedIhtxItem(index, 1) }, enabled = index < ihtxOverlays.lastIndex) { Text("Down") }
+                                TextButton(onClick = { ihtxOverlays = ihtxOverlays.filterNot { it.id == overlay.id } }) { Text("Delete") }
+                            }
                         }
                     }
+                    planned.getOrNull()?.let { plan ->
+                        Text("${plan.totalExports} exports total · ${plan.exportsPerStage} before each new overlay")
+                    }
+                    planned.exceptionOrNull()?.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    IhtxPluginApproval(pendingPlugins)
                     if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
                     carrierError?.let { Text("Carrier audio error: $it") }
                     if (missingMedia.isNotEmpty()) {
@@ -245,21 +419,20 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                     }
                     Button(
                         onClick = {
+                            val plan = requireNotNull(planned.getOrNull())
                             output.delete()
                             state = ExportState.RUNNING
                             progress = 0
                             exportStatus = null
-                            val exports = exportsText.toIntOrNull()?.coerceAtLeast(1) ?: 1
                             val lengthMs = ((lengthText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(1)
                             val startMs = ((startText.toDoubleOrNull() ?: 0.0) * 1_000).toLong().coerceAtLeast(0)
-                            val overlayGridSize = overlayGridSizeText.toIntOrNull()?.coerceAtLeast(1) ?: 2
                             exporter.startIhtx(
                                 project,
-                                exports,
+                                plan.exportsPerPreset,
                                 lengthMs,
                                 output.absolutePath,
                                 object : ProjectExporter.Callback {
-                                    override fun onCompleted() { state = ExportState.DONE; progress = 100 }
+                                    override fun onCompleted() { syncNote = exporter.lastSyncNote(); state = ExportState.DONE; progress = 100 }
                                     override fun onError(errorValue: ExportException) {
                                         error = (
                                             listOfNotNull(
@@ -272,15 +445,19 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                         state = ExportState.ERROR
                                     }
                                 },
-                                overlays = ihtxOverlays,
-                                overlayGridSize = overlayGridSize,
+                                overlays = plan.overlays,
+                                overlayGridSize = plan.gridSize,
+                                presets = plan.presets,
+                                overlayPattern = plan.pattern,
                                 exportAspectRatio = exportAspectRatio.ratio,
                                 startMs = startMs,
                                 codec = codec,
                                 veryFast = veryFast,
+                                settings = requireNotNull(encoderSettings.getOrNull()),
+                                antiDesync = antiDesync,
                             )
                         },
-                        enabled = project.clips.isNotEmpty() && carriersReady && missingMedia.isEmpty(),
+                        enabled = planned.isSuccess && encoderSettings.isSuccess && pendingPlugins.isEmpty() && carriersReady && missingMedia.isEmpty(),
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {
@@ -290,6 +467,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                 }
                 ExportState.DONE -> {
                     Text("Export complete")
+                    syncNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     Button(onClick = { save.launch("effect-app.mp4") }) { Text("Save video") }
                     OutlinedButton(
                         onClick = {
@@ -316,6 +494,22 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     }
 }
 
+/** A row of equal-width choices with a check on the selected one. */
+@Composable
+private fun <T> ChoiceRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        options.forEach { option ->
+            OutlinedButton(
+                onClick = { onSelect(option) },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text(if (option == selected) "✓ ${label(option)}" else label(option), maxLines = 1)
+            }
+        }
+    }
+}
+
 /** The messages of an error's causes, innermost last (e.g. which file couldn't be read). */
 private fun causeMessages(error: Throwable): List<String> {
     val messages = mutableListOf<String>()
@@ -329,3 +523,4 @@ private fun causeMessages(error: Throwable): List<String> {
     }
     return messages
 }
+

@@ -127,6 +127,7 @@ class WireValidator(private val catalog: EffectCatalog) {
     private fun checkSegments(list: List<TimelineSegment>) = list.firstNotNullOfOrNull(::checkSegment)
 
     private fun checkSegment(segment: TimelineSegment): String? {
+        if (dev.lec.effectapp.model.NativePluginPolicy.isNative(segment)) return "Native C plug-ins are offline-only."
         id(segment.id)?.let { return it }
         if (segment.effectId !in catalog.knownEffectIds) return "Unknown effect."
         time(segment.startMs)?.let { return it }

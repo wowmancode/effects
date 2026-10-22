@@ -45,7 +45,7 @@ internal fun PresetPanel(
     var namingPreset by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }
     Text("Presets", style = MaterialTheme.typography.titleMedium)
-    Text("Presets save the current clip's complete video and audio effect stacks.")
+    Text("Presets save the current clip's video and audio effect stacks, including replacement audio.")
     Text("Android may clear local data when the app is deleted. Keep an external backup to guarantee recovery.")
     OutlinedTextField(
         value = search,
@@ -109,6 +109,7 @@ internal fun PresetPanel(
             Column(Modifier.weight(1f)) {
                 Text(preset.name, style = MaterialTheme.typography.titleSmall)
                 Text("${preset.effectSegments.size} video · ${preset.audioSegments.size} audio")
+                preset.replacementAudio?.let { Text("Replace audio: ${it.displayName}") }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     OutlinedButton(
                         onClick = { targetClipId?.let { onApply(preset.id, it) } },
@@ -146,3 +147,4 @@ internal fun PresetPanel(
         )
     }
 }
+

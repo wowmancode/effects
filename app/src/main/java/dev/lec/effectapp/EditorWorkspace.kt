@@ -62,6 +62,7 @@ internal fun EditorWorkspace(
     onRestorePresetLibrary: () -> Unit,
     onExportPreset: (String) -> Unit,
     onReplaceMedia: (String) -> Unit,
+    onReplaceAudio: (String) -> Unit,
     onPlayerView: (PlayerView) -> Unit,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
@@ -80,6 +81,7 @@ internal fun EditorWorkspace(
                     onNextClip = onNextClip,
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
+                    onReplaceAudio = onReplaceAudio,
                     onSplitClip = onSplitClip,
                     onResetPreview = onResetPreview,
                     onPlayerView = onPlayerView,
@@ -143,6 +145,7 @@ internal fun EditorWorkspace(
                     onNextClip = onNextClip,
                     onAddClip = onAddClip,
                     onReplaceMedia = onReplaceMedia,
+                    onReplaceAudio = onReplaceAudio,
                     onSplitClip = onSplitClip,
                     onResetPreview = onResetPreview,
                     modifier = Modifier.fillMaxWidth().weight(0.5f),
@@ -219,6 +222,7 @@ private fun PreviewPane(
     currentClipIndex: Int,
     onAddClip: () -> Unit,
     onReplaceMedia: (String) -> Unit,
+    onReplaceAudio: (String) -> Unit,
     onSplitClip: () -> Unit,
     onResetPreview: () -> Unit,
     onPlayerView: (PlayerView) -> Unit,
@@ -288,6 +292,13 @@ private fun PreviewPane(
                 contentPadding = CompactButtonPadding,
             ) {
                 Text("Replace")
+            }
+            OutlinedButton(
+                onClick = { currentClip?.let { onReplaceAudio(it.id) } },
+                enabled = currentClip != null && !currentClip.mediaMissing,
+                contentPadding = CompactButtonPadding,
+            ) {
+                Text("Replace audio")
             }
             OutlinedButton(
                 onClick = onSplitClip,

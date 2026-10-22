@@ -18,10 +18,12 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.EffectPreset
+import dev.lec.effectapp.model.IhtxGridCell
+import dev.lec.effectapp.model.IhtxPlan
 import dev.lec.effectapp.model.EffectKeyframe
 import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.OverlayKeyframe
-import dev.lec.effectapp.model.SourceOverride
 import dev.lec.effectapp.model.TimelineSegment
 import java.io.File
 import java.util.UUID
@@ -39,17 +41,28 @@ class ProjectExporter(private val context: Context) {
  @Volatile private var batch: Batch? = null
  @Volatile private var failedIhtxStatus: IhtxStatus? = null
  @Volatile private var lastProgress: Int? = null
+ @Volatile private var passProgress: Int? = null
  @Volatile private var videoMimeType: String = MimeTypes.VIDEO_H264
- @Volatile private var veryFast: Boolean = false
+ @Volatile private var encoderSettings: ExportEncoderSettings = ExportEncoderSettings()
+ @Volatile private var antiDesync: Boolean = false
+ @Volatile private var outputPath: String? = null
+ /** The unsynced export while the anti-desync pass rewrites it; null otherwise. */
+ @Volatile private var syncSource: File? = null
+ @Volatile private var syncNote: String? = null
  private val resolveBitmap = OverlayBitmapCache.resolver(context)
  private val progressPoll = object : Runnable {
   override fun run() {
    if (callback == null) { lastProgress = null; return }
    val h=ProgressHolder()
-   lastProgress = if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE) null else {
-    val b=batch
-    if(b==null) h.progress else ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100)
+   val b=batch
+   val available=transformer.getProgress(h)==Transformer.PROGRESS_STATE_AVAILABLE
+   lastProgress = when {
+    b!=null -> (((b.done*100)+(if(available) h.progress else 0))/(b.projects.size+1)).coerceIn(0,100)
+    available -> h.progress
+    else -> null
    }
+   // Layered passes often can't report their own progress; the pass count still moves the bar.
+   passProgress = if(b!=null && available) h.progress else null
    queue.postDelayed(this, PROGRESS_POLL_MS)
   }
  }
@@ -59,35 +72,51 @@ class ProjectExporter(private val context: Context) {
  }
  private val transformerListener = object : Transformer.Listener {
   override fun onCompleted(composition: Composition, exportResult: ExportResult) {
+   syncSource?.let { source -> source.delete(); syncSource=null; transformer=newTransformer(); finish { it.onCompleted() }; return }
    val b=batch
-   if (b==null) { transformer=newTransformer(); finish { it.onCompleted() }; return }
-   b.retries=0
+   if (b==null) { transformer=newTransformer(); finishOrSync(outputPath); return }
+   b.retries=0; b.lastError=emptyList()
    b.done++
    b.ihtx?.let { plan ->
     if (b.done < b.projects.size) {
      val previous=b.files[b.done - 1]
-     b.projects[b.done] = plan.nextProject(previous, b.done, audioLeadMs(previous, plan.base.durationMs))
+     b.projects[b.done] = plan.nextProject(Uri.fromFile(previous).toString(), b.done, audioLeadMs(previous, plan.base.durationMs))
     }
    }
    if (b.done < b.projects.size) { transformer=newTransformer(); queue.post { if (batch===b) startStage(b,b.done) } }
    else if (!b.concat && b.files.size == 1) {
     b.files.single().copyTo(File(b.output), overwrite=true)
-    batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() }
+    batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finishOrSync(b.output)
    }
    else if (!b.concat) {
     b.concat=true
     transformer=newTransformer()
     queue.post { if (batch===b) transformer.start(concatenate(b.files,b.ihtx?.base?.durationMs),b.output) }
    }
-   else { batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finish { it.onCompleted() } }
+   else { batch=null; b.files.forEach(File::delete); transformer=newTransformer(); finishOrSync(b.output) }
   }
   override fun onError(composition: Composition, exportResult: ExportResult, exportException: ExportException) {
+   syncSource?.let { source ->
+    // The export itself worked: keep it as it was rather than losing it to the sync pass.
+    syncSource=null
+    val target=outputPath?.let(::File)
+    if(target!=null) { target.delete(); source.renameTo(target) }
+    syncNote="Anti-desync failed, saved without it: "+(exportException.message ?: exportException.javaClass.simpleName)
+    transformer=newTransformer(); finish { it.onCompleted() }
+    return
+   }
    val b=batch
-   if (b != null && !b.concat && b.done < b.projects.size && b.retries < MAX_STAGE_RETRIES) {
+   // A crashed or killed plug-in worker gets more tries, each with a fresh worker and a pause.
+   val nativeFailure=isNativeWorkerFailure(exportException)
+   val pluginStopped=generateSequence<Throwable>(exportException) { it.cause }.take(10).any { it.message?.contains("Plug-in said:")==true }
+   val maxRetries=when { pluginStopped -> 0; nativeFailure -> MAX_NATIVE_RETRIES; else -> MAX_STAGE_RETRIES }
+   if (b != null && !b.concat && b.done < b.projects.size && b.retries < maxRetries) {
     b.retries++
+    b.lastError=listOfNotNull(exportException.message)+generateSequence(exportException.cause) { it.cause }.take(4).mapNotNull { it.message ?: it.javaClass.simpleName }
     b.files.getOrNull(b.done)?.delete()
+    if(nativeFailure) dev.lec.effectapp.effects.NativeCClient.restartWorker()
     transformer=newTransformer()
-    queue.postDelayed({ if (batch===b) startStage(b,b.done) }, RETRY_COOLDOWN_MS)
+    queue.postDelayed({ if (batch===b) startStage(b,b.done) }, if(nativeFailure) NATIVE_RETRY_COOLDOWN_MS else RETRY_COOLDOWN_MS)
     return
    }
    failedIhtxStatus=ihtxStatus(); batch?.files?.forEach(File::delete); batch=null; transformer=newTransformer(); finish { it.onError(exportException) }
@@ -99,12 +128,19 @@ class ProjectExporter(private val context: Context) {
   .setLooper(exportThread.looper)
   .setVideoMimeType(videoMimeType)
   .setAudioMimeType(MimeTypes.AUDIO_AAC)
-  .apply { if (veryFast) setEncoderFactory(veryFastEncoderFactory()) }
+  // Media3 gives up after 10 s without output ("no output sample written in the last 10000
+  // milliseconds"). Starting a plug-in worker and compiling can take longer than that; real hangs
+  // are still caught by the plug-in's own per-frame timeout.
+  .setMaxDelayBetweenMuxerSamplesMs(MAX_DELAY_BETWEEN_SAMPLES_MS)
+  .apply { encoderSettings.takeUnless { it.isDefault }?.let { setEncoderFactory(encoderFactory(it)) } }
   .addListener(transformerListener)
   .build()
- fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264) {
+ fun start(project: EditProject, outputPath: String, callback: Callback, codec: ExportCodec = ExportCodec.H264, settings: ExportEncoderSettings = ExportEncoderSettings(), antiDesync: Boolean = false) {
+  if (rejectNative(project, callback)) return
   check(this.callback==null) { "An export is already running" }; failedIhtxStatus=null; this.callback=callback
   videoMimeType=codec.mimeType
+  encoderSettings=settings
+  this.antiDesync=antiDesync; this.outputPath=outputPath; syncNote=null
   preparing=true
   background {
    val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
@@ -112,7 +148,8 @@ class ProjectExporter(private val context: Context) {
     preparing=false
     if(this.callback===callback) {
      transformer=newTransformer()
-     transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap),outputPath)
+     val size=settings.maxLongEdge?.let { edge -> prepared.clips.firstOrNull()?.let { videoSize(it.sourceUri) }?.let { capLongEdge(it,edge) } }
+     transformer.start(ProjectCompositionFactory.create(prepared,resolveBitmap,outputPresentationSize=size),outputPath)
      queue.removeCallbacks(progressPoll); queue.post(progressPoll)
     }
    }
@@ -126,19 +163,33 @@ class ProjectExporter(private val context: Context) {
   */
  /**
   * [veryFast]: every pass is rendered at up to 720p and encoded at a modest bitrate with fewer
-  * keyframes, so effects, encoder and disk all have far less to push through per pass.
+  * keyframes, so effects, encoder and disk all have far less to push through per pass. Anything
+  * chosen in [settings] (bitrate, keyframe interval, B-frames, audio bitrate, resolution…) wins
+  * over those defaults.
   */
- fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true) {
+ fun startIhtx(project: EditProject,exports:Int,lengthMs:Long,outputPath:String,callback:Callback,overlays:List<Overlay> = emptyList(),overlayGridSize:Int = 2,exportAspectRatio:Float? = null,startMs:Long = 0,codec:ExportCodec = ExportCodec.H264,veryFast:Boolean = true,presets:List<EffectPreset> = emptyList(),overlayPattern:List<IhtxGridCell> = emptyList(),settings:ExportEncoderSettings = ExportEncoderSettings(),antiDesync:Boolean = false) {
+  settings.problem()?.let { message -> main.post { callback.onError(ExportException.createForUnexpected(IllegalArgumentException(message))) }; return }
   check(this.callback==null) { "An export is already running" }
+  val allSources = project.copy(clips = project.clips + presets.map { preset ->
+   dev.lec.effectapp.model.Clip(id="native-check", sourceUri="", displayName=preset.name, trimEndMs=1, effectSegments=preset.effectSegments, audioSegments=preset.audioSegments)
+  } + dev.lec.effectapp.model.Clip(id="native-check-overlays", sourceUri="", displayName="IHTX overlays", trimEndMs=1, overlays=overlays))
+  if (rejectNative(allSources, callback)) return
+  val planned=runCatching { IhtxPlan(project,exports,presets,overlays,overlayGridSize,overlayPattern) }
+  val plan=planned.getOrNull()
+  if(plan==null) {
+   main.post { callback.onError(ExportException.createForUnexpected(IllegalArgumentException(planned.exceptionOrNull()?.message))) }
+   return
+  }
   videoMimeType=codec.mimeType
-  this.veryFast=veryFast
+  encoderSettings=settings.resolved(veryFast)
+  this.antiDesync=antiDesync; this.outputPath=outputPath; syncNote=null
   failedIhtxStatus=null
   this.callback=callback
   preparing=true
   background {
    // Reverse the whole clips first so trimming the start keeps what the preview shows.
    // Fit clips to their files' real lengths first: a start past the end of a file fails the export.
-   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,project)).takeForExport(startMs,lengthMs) }
+   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,plan.firstProject())).takeForExport(startMs,lengthMs) }
    queue.post {
     preparing=false
     if(this.callback!==callback) return@post
@@ -148,21 +199,33 @@ class ProjectExporter(private val context: Context) {
      return@post
     }
     transformer=newTransformer()
-    beginIhtx(base,exports,outputPath,overlays,overlayGridSize,exportAspectRatio)
+    beginIhtx(plan.copy(base=base),outputPath,exportAspectRatio)
     queue.removeCallbacks(progressPoll); queue.post(progressPoll)
    }
   }
  }
- private fun beginIhtx(base: EditProject,exports:Int,outputPath:String,overlays:List<Overlay>,overlayGridSize:Int,exportAspectRatio:Float?) {
-  val passes=exports.coerceAtLeast(1); val total=(overlays.size+1)*passes
+ private fun rejectNative(project: EditProject, callback: Callback): Boolean {
+  val error = dev.lec.effectapp.effects.NativeCClient.projectError(project) ?: return false
+  main.post { callback.onError(ExportException.createForUnexpected(IllegalStateException(error))) }
+  return true
+ }
+ private fun beginIhtx(plan:IhtxPlan,outputPath:String,exportAspectRatio:Float?) {
+  val base=plan.base; val total=plan.totalExports
   val token=UUID.randomUUID().toString(); val parent=File(outputPath).parentFile ?: error("Export folder is unavailable")
   val files=List(total) { i -> File(parent,"ihtx-" + token + "-" + i + ".mp4") }
   val fullSize=outputSizeForAspect(videoSize(base.clips.first().sourceUri),exportAspectRatio)
-  val outputSize=if(veryFast) fullSize?.let(::capForVeryFast) else fullSize
-  val plan=IhtxPlan(base,overlays,passes,overlayGridSize.coerceAtLeast(1),outputSize?.let { it.width.toFloat() / it.height.toFloat() },outputSize)
-  batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan); startStage(requireNotNull(batch),0)
+  val outputSize=encoderSettings.maxLongEdge?.let { edge -> fullSize?.let { capLongEdge(it,edge) } } ?: fullSize
+  batch=Batch(MutableList(total){base},files,outputPath,ihtx=plan,outputSize=outputSize,overlayAspectRatio=outputSize?.let { it.width.toFloat()/it.height.toFloat() }); startStage(requireNotNull(batch),0)
  }
- fun ihtxStatus():IhtxStatus? { val b=batch ?: return null; return if(b.concat) IhtxStatus(b.projects.size,b.projects.size,true) else IhtxStatus(b.done+1,b.projects.size,false) }
+ fun ihtxStatus():IhtxStatus? {
+  val b=batch ?: return null
+  val done=b.done
+  if(b.concat || done>=b.projects.size) return IhtxStatus(b.projects.size,b.projects.size,true)
+  val plan=b.ihtx
+  val seconds=if(b.stageStartedAt>0) (android.os.SystemClock.elapsedRealtime()-b.stageStartedAt)/1_000 else 0
+  return IhtxStatus(done+1,b.projects.size,false,plan?.presetForPass(done)?.name,plan?.let { done%it.exportsPerPreset+1 },plan?.exportsPerPreset,
+   passSeconds=seconds,passProgress=passProgress,retry=b.retries,retryReason=b.lastError.distinct().joinToString(" · ").takeIf { b.retries>0 && it.isNotBlank() })
+ }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
  /** Latest progress (0..100), sampled on the export thread; null when not known. */
  fun progress():Int? = lastProgress
@@ -172,13 +235,68 @@ class ProjectExporter(private val context: Context) {
   queue.post {
    runCatching { transformer.cancel() }
    batch?.files?.forEach(File::delete); batch=null
+   syncSource?.delete(); syncSource=null
    transformer=newTransformer()
   }
  }
  /** Cancels anything running and ends the export thread; the exporter can't be used afterwards. */
  fun release(){ cancel(); queue.post { exportThread.quitSafely() } }
  interface Callback { fun onCompleted(); fun onError(error:ExportException) }
+ /** True when [error] came from the native C plug-in worker dying or not answering. */
+ private fun isNativeWorkerFailure(error:Throwable):Boolean {
+  var cause:Throwable?=error; var depth=0
+  while(cause!=null && depth<10) {
+   // The plug-in stopped the worker on purpose and said why: trying again won't change that.
+   if(cause.message?.contains("Plug-in said:")==true) return false
+   if(cause is android.os.DeadObjectException) return true
+   if(cause.message?.contains("native C worker",ignoreCase=true)==true) return true
+   cause=cause.cause; depth++
+  }
+  return false
+ }
+ /** True while the anti-desync pass is rewriting the finished export. */
+ fun syncing():Boolean = syncSource!=null
+ /** What anti-desync did to the last export (speed and track lengths), or null when it was off. */
+ fun lastSyncNote():String? = syncNote
+ /**
+  * Ends the export, or with anti-desync on first measures the finished file's tracks: when the
+  * picture and sound lengths differ, the picture is re-timed to exactly the sound's length (the
+  * sound is copied through untouched), so they start and end together with no drift between.
+  */
+ private fun finishOrSync(output:String?) {
+  if(!antiDesync || output==null) { finish { it.onCompleted() }; return }
+  val file=File(output)
+  val (audioUs,videoUs)=trackDurationsUs(file)
+  fun s(us:Long)=String.format(java.util.Locale.ROOT,"%.3f s",us/1_000_000.0)
+  if(audioUs<=0 || videoUs<=0) { syncNote="Anti-desync: nothing to sync (no ${if(audioUs<=0) "sound" else "picture"} track)."; finish { it.onCompleted() }; return }
+  val diffUs=videoUs-audioUs
+  if(kotlin.math.abs(diffUs)<SYNC_TOLERANCE_US) { syncNote="Anti-desync: already in sync · video ${s(videoUs)}, audio ${s(audioUs)}"; finish { it.onCompleted() }; return }
+  // Playing the picture at video/audio speed makes it last exactly as long as the sound.
+  val speed=videoUs.toDouble()/audioUs
+  if(speed !in MIN_SYNC_SPEED..MAX_SYNC_SPEED) { syncNote="Anti-desync skipped: tracks differ too much to stretch (video ${s(videoUs)}, audio ${s(audioUs)})"; finish { it.onCompleted() }; return }
+  val source=File(file.parentFile,"desync-"+UUID.randomUUID()+".mp4")
+  if(!file.renameTo(source)) { syncNote="Anti-desync failed: couldn't stage the export."; finish { it.onCompleted() }; return }
+  syncNote="Anti-desync · video speed ${String.format(java.util.Locale.ROOT,"%.6f",speed)} · video ${s(videoUs)}, audio ${s(audioUs)}, diff ${String.format(java.util.Locale.ROOT,"%+.3f s",diffUs/1_000_000.0)}"
+  syncSource=source
+  queue.post { if(syncSource===source && callback!=null) transformer.start(syncComposition(source,speed.toFloat()),output) }
+ }
+ /** The picture of [source] re-timed by [speed] (re-encoded), with its sound copied as it is. */
+ private fun syncComposition(source:File,speed:Float):Composition {
+  val uri=Uri.fromFile(source)
+  val video=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_VIDEO))
+   .addItem(EditedMediaItem.Builder(MediaItem.fromUri(uri)).setRemoveAudio(true).setSpeed(object:androidx.media3.common.audio.SpeedProvider {
+    override fun getSpeed(timeUs:Long):Float = speed
+    override fun getNextSpeedChangeTimeUs(timeUs:Long):Long = androidx.media3.common.C.TIME_UNSET
+   }).build())
+   .build()
+  val audio=EditedMediaItemSequence.Builder(setOf(androidx.media3.common.C.TRACK_TYPE_AUDIO))
+   .addItem(EditedMediaItem.Builder(MediaItem.fromUri(uri)).setRemoveVideo(true).build())
+   .build()
+  return Composition.Builder(listOf(video,audio)).setTransmuxAudio(true).build()
+ }
  private fun startStage(b:Batch,index:Int){
+  // A fresh plug-in worker every few passes, so leaked memory can't build up over a long export.
+  if(index>0 && index%WORKER_RECYCLE_PASSES==0 && b.retries==0) dev.lec.effectapp.effects.NativeCClient.restartWorker()
   if(index>0) {
    // Later passes re-apply the clip's effects to the previous pass, including any reverse.
    preparing=true
@@ -190,7 +308,7 @@ class ProjectExporter(private val context: Context) {
   } else startTransformer(b,index)
  }
  private fun background(block:()->Unit) { Thread(block,"export-prepare").start() }
- private fun startTransformer(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.ihtx?.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.ihtx?.outputSize,outputPresentationSize=b.ihtx?.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
+ private fun startTransformer(b:Batch,index:Int){ b.stageStartedAt=android.os.SystemClock.elapsedRealtime(); transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.outputSize,outputPresentationSize=b.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
  /**
   * The priming silence (ms, 0..250) an AAC encoder put in front of a pass's sound when the device
   * doesn't report it for removal: how much longer the sound track is than the length the pass was
@@ -228,22 +346,39 @@ class ProjectExporter(private val context: Context) {
    if(rotation % 180 == 0) Size(width,height) else Size(height,width)
   } catch (_:RuntimeException) { null } finally { retriever.release() }
  }
- /** Fits [size] within 1280 px on its long edge (even dimensions); smaller sizes are kept. */
- private fun capForVeryFast(size:Size):Size {
+ /** Fits [size] within [longEdge] px on its long edge (even dimensions); smaller sizes are kept. */
+ private fun capLongEdge(size:Size,longEdge:Int):Size {
   val longest=maxOf(size.width,size.height)
-  if(longest<=VERY_FAST_LONG_EDGE) return size
-  val scale=VERY_FAST_LONG_EDGE.toFloat()/longest
+  if(longest<=longEdge) return size
+  val scale=longEdge.toFloat()/longest
   fun even(value:Float):Int = (((value.roundToInt().coerceAtLeast(2)+1)/2)*2)
   return Size(even(size.width*scale),even(size.height*scale))
  }
- /** Encoder settings for Very fast: modest bitrate, a keyframe every few seconds, no B-frames. */
- private fun veryFastEncoderFactory()=androidx.media3.transformer.DefaultEncoderFactory.Builder(context)
+ /**
+  * An encoder asking for [settings]: KEY_BIT_RATE and KEY_BITRATE_MODE, KEY_I_FRAME_INTERVAL,
+  * KEY_MAX_B_FRAMES, KEY_OPERATING_RATE/KEY_PRIORITY and the AAC bitrate. Fallback stays on, so a
+  * value the phone's encoder can't do is brought into its range instead of failing the export.
+  */
+ private fun encoderFactory(settings:ExportEncoderSettings)=androidx.media3.transformer.DefaultEncoderFactory.Builder(context)
   .setRequestedVideoEncoderSettings(
    androidx.media3.transformer.VideoEncoderSettings.Builder()
-    .setBitrate(VERY_FAST_BITRATE)
-    .setiFrameIntervalSeconds(VERY_FAST_KEYFRAME_SECONDS)
+    .apply {
+     settings.videoBitrate?.let { setBitrate(it) }
+     setBitrateMode(settings.bitrateMode.mediaCodecValue)
+     settings.keyframeIntervalSeconds?.let { setiFrameIntervalSeconds(it) }
+     settings.maxBFrames?.takeIf { it>0 }?.let { setMaxBFrames(it) }
+     if(settings.encoderSpeed==ExportEncoderSettings.EncoderSpeed.REALTIME) {
+      // Priority 0 = real time; the operating rate is left to the encoder.
+      setEncoderPerformanceParameters(androidx.media3.transformer.VideoEncoderSettings.RATE_UNSET,0)
+     }
+    }
     .build(),
   )
+  .apply {
+   settings.audioBitrate?.let { bitrate ->
+    setRequestedAudioEncoderSettings(androidx.media3.transformer.AudioEncoderSettings.Builder().setBitrate(bitrate).build())
+   }
+  }
   .setEnableFallback(true)
   .build()
  private fun outputSizeForAspect(source:Size?,aspectRatio:Float?):Size? {
@@ -297,8 +432,9 @@ class ProjectExporter(private val context: Context) {
    .setTransmuxAudio(false)
    .build()
  }
- data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean)
- private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0)
+ /** [passSeconds]: time on the current pass; [retry] > 0 when it's being tried again after [retryReason]. */
+ data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean,val presetName:String?=null,val exportInPreset:Int?=null,val exportsPerPreset:Int?=null,val passSeconds:Long=0,val passProgress:Int?=null,val retry:Int=0,val retryReason:String?=null)
+ private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0,val outputSize:Size?=null,val overlayAspectRatio:Float?=null,var stageStartedAt:Long=0,var lastError:List<String> = emptyList())
  private fun EditProject.takeForExport(start:Long,length:Long):EditProject {
   // Start inside the project (at least the last millisecond) and keep the length within what's left.
   var skip=start.coerceIn(0,(durationMs-1).coerceAtLeast(0))
@@ -346,38 +482,20 @@ class ProjectExporter(private val context: Context) {
    sourceOffsetMs=sourceOffsetMs+((cut-startMs).coerceAtLeast(0)*playbackSpeed.toDouble()).roundToLong(),
   )
  }
- private data class IhtxPlan(val base:EditProject,val overlays:List<Overlay>,val passes:Int,val gridSize:Int,val overlayAspectRatio:Float?,val outputSize:Size?) {
-  private companion object { const val GRID_COVERAGE = 1.02f }
-  fun mutesBaseAudio(index:Int):Boolean = index>0 && index%passes==0
-  /**
-   * The next pass: the previous pass's file as one clip, with the first clip's effects again.
-   * [audioLeadMs] is the silence the audio encoder put in front of that file's sound; the next
-   * pass reads the sound from just after it, so picture and sound stay together however many
-   * passes are stacked (otherwise every pass pushes the sound a little later).
-   */
-  fun nextProject(previous:File,index:Int,audioLeadMs:Long = 0):EditProject {
-   val stage=index/passes
-   val template=base.clips.first()
-   val uri=Uri.fromFile(previous).toString()
-   val audio=if(audioLeadMs>0 && !template.audioSegments.any { it.enabled && it.effectId=="reverse_audio" }) SourceOverride(uri,audioLeadMs) else null
-   val first=template.copy(sourceUri=uri,trimStartMs=0,trimEndMs=base.durationMs,speed=1f,overlays=emptyList(),videoOverride=null,audioOverride=audio)
-   val project=base.copy(clips=listOf(first))
-   if(index%passes!=0 || stage==0) return project
-   val overlay=overlays[stage-1]
-   val column=(stage-1)%gridSize; val row=(stage-1)/gridSize
-   val tile=overlay.copy(startMs=0,endMs=first.durationMs,scale=GRID_COVERAGE/gridSize,offsetX=((column+.5f)/gridSize)*2f-1f,offsetY=1f-((row+.5f)/gridSize)*2f)
-   return project.copy(clips=listOf(first.copy(overlays=listOf(tile))))
-  }
- }
 
  private companion object {
   const val PROGRESS_POLL_MS = 200L
   const val MAX_AUDIO_LEAD_MS = 250L
-  const val VERY_FAST_LONG_EDGE = 1280
-  const val VERY_FAST_BITRATE = 4_000_000
-  const val VERY_FAST_KEYFRAME_SECONDS = 5f
   const val MAX_STAGE_RETRIES = 2
   const val RETRY_COOLDOWN_MS = 150L
+  const val MAX_NATIVE_RETRIES = 5
+  const val NATIVE_RETRY_COOLDOWN_MS = 1_500L
+  const val WORKER_RECYCLE_PASSES = 10
+  const val MAX_DELAY_BETWEEN_SAMPLES_MS = 30_000L
+  /** Under ~half a frame at 30 fps the tracks count as in sync and the export isn't re-encoded. */
+  const val SYNC_TOLERANCE_US = 15_000L
+  const val MIN_SYNC_SPEED = 0.5
+  const val MAX_SYNC_SPEED = 2.0
  }
 
 }

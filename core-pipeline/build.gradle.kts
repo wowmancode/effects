@@ -19,4 +19,5 @@ dependencies {
     implementation(project(":core-effects"))
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.transformer)
+    testImplementation(libs.junit)
 }

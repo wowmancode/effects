@@ -1,0 +1,1 @@
+-keep class dev.lec.effectapp.effects.NativeCCompiler { *; }

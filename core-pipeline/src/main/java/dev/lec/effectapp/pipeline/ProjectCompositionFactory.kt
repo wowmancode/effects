@@ -106,7 +106,7 @@ object ProjectCompositionFactory {
         }
         // A clip that reads its sound from elsewhere (reversed, or offset in IHTX passes) needs
         // picture and sound in separate sequences.
-        val hasOverrides = project.clips.any { it.videoOverride != null || it.audioOverride != null }
+        val hasOverrides = project.clips.any { it.videoOverride != null || it.audioOverride != null || it.hasReplacementAudio }
         val baseSequences = if (!hasReverse && !hasKeyframes && !hasOverrides) {
             val items = project.clips.map { editedItem(it, resolveBitmap, targetFrameRate, outputPresentationSize, includeAudio = !muteBaseAudio, placement = basePlacement) }
             listOf(
@@ -123,16 +123,21 @@ object ProjectCompositionFactory {
                     editedItem(clip, slice, includeVideo = true, includeAudio = false, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source, placement = basePlacement)
                 }
             }
-            val audioItems = project.clips.flatMap { clip ->
+            val audioSequence = EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO))
+            project.clips.forEach { clip ->
+                if (clip.hasReplacementAudio) {
+                    audioSequence.addGap(clip.durationMs * 1_000)
+                    return@forEach
+                }
                 // Slice audio only for its own keyframes/reverse, so video keyframes don't chop the audio.
                 val source = clip.audioOverride
-                sourceSlices(clip, source == null && clip.reversesAudio(), clip.audioSegments, targetFrameRate).map { slice ->
-                    editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source)
+                sourceSlices(clip, source == null && clip.reversesAudio(), clip.audioSegments, targetFrameRate).forEach { slice ->
+                    audioSequence.addItem(editedItem(clip, slice, includeVideo = false, includeAudio = true, resolveBitmap = resolveBitmap, targetFrameRate = targetFrameRate, outputPresentationSize = outputPresentationSize, source = source))
                 }
             }
             buildList {
                 add(EditedMediaItemSequence.withVideoFrom(videoItems))
-                if (!muteBaseAudio) add(EditedMediaItemSequence.withAudioFrom(audioItems))
+                if (!muteBaseAudio) add(audioSequence.build())
             }
         }
 
@@ -343,7 +348,7 @@ object ProjectCompositionFactory {
     private fun overlayTracks(project: EditProject): List<VideoOverlayTrack> = buildList {
         var clipStartMs = 0L
         project.clips.forEach { clip ->
-            clip.overlays.forEach { overlay ->
+            clip.playbackOverlays().forEach { overlay ->
                 val localStart = overlay.startMs.coerceIn(0, clip.durationMs)
                 val localEnd = (if (overlay.endMs <= localStart) clip.durationMs else overlay.endMs)
                     .coerceIn(localStart, clip.durationMs)
@@ -569,7 +574,7 @@ object ProjectCompositionFactory {
             if (track.globalStartMs > cursorMs) builder.addGap((track.globalStartMs - cursorMs) * 1_000)
             val overlay = track.overlay
             val speed = overlay.playbackSpeed
-            overlayPieces(track, playsSource = true, segments = emptyList()).forEach { piece ->
+            overlayPieces(track, playsSource = true, segments = if (overlay.replacesClipAudio) overlay.audioSegments else emptyList()).forEach { piece ->
                 val pieceMs = piece.endMs - piece.startMs
                 val mediaItem = MediaItem.Builder()
                     .setUri(Uri.parse(overlay.sourceUri))

@@ -6,6 +6,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Checkbox
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import dev.lec.effectapp.effects.NativeCClient
+import dev.lec.effectapp.model.NATIVE_C_PLUGIN_LANGUAGE
+import dev.lec.effectapp.model.NativePluginPolicy
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -29,25 +37,30 @@ internal fun PluginSourceEditor(
     audio: Boolean,
     language: String,
     controls: Map<String, Float>,
+    online: Boolean = false,
     onApply: (String, Map<String, Float>, String) -> Unit,
 ) {
     val context = LocalContext.current
     var draft by remember(source) { mutableStateOf(source) }
-    var selectedLanguage by remember(source, language, audio) { mutableStateOf(if (audio) PLUGIN_LANGUAGE_C_STYLE else language) }
+    var selectedLanguage by remember(source, language, audio) { mutableStateOf(language) }
     var importedControls by remember(source) { mutableStateOf<Map<String, Float>?>(null) }
     var fileMessage by remember(source) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    var trusted by remember(draft, selectedLanguage) { mutableStateOf(false) }
+    var compiling by remember { mutableStateOf(false) }
+    val native = selectedLanguage == NATIVE_C_PLUGIN_LANGUAGE
     val error = remember(draft, audio, selectedLanguage) { validatePluginSource(draft, audio, selectedLanguage) }
     val importPlugin = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         runCatching {
             val value = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                 ?: error("Could not read plug-in file.")
-            PluginFile.decode(value, audio).also { plugin ->
+            PluginFile.decode(value, audio, selectedLanguage).also { plugin ->
                 validatePluginSource(plugin.source, audio, plugin.language)?.let { validation -> error(validation) }
             }
         }.onSuccess { plugin ->
             draft = plugin.source
-            selectedLanguage = if (audio) PLUGIN_LANGUAGE_C_STYLE else plugin.language
+            selectedLanguage = plugin.language
             importedControls = plugin.controls.takeIf { it.isNotEmpty() }
             fileMessage = "Plug-in imported. Apply it to use the source and saved controls."
         }.onFailure { failure ->
@@ -67,22 +80,20 @@ internal fun PluginSourceEditor(
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            if (!audio && selectedLanguage == PLUGIN_LANGUAGE_GLSL) "Full GLSL fragment shader" else "Sandboxed C-style plug-in",
+            if (native) "Trusted native C · offline only" else if (!audio && selectedLanguage == PLUGIN_LANGUAGE_GLSL) "Full GLSL fragment shader" else "Sandboxed C-style plug-in",
             style = MaterialTheme.typography.titleSmall,
         )
-        if (!audio) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { selectedLanguage = PLUGIN_LANGUAGE_C_STYLE; draft = VIDEO_WARP_TEMPLATE },
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (selectedLanguage == PLUGIN_LANGUAGE_C_STYLE) "✓ C-style" else "C-style") }
-                OutlinedButton(
-                    onClick = { selectedLanguage = PLUGIN_LANGUAGE_GLSL; draft = GLSL_WARP_TEMPLATE },
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (selectedLanguage == PLUGIN_LANGUAGE_GLSL) "✓ Full GLSL" else "Full GLSL") }
-            }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { selectedLanguage = PLUGIN_LANGUAGE_C_STYLE; draft = if (audio) AUDIO_CHORUS_TEMPLATE else VIDEO_WARP_TEMPLATE }, enabled = !compiling) { Text("C-style") }
+            if (!audio) OutlinedButton(onClick = { selectedLanguage = PLUGIN_LANGUAGE_GLSL; draft = GLSL_WARP_TEMPLATE }, enabled = !compiling) { Text("GLSL") }
+            OutlinedButton(onClick = { selectedLanguage = NATIVE_C_PLUGIN_LANGUAGE; draft = if (audio) NATIVE_AUDIO_TEMPLATE else NATIVE_VIDEO_TEMPLATE }, enabled = !online && !compiling) { Text("Native C") }
         }
-        if (audio) {
+        if (native) {
+            Text(NativePluginPolicy.WARNING, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium)
+            Text("C runs with this app’s granted permissions, including access to its files and network. It can crash or hang the worker. This does not grant root access. Native C is unavailable in online rooms.")
+            Text("API: float PCM audio or RGBA8 video (bottom row first), time in seconds, controls[0…7], and 64 KiB of zeroed persistent state. Optional lec_destroy(void *state). Includes: lec_plugin.h, math.h, stdlib.h, string.h, stdint.h, stdio.h.")
+            if (online) Text("Leave the online room to compile or run native C.", color = MaterialTheme.colorScheme.error)
+        } else if (audio) {
             Text("Writable: sample · Readable: sample, channel, time, sample_rate, control1…control8")
             Text("History: delay(milliseconds), pitch(semitones)")
             Text("Oscillators: sine(hz), square(hz), saw(hz), triangle(hz)")
@@ -102,7 +113,7 @@ internal fun PluginSourceEditor(
             Text(if (audio) "Temporary variables: temp1…temp16" else "Temporary variables: temp1…temp16 · dimensions: width, height, aspect")
             Text("No loops, pointers, files, network, or native calls.")
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!native) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { draft = if (audio) AUDIO_CHORUS_TEMPLATE else if (selectedLanguage == PLUGIN_LANGUAGE_GLSL) GLSL_WARP_TEMPLATE else VIDEO_WARP_TEMPLATE },
                 modifier = Modifier.weight(1f),
@@ -116,13 +127,14 @@ internal fun PluginSourceEditor(
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
+            enabled = !compiling,
             label = { Text("Plug-in source") },
             minLines = 8,
             maxLines = 16,
             modifier = Modifier.fillMaxWidth(),
         )
         fileMessage?.let { message ->
-            val failed = message.startsWith("Import failed") || message.startsWith("Save failed")
+            val failed = message.startsWith("Import failed") || message.startsWith("Save failed") || message.startsWith("Compile failed")
             Text(message, color = if (failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -139,14 +151,33 @@ internal fun PluginSourceEditor(
         if (error != null) {
             Text(error, color = MaterialTheme.colorScheme.error)
         } else {
-            Text("Source is valid.", color = MaterialTheme.colorScheme.primary)
+            Text(if (native) "Ready to compile after you review and trust the code." else "Source is valid.", color = MaterialTheme.colorScheme.primary)
+        }
+        if (native) Row {
+            Checkbox(checked = trusted, onCheckedChange = { trusted = it }, enabled = !online && !compiling)
+            Text("I have reviewed this code and trust it to run with the app’s permissions.")
         }
         Button(
-            onClick = { onApply(draft, importedControls ?: controls, selectedLanguage); importedControls = null },
-            enabled = error == null && (draft != source || importedControls != null),
+            onClick = {
+                if (native) {
+                    val code = draft
+                    val values = importedControls ?: controls
+                    compiling = true
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) { runCatching { NativeCClient.compileAndApprove(code, audio) } }
+                        compiling = false
+                        result.onSuccess {
+                            onApply(code, values, NATIVE_C_PLUGIN_LANGUAGE)
+                            importedControls = null
+                            fileMessage = "Native C compiled and approved on this device."
+                        }.onFailure { fileMessage = "Compile failed: ${it.message}" }
+                    }
+                } else { onApply(draft, importedControls ?: controls, selectedLanguage); importedControls = null }
+            },
+            enabled = error == null && !compiling && (if (native) trusted && !online else draft != source || selectedLanguage != language || importedControls != null),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Apply plug-in")
+            Text(if (compiling) "Compiling…" else if (native) "Compile and apply" else "Apply plug-in")
         }
     }
 }
@@ -195,4 +226,28 @@ sample = mix(sample, delay(18.0 + sine(control2) * control1 * 8.0), 0.5);
 
 private const val AUDIO_PITCH_TEMPLATE = """
 sample = mix(sample, pitch(control2 * 12.0), clamp(control1, 0.0, 1.0));
+"""
+
+
+private const val NATIVE_AUDIO_TEMPLATE = """
+#include <lec_plugin.h>
+void lec_audio(float *samples, int frames, int channels, int sample_rate,
+               double time, const float controls[8], void *state) {
+    for (int i = 0; i < frames * channels; ++i) {
+        samples[i] *= controls[0];
+    }
+}
+"""
+
+private const val NATIVE_VIDEO_TEMPLATE = """
+#include <lec_plugin.h>
+void lec_video(unsigned char *rgba, int width, int height, int stride,
+               double time, const float controls[8], void *state) {
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            unsigned char *p = rgba + y * stride + x * 4;
+            for (int c = 0; c < 3; ++c) p[c] = 255 - p[c];
+        }
+    }
+}
 """

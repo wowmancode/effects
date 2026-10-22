@@ -22,6 +22,7 @@ import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.EditProject
+import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.model.SourceOverride
 import java.io.BufferedOutputStream
 import java.io.File
@@ -80,10 +81,24 @@ object ReverseMediaCache {
         val video = if (clip.reversesVideo() && clip.videoOverride == null) {
             reversedVideo(context, clip.sourceUri, clip.trimStartMs, clip.trimEndMs)?.let { SourceOverride(it) }
         } else clip.videoOverride
-        val audio = if (clip.reversesAudio() && clip.audioOverride == null) {
+        val audio = if (clip.reversesAudio() && !clip.hasReplacementAudio && clip.audioOverride == null) {
             reversedAudio(context, clip.sourceUri, clip.trimStartMs, clip.trimEndMs)?.let { SourceOverride(it) }
         } else clip.audioOverride
-        return clip.copy(videoOverride = video, audioOverride = audio)
+        return clip.copy(videoOverride = video, audioOverride = audio, overlays = prepareAudioOverlays(context, clip))
+    }
+
+    /** Shares the clip's audio stack with its replacement and reverses that source when requested. */
+    fun prepareAudioOverlays(context: Context, clip: Clip): List<Overlay> = clip.playbackOverlays().map { overlay ->
+        if (!overlay.replacesClipAudio || !clip.reversesAudio() || overlay.sourceDurationMs <= 0) return@map overlay
+        val duration = overlay.sourceDurationMs
+        val uri = reversedAudio(context, overlay.sourceUri, 0, duration) ?: return@map overlay
+        // Reverse the portion heard in this clip, including the phase of a looping or split source.
+        val end = overlay.sourceMsAt(clip.durationMs).mod(duration)
+        overlay.copy(
+            sourceUri = uri,
+            sourceStartMs = (duration - end).mod(duration),
+            sourceOffsetMs = 0,
+        )
     }
 
     private fun cached(

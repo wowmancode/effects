@@ -1,5 +1,7 @@
 package dev.lec.effectapp.effects
 
+import dev.lec.effectapp.model.NATIVE_C_PLUGIN_LANGUAGE
+import dev.lec.effectapp.model.NativePluginPolicy
 import android.content.Context
 import android.opengl.GLES20
 import androidx.annotation.OptIn
@@ -33,7 +35,7 @@ const val PLUGIN_LANGUAGE_GLSL = "glsl"
 
 class VideoPluginEffect : LecEffect {
     override val id = "plugin_video"
-    override val displayName = "Plug-In · video (C-style)"
+    override val displayName = "Plug-In · video"
     override val category = EffectCategory.EFFECTS
     override val params = pluginControlParams()
     @OptIn(UnstableApi::class)
@@ -43,7 +45,7 @@ class VideoPluginEffect : LecEffect {
 
 class AudioPluginEffect : LecEffect {
     override val id = "plugin_audio"
-    override val displayName = "Plug-In · audio (C-style)"
+    override val displayName = "Plug-In · audio"
     override val category = EffectCategory.AUDIO
     override val params = pluginControlParams()
     @OptIn(UnstableApi::class)
@@ -59,6 +61,7 @@ fun validatePluginSource(
     audio: Boolean,
     language: String = PLUGIN_LANGUAGE_C_STYLE,
 ): String? = when (language) {
+    NATIVE_C_PLUGIN_LANGUAGE -> NativePluginPolicy.validateSource(source, audio)
     PLUGIN_LANGUAGE_C_STYLE -> compilePlugin(source, audio).exceptionOrNull()?.message
     PLUGIN_LANGUAGE_GLSL -> validateGlslFragment(source, audio)
     else -> "Unknown plug-in language."
@@ -70,6 +73,7 @@ fun videoPluginEffect(
     controls: Map<String, Float> = emptyMap(),
     language: String = PLUGIN_LANGUAGE_C_STYLE,
 ): Effect {
+    if (language == NATIVE_C_PLUGIN_LANGUAGE) return NativeCVideoEffect(source, controls)
     if (language == PLUGIN_LANGUAGE_GLSL && validateGlslFragment(source, audio = false) == null) {
         return RawGlslVideoGlEffect(source, controls)
     }
