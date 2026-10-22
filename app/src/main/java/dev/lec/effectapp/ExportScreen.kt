@@ -206,7 +206,9 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
             exportStatus = exporter.ihtxStatus()?.let { status ->
                 if (status.concatenating) "Concatenating…" else {
                     "Export ${status.current}/${status.total}" +
-                        (status.presetName?.let { " · $it ${status.exportInPreset}/${status.exportsPerPreset}" } ?: "")
+                        (status.presetName?.let { " · $it ${status.exportInPreset}/${status.exportsPerPreset}" } ?: "") +
+                        "\nThis pass: " + (status.passProgress?.let { "$it% · " } ?: "") + "${status.passSeconds} s" +
+                        (status.retryReason?.let { "\nRetry ${status.retry} after: $it" } ?: "")
                 }
             }
             if (exporter.syncing()) exportStatus = "Fixing audio/video sync… " + progress + "%"

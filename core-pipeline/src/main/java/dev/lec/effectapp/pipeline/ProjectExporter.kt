@@ -41,6 +41,7 @@ class ProjectExporter(private val context: Context) {
  @Volatile private var batch: Batch? = null
  @Volatile private var failedIhtxStatus: IhtxStatus? = null
  @Volatile private var lastProgress: Int? = null
+ @Volatile private var passProgress: Int? = null
  @Volatile private var videoMimeType: String = MimeTypes.VIDEO_H264
  @Volatile private var encoderSettings: ExportEncoderSettings = ExportEncoderSettings()
  @Volatile private var antiDesync: Boolean = false
@@ -53,10 +54,15 @@ class ProjectExporter(private val context: Context) {
   override fun run() {
    if (callback == null) { lastProgress = null; return }
    val h=ProgressHolder()
-   lastProgress = if(transformer.getProgress(h)!=Transformer.PROGRESS_STATE_AVAILABLE) null else {
-    val b=batch
-    if(b==null) h.progress else ((b.done*100+h.progress)/(b.projects.size+1)).coerceIn(0,100)
+   val b=batch
+   val available=transformer.getProgress(h)==Transformer.PROGRESS_STATE_AVAILABLE
+   lastProgress = when {
+    b!=null -> (((b.done*100)+(if(available) h.progress else 0))/(b.projects.size+1)).coerceIn(0,100)
+    available -> h.progress
+    else -> null
    }
+   // Layered passes often can't report their own progress; the pass count still moves the bar.
+   passProgress = if(b!=null && available) h.progress else null
    queue.postDelayed(this, PROGRESS_POLL_MS)
   }
  }
@@ -69,7 +75,7 @@ class ProjectExporter(private val context: Context) {
    syncSource?.let { source -> source.delete(); syncSource=null; transformer=newTransformer(); finish { it.onCompleted() }; return }
    val b=batch
    if (b==null) { transformer=newTransformer(); finishOrSync(outputPath); return }
-   b.retries=0
+   b.retries=0; b.lastError=emptyList()
    b.done++
    b.ihtx?.let { plan ->
     if (b.done < b.projects.size) {
@@ -104,6 +110,7 @@ class ProjectExporter(private val context: Context) {
    val nativeFailure=isNativeWorkerFailure(exportException)
    if (b != null && !b.concat && b.done < b.projects.size && b.retries < (if(nativeFailure) MAX_NATIVE_RETRIES else MAX_STAGE_RETRIES)) {
     b.retries++
+    b.lastError=listOfNotNull(exportException.message)+generateSequence(exportException.cause) { it.cause }.take(4).mapNotNull { it.message ?: it.javaClass.simpleName }
     b.files.getOrNull(b.done)?.delete()
     if(nativeFailure) dev.lec.effectapp.effects.NativeCClient.restartWorker()
     transformer=newTransformer()
@@ -213,7 +220,9 @@ class ProjectExporter(private val context: Context) {
   val done=b.done
   if(b.concat || done>=b.projects.size) return IhtxStatus(b.projects.size,b.projects.size,true)
   val plan=b.ihtx
-  return IhtxStatus(done+1,b.projects.size,false,plan?.presetForPass(done)?.name,plan?.let { done%it.exportsPerPreset+1 },plan?.exportsPerPreset)
+  val seconds=if(b.stageStartedAt>0) (android.os.SystemClock.elapsedRealtime()-b.stageStartedAt)/1_000 else 0
+  return IhtxStatus(done+1,b.projects.size,false,plan?.presetForPass(done)?.name,plan?.let { done%it.exportsPerPreset+1 },plan?.exportsPerPreset,
+   passSeconds=seconds,passProgress=passProgress,retry=b.retries,retryReason=b.lastError.distinct().joinToString(" · ").takeIf { b.retries>0 && it.isNotBlank() })
  }
  fun lastIhtxFailure():IhtxStatus? = failedIhtxStatus
  /** Latest progress (0..100), sampled on the export thread; null when not known. */
@@ -295,7 +304,7 @@ class ProjectExporter(private val context: Context) {
   } else startTransformer(b,index)
  }
  private fun background(block:()->Unit) { Thread(block,"export-prepare").start() }
- private fun startTransformer(b:Batch,index:Int){ transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.outputSize,outputPresentationSize=b.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
+ private fun startTransformer(b:Batch,index:Int){ b.stageStartedAt=android.os.SystemClock.elapsedRealtime(); transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.outputSize,outputPresentationSize=b.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }
  /**
   * The priming silence (ms, 0..250) an AAC encoder put in front of a pass's sound when the device
   * doesn't report it for removal: how much longer the sound track is than the length the pass was
@@ -419,8 +428,9 @@ class ProjectExporter(private val context: Context) {
    .setTransmuxAudio(false)
    .build()
  }
- data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean,val presetName:String?=null,val exportInPreset:Int?=null,val exportsPerPreset:Int?=null)
- private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0,val outputSize:Size?=null,val overlayAspectRatio:Float?=null)
+ /** [passSeconds]: time on the current pass; [retry] > 0 when it's being tried again after [retryReason]. */
+ data class IhtxStatus(val current:Int,val total:Int,val concatenating:Boolean,val presetName:String?=null,val exportInPreset:Int?=null,val exportsPerPreset:Int?=null,val passSeconds:Long=0,val passProgress:Int?=null,val retry:Int=0,val retryReason:String?=null)
+ private data class Batch(val projects:MutableList<EditProject>,val files:List<File>,val output:String,var done:Int=0,var concat:Boolean=false,val ihtx:IhtxPlan?=null,var retries:Int=0,val outputSize:Size?=null,val overlayAspectRatio:Float?=null,var stageStartedAt:Long=0,var lastError:List<String> = emptyList())
  private fun EditProject.takeForExport(start:Long,length:Long):EditProject {
   // Start inside the project (at least the last millisecond) and keep the length within what's left.
   var skip=start.coerceIn(0,(durationMs-1).coerceAtLeast(0))
@@ -477,7 +487,7 @@ class ProjectExporter(private val context: Context) {
   const val MAX_NATIVE_RETRIES = 5
   const val NATIVE_RETRY_COOLDOWN_MS = 1_500L
   const val WORKER_RECYCLE_PASSES = 10
-  const val MAX_DELAY_BETWEEN_SAMPLES_MS = 60_000L
+  const val MAX_DELAY_BETWEEN_SAMPLES_MS = 30_000L
   /** Under ~half a frame at 30 fps the tracks count as in sync and the export isn't re-encoded. */
   const val SYNC_TOLERANCE_US = 15_000L
   const val MIN_SYNC_SPEED = 0.5
