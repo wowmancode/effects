@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.lec.effectapp.effects.EffectRegistry
 import dev.lec.effectapp.model.EffectPreset
 import dev.lec.effectapp.model.IhtxDirection
 import dev.lec.effectapp.model.IhtxGridCell
@@ -57,11 +58,81 @@ internal fun IhtxPresetQueue(
             }
         }
     }
-    if (presets.isEmpty()) Text("Save presets in the editor first, then return here.")
-    presets.forEach { preset ->
-        OutlinedButton(onClick = { onChange(queue + preset) }, modifier = Modifier.fillMaxWidth()) {
-            Text("+ ${preset.name}")
+    if (presets.isEmpty()) {
+        Text("Save presets in the editor first, then return here.")
+        return
+    }
+    var search by remember { mutableStateOf("") }
+    var sort by remember { mutableStateOf(IhtxPresetSort.SAVED) }
+    val shown = remember(presets, search, sort) { presets.searchedAndSorted(search, sort) }
+    Text("Add presets", style = MaterialTheme.typography.titleMedium)
+    OutlinedTextField(
+        value = search,
+        onValueChange = { search = it },
+        label = { Text("Search presets or effects") },
+        supportingText = { Text("Matches a preset's name or the effects in it, e.g. \"glow\" or \"vocoder\".") },
+        trailingIcon = { if (search.isNotEmpty()) TextButton(onClick = { search = "" }) { Text("Clear") } },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Text("Sort")
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        IhtxPresetSort.entries.forEach { option ->
+            OutlinedButton(onClick = { sort = option }) { Text(if (sort == option) "✓ ${option.label}" else option.label, maxLines = 1) }
         }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("${shown.size} of ${presets.size} presets", modifier = Modifier.weight(1f))
+        TextButton(onClick = { onChange(queue + shown) }, enabled = shown.isNotEmpty()) { Text("Add all shown") }
+    }
+    if (shown.isEmpty()) Text("No presets match “${search.trim()}”.")
+    shown.forEach { preset ->
+        OutlinedButton(onClick = { onChange(queue + preset) }, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
+                val count = queue.count { it.id == preset.id }
+                Text("+ ${preset.name}" + if (count > 0) " · queued ×$count" else "")
+                preset.effectNames().takeIf { it.isNotEmpty() }?.let { names ->
+                    Text(names.joinToString(" · "), style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                }
+            }
+        }
+    }
+}
+
+/** How the presets offered for the multi-effect queue are ordered. */
+internal enum class IhtxPresetSort(val label: String) {
+    SAVED("Saved order"),
+    NEWEST("Newest"),
+    NAME("Name A–Z"),
+    NAME_DESC("Name Z–A"),
+    MOST_EFFECTS("Most effects"),
+    FEWEST_EFFECTS("Fewest effects"),
+}
+
+/** Display names of a preset's enabled video and audio effects, in stack order. */
+internal fun EffectPreset.effectNames(): List<String> =
+    (effectSegments + audioSegments).filter { it.enabled }.map { EffectRegistry.byId(it.effectId)?.displayName ?: it.effectId }
+
+/**
+ * Presets whose name or effects contain every word of [query] (any order, ignoring case), ordered
+ * by [sort]. Presets are stored oldest first, so "Newest" is the saved order reversed.
+ */
+internal fun List<EffectPreset>.searchedAndSorted(query: String, sort: IhtxPresetSort): List<EffectPreset> {
+    val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    val matching = if (words.isEmpty()) this else filter { preset ->
+        val haystack = (listOf(preset.name) + preset.effectNames() + (preset.effectSegments + preset.audioSegments).map { it.effectId })
+            .joinToString(" ").lowercase()
+        words.all { it in haystack }
+    }
+    val byName = compareBy<EffectPreset, String>(String.CASE_INSENSITIVE_ORDER) { it.name }
+    fun EffectPreset.effectCount() = (effectSegments + audioSegments).count { it.enabled }
+    return when (sort) {
+        IhtxPresetSort.SAVED -> matching
+        IhtxPresetSort.NEWEST -> matching.asReversed()
+        IhtxPresetSort.NAME -> matching.sortedWith(byName)
+        IhtxPresetSort.NAME_DESC -> matching.sortedWith(byName.reversed())
+        IhtxPresetSort.MOST_EFFECTS -> matching.sortedWith(compareByDescending<EffectPreset> { it.effectCount() }.then(byName))
+        IhtxPresetSort.FEWEST_EFFECTS -> matching.sortedWith(compareBy<EffectPreset> { it.effectCount() }.then(byName))
     }
 }
 

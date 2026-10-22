@@ -40,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Multi-effect IHTX preset picker has a search box (matches preset names and the effects
+  inside them, every word in any order) and sort modes: saved order, newest, name A–Z/Z–A,
+  most and fewest effects. Each preset lists its effects and how often it's queued, and
+  "Add all shown" queues every match at once.
 - Export encoding settings: resolution cap (4K to 360p), video bitrate (Mbps, with quick
   picks), variable or constant bitrate mode, keyframe interval (KEY_I_FRAME_INTERVAL; 0 for
   all keyframes), max B-frames (Android 10+), AAC audio bitrate and encoder speed (maximum or
