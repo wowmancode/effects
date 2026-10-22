@@ -38,6 +38,7 @@ import dev.lec.effectapp.model.IhtxOverlayPattern
 import dev.lec.effectapp.model.IhtxPatternKind
 import dev.lec.effectapp.model.IhtxPatternLibraryJson
 import java.util.UUID
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun IhtxPresetQueue(
@@ -238,5 +239,101 @@ private fun PatternGrid(gridSize: Int, cells: List<IhtxGridCell>, cursor: IhtxGr
                 drawContext.canvas.nativeCanvas.drawText(label, at.x + cellSize / 2, at.y + cellSize * .6f, paint)
             }
         }
+    }
+}
+
+/** A native C plug-in an IHTX export needs that hasn't been approved on this phone yet. */
+internal data class PendingNativePlugin(val source: String, val audio: Boolean, val usedIn: String)
+
+/**
+ * The enabled native C plug-ins in [project], the queued [presets] and the IHTX [overlays] that
+ * still need local approval, one entry per distinct source.
+ */
+internal fun pendingNativePlugins(
+    project: dev.lec.effectapp.model.EditProject,
+    presets: List<EffectPreset>,
+    overlays: List<dev.lec.effectapp.model.Overlay>,
+): List<PendingNativePlugin> {
+    fun from(label: String, segments: List<dev.lec.effectapp.model.TimelineSegment>) = segments
+        .filter { it.enabled && dev.lec.effectapp.model.NativePluginPolicy.isNative(it) }
+        .map { PendingNativePlugin(it.stringParams["source"].orEmpty(), it.effectId == "plugin_audio", label) }
+    val all = project.clips.flatMap { clip ->
+        from(clip.displayName, clip.effectSegments + clip.audioSegments) +
+            clip.overlays.flatMap { from(it.displayName, it.effectSegments + it.audioSegments) }
+    } + presets.flatMap { from("Preset “${it.name}”", it.effectSegments + it.audioSegments) } +
+        overlays.flatMap { from("Overlay “${it.displayName}”", it.effectSegments + it.audioSegments) }
+    return all.distinctBy { it.source to it.audio }
+        .filterNot { dev.lec.effectapp.effects.NativeCClient.approved(it.source, it.audio) }
+}
+
+/**
+ * "Allow all plug-ins" for IHTX exports. Ticking it asks for confirmation first; confirming
+ * compiles and approves every listed plug-in on this phone, exactly as approving each one in
+ * its source editor would.
+ */
+@Composable
+internal fun IhtxPluginApproval(pending: List<PendingNativePlugin>) {
+    if (pending.isEmpty()) return
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var confirming by remember { mutableStateOf(false) }
+    var working by remember { mutableStateOf(false) }
+    var error by remember(pending) { mutableStateOf<String?>(null) }
+    val online = dev.lec.effectapp.effects.NativeCClient.onlineBlocked
+
+    Text("Plug-ins need approval", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+    Text("This export uses ${pending.size} native C plug-in${if (pending.size == 1) "" else "s"} not yet approved on this phone:")
+    pending.forEach { plugin ->
+        Text(
+            "• ${if (plugin.audio) "Audio" else "Video"} plug-in in ${plugin.usedIn} · ${plugin.source.lines().size} lines",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+    Row(
+        Modifier.fillMaxWidth().semantics { contentDescription = "Allow all plug-ins" },
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Checkbox(
+            checked = working,
+            onCheckedChange = { checked -> if (checked) confirming = true },
+            enabled = !working && !online,
+        )
+        Text(if (working) "Approving plug-ins…" else "Allow all plug-ins")
+    }
+    if (online) Text("Native C plug-ins are offline-only. Leave the online room to approve them.", color = MaterialTheme.colorScheme.error)
+    error?.let { Text("Couldn't approve: $it", color = MaterialTheme.colorScheme.error) }
+
+    if (confirming) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Allow all ${pending.size} plug-in${if (pending.size == 1) "" else "s"}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(dev.lec.effectapp.model.NativePluginPolicy.WARNING, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium)
+                    Text("Native C plug-ins run compiled code on this phone. Approving them all skips reviewing each one's source. They stay approved for future exports and in the editor.")
+                    pending.forEach { Text("• ${if (it.audio) "Audio" else "Video"} plug-in in ${it.usedIn}", style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirming = false
+                    working = true
+                    error = null
+                    scope.launch {
+                        // Each one is compiled before it's approved; stop at the first that fails.
+                        for (plugin in pending) {
+                            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                runCatching { dev.lec.effectapp.effects.NativeCClient.compileAndApprove(plugin.source, plugin.audio) }
+                            }
+                            result.exceptionOrNull()?.let { failure ->
+                                error = "${if (plugin.audio) "audio" else "video"} plug-in in ${plugin.usedIn}: ${failure.message ?: failure.javaClass.simpleName}"
+                            }
+                            if (result.isFailure) break
+                        }
+                        working = false
+                    }
+                }) { Text("Allow all") }
+            },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        )
     }
 }

@@ -40,6 +40,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- IHTX exports list the native C plug-ins (from the project, queued presets and overlays) that
+  aren't approved on this phone yet, with an "Allow all plug-ins" checkbox. Ticking it asks for
+  confirmation with the trust warning, then compiles and approves each one. Start export stays
+  off until they're all approved, instead of failing partway in.
 - Multi-effect IHTX preset picker has a search box (matches preset names and the effects
   inside them, every word in any order) and sort modes: saved order, newest, name A–Z/Z–A,
   most and fewest effects. Each preset lists its effects and how often it's queued, and

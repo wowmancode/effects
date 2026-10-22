@@ -131,6 +131,10 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
     var overlayGridSizeText by remember { mutableStateOf("2") }
     var overlayPattern by remember { mutableStateOf(IhtxPatternKind.ROWS.cells(2)) }
     var exportAspectRatio by remember { mutableStateOf(ExportAspectRatio.ORIGINAL) }
+    val nativeApprovals by dev.lec.effectapp.effects.NativeCClient.approvalRevision.collectAsState()
+    val pendingPlugins = remember(project, multiEffect, presetQueue, ihtxOverlays, nativeApprovals) {
+        pendingNativePlugins(project, if (multiEffect) presetQueue else emptyList(), ihtxOverlays)
+    }
     val activeAudioSegments = if (multiEffect) presetQueue.flatMap { it.audioSegments } else project.clips.flatMap { it.audioSegments }
     val carrierUris = activeAudioSegments.filter { it.effectId == "vocoder_custom" }
         .mapNotNull { it.stringParams["carrier_uri"] }.distinct()
@@ -384,6 +388,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                         Text("${plan.totalExports} exports total · ${plan.exportsPerStage} before each new overlay")
                     }
                     planned.exceptionOrNull()?.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    IhtxPluginApproval(pendingPlugins)
                     if (!carriersReady && carrierError == null) Text("Preparing carrier audio…")
                     carrierError?.let { Text("Carrier audio error: $it") }
                     if (missingMedia.isNotEmpty()) {
@@ -433,7 +438,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                 settings = requireNotNull(encoderSettings.getOrNull()),
                             )
                         },
-                        enabled = planned.isSuccess && encoderSettings.isSuccess && carriersReady && missingMedia.isEmpty(),
+                        enabled = planned.isSuccess && encoderSettings.isSuccess && pendingPlugins.isEmpty() && carriersReady && missingMedia.isEmpty(),
                     ) { Text("Start export") }
                 }
                 ExportState.RUNNING -> {
