@@ -16,6 +16,7 @@ class NativeCService : Service() {
     private data class Program(val key: String, val handle: Long, val audio: Boolean, var users: Int = 0)
     private data class Session(val program: Program, val instance: Long, val buffer: ByteBuffer, val capacity: Int)
     private val programs = LinkedHashMap<String, Program>(16, .75f, true)
+    private val MAX_PROGRAMS = 32
     private val sessions = HashMap<Int, Session>()
     private var nextSession = 1
     private lateinit var root: File
@@ -57,7 +58,9 @@ class NativeCService : Service() {
     }
 
     private fun trim(except: String? = null) {
-        while (programs.size > 8) {
+        // Room for a whole multi-effect pass: an evicted plug-in is recompiled mid-export, and
+        // the export stalls while it is.
+        while (programs.size > MAX_PROGRAMS) {
             val entry = programs.entries.firstOrNull { it.value.users == 0 && it.key != except } ?: break
             programs.remove(entry.key)
             NativeCCompiler.deleteProgram(entry.value.handle)

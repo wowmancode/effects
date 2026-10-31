@@ -144,6 +144,7 @@ class ProjectExporter(private val context: Context) {
   preparing=true
   background {
    val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
+   dev.lec.effectapp.effects.NativeCClient.warmUp(prepared)
    queue.post {
     preparing=false
     if(this.callback===callback) {
@@ -297,15 +298,16 @@ class ProjectExporter(private val context: Context) {
  private fun startStage(b:Batch,index:Int){
   // A fresh plug-in worker every few passes, so leaked memory can't build up over a long export.
   if(index>0 && index%WORKER_RECYCLE_PASSES==0 && b.retries==0) dev.lec.effectapp.effects.NativeCClient.restartWorker()
-  if(index>0) {
+  preparing=true
+  val project=b.projects[index]
+  background {
    // Later passes re-apply the clip's effects to the previous pass, including any reverse.
-   preparing=true
-   val project=b.projects[index]
-   background {
-    val prepared=ReverseMediaCache.prepare(context,project)
-    queue.post { preparing=false; if(batch===b) { b.projects[index]=prepared; startTransformer(b,index) } }
-   }
-  } else startTransformer(b,index)
+   val prepared=if(index>0) ReverseMediaCache.prepare(context,project) else project
+   // Compile the pass's native plug-ins now (fresh worker on pass 1, after a recycle or crash),
+   // not on its first frame, where the time counts against Media3's muxer timeout.
+   dev.lec.effectapp.effects.NativeCClient.warmUp(prepared)
+   queue.post { preparing=false; if(batch===b) { b.projects[index]=prepared; startTransformer(b,index) } }
+  }
  }
  private fun background(block:()->Unit) { Thread(block,"export-prepare").start() }
  private fun startTransformer(b:Batch,index:Int){ b.stageStartedAt=android.os.SystemClock.elapsedRealtime(); transformer.start(ProjectCompositionFactory.create(b.projects[index],resolveBitmap,overlayAspectRatio=b.overlayAspectRatio,durationAnchorMs=b.ihtx?.base?.durationMs,ihtxOutputSize=b.outputSize,outputPresentationSize=b.outputSize,muteBaseAudio=b.ihtx?.mutesBaseAudio(index)==true),b.files[index].absolutePath) }

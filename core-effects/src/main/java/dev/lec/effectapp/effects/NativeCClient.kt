@@ -76,6 +76,29 @@ object NativeCClient {
         _approvalRevision.value++
     }
 
+    /**
+     * Starts the worker and compiles every enabled, approved plug-in in [project] before an export
+     * starts. Otherwise the worker compiles each one on the first frame or buffer that needs it,
+     * inside the export, and Media3 aborts when no sample reaches the muxer for that long
+     * ("Muxer error · no output sample written in the last … milliseconds"). Failures are left for
+     * the export itself to report.
+     */
+    fun warmUp(project: EditProject) {
+        if (onlineBlocked) return
+        NativePluginPolicy.segments(project)
+            .filter { it.enabled }
+            .map { it.stringParams["source"].orEmpty() to (it.effectId == "plugin_audio") }
+            .distinct()
+            .filter { (source, audio) -> canRun(source, audio) && NativePluginPolicy.validateSource(source, audio) == null }
+            .forEach { (source, audio) ->
+                runCatching {
+                    request(remote(), NativeCWire.COMPILE, WARM_UP_TIMEOUT_MS, { writeString(source); writeInt(if (audio) 1 else 0) }) { }
+                }
+            }
+    }
+
+    private const val WARM_UP_TIMEOUT_MS = 60_000L
+
     fun open(source: String, audio: Boolean, capacity: Int): Session {
         check(canRun(source, audio)) { "Native C requires local approval and is unavailable in online rooms." }
         require(capacity in 4..NativeCWire.MAX_BUFFER_BYTES) { "This frame is too large for a native C plug-in." }

@@ -212,7 +212,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                 }
             }
             if (exporter.syncing()) exportStatus = "Fixing audio/video sync… " + progress + "%"
-            if (exporter.preparing()) exportStatus = listOfNotNull(exportStatus, "Reversing clips…").joinToString(" · ")
+            if (exporter.preparing()) exportStatus = listOfNotNull(exportStatus, "Preparing clips and plug-ins…").joinToString(" · ")
             delay(200)
         }
     }

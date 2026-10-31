@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- IHTX and normal exports no longer fail with "Muxer error · no output sample written in the
+  last … milliseconds" when they use native C plug-ins. The plug-in worker used to compile each
+  plug-in on the first frame or buffer that needed it, inside the export, so a fresh worker (the
+  first pass, every 10th pass, or after a crash) could go past Media3's timeout before writing
+  anything. Every pass's plug-ins are now compiled before it starts, and the worker keeps up to
+  32 compiled plug-ins instead of 8, so a multi-effect pass doesn't recompile mid-export.
 - IHTX exports keep sound and picture together. Each pass's audio encoder put a little silence
   in front of the sound, so every pass (and every joined segment) pushed the sound later. Later
   passes now read the sound from after that silence, and the final join copies the pictures
