@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Exports with a replacement soundtrack no longer stall partway (at the same point every time)
+  with "Muxer error · no output sample written". The soundtrack was cut at its file's reported
+  length and seeked back to loop, and with MP3/M4A files that length or seek is often off, so the
+  sound stopped arriving. Each clip's soundtrack is now rendered once to a WAV of exactly what's
+  heard (looped from the sound actually decoded) before the export starts.
 - IHTX and normal exports no longer fail with "Muxer error · no output sample written in the
   last … milliseconds" when they use native C plug-ins. The plug-in worker used to compile each
   plug-in on the first frame or buffer that needed it, inside the export, so a fresh worker (the

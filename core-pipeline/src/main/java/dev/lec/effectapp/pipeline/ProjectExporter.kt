@@ -143,7 +143,7 @@ class ProjectExporter(private val context: Context) {
   this.antiDesync=antiDesync; this.outputPath=outputPath; syncNote=null
   preparing=true
   background {
-   val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project))
+   val prepared=ReverseMediaCache.prepare(context,SourceLengths.fit(context,project),forExport=true)
    dev.lec.effectapp.effects.NativeCClient.warmUp(prepared)
    queue.post {
     preparing=false
@@ -190,7 +190,7 @@ class ProjectExporter(private val context: Context) {
   background {
    // Reverse the whole clips first so trimming the start keeps what the preview shows.
    // Fit clips to their files' real lengths first: a start past the end of a file fails the export.
-   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,plan.firstProject())).takeForExport(startMs,lengthMs) }
+   val result=runCatching { ReverseMediaCache.prepare(context,SourceLengths.fit(context,plan.firstProject()),forExport=true).takeForExport(startMs,lengthMs) }
    queue.post {
     preparing=false
     if(this.callback!==callback) return@post
@@ -302,7 +302,7 @@ class ProjectExporter(private val context: Context) {
   val project=b.projects[index]
   background {
    // Later passes re-apply the clip's effects to the previous pass, including any reverse.
-   val prepared=if(index>0) ReverseMediaCache.prepare(context,project) else project
+   val prepared=if(index>0) ReverseMediaCache.prepare(context,project,forExport=true) else project
    // Compile the pass's native plug-ins now (fresh worker on pass 1, after a recycle or crash),
    // not on its first frame, where the time counts against Media3's muxer timeout.
    dev.lec.effectapp.effects.NativeCClient.warmUp(prepared)

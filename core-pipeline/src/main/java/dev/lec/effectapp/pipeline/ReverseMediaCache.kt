@@ -73,10 +73,11 @@ object ReverseMediaCache {
      * Returns [project] with reversed sources attached to every clip that reverses its video or
      * audio. Clips whose media can't be reversed are left as they are.
      */
-    fun prepare(context: Context, project: EditProject): EditProject =
-        project.copy(clips = project.clips.map { prepare(context, it) })
+    fun prepare(context: Context, project: EditProject, forExport: Boolean = false): EditProject =
+        project.copy(clips = project.clips.map { prepare(context, it, forExport) })
 
-    fun prepare(context: Context, clip: Clip): Clip {
+    /** [forExport]: also render replacement soundtracks to one WAV per clip (see [prepareAudioOverlays]). */
+    fun prepare(context: Context, clip: Clip, forExport: Boolean = false): Clip {
         if (clip.mediaMissing) return clip
         val video = if (clip.reversesVideo() && clip.videoOverride == null) {
             reversedVideo(context, clip.sourceUri, clip.trimStartMs, clip.trimEndMs)?.let { SourceOverride(it) }
@@ -84,22 +85,70 @@ object ReverseMediaCache {
         val audio = if (clip.reversesAudio() && !clip.hasReplacementAudio && clip.audioOverride == null) {
             reversedAudio(context, clip.sourceUri, clip.trimStartMs, clip.trimEndMs)?.let { SourceOverride(it) }
         } else clip.audioOverride
-        return clip.copy(videoOverride = video, audioOverride = audio, overlays = prepareAudioOverlays(context, clip))
+        return clip.copy(videoOverride = video, audioOverride = audio, overlays = prepareAudioOverlays(context, clip, forExport))
     }
 
-    /** Shares the clip's audio stack with its replacement and reverses that source when requested. */
-    fun prepareAudioOverlays(context: Context, clip: Clip): List<Overlay> = clip.playbackOverlays().map { overlay ->
-        if (!overlay.replacesClipAudio || !clip.reversesAudio() || overlay.sourceDurationMs <= 0) return@map overlay
-        val duration = overlay.sourceDurationMs
-        val uri = reversedAudio(context, overlay.sourceUri, 0, duration) ?: return@map overlay
-        // Reverse the portion heard in this clip, including the phase of a looping or split source.
-        val end = overlay.sourceMsAt(clip.durationMs).mod(duration)
-        overlay.copy(
-            sourceUri = uri,
-            sourceStartMs = (duration - end).mod(duration),
-            sourceOffsetMs = 0,
-        )
+    /**
+     * Shares the clip's audio stack with its replacement, reverses that source when requested, and
+     * renders the stretch heard in this clip (looped as needed) into one WAV. Played straight from
+     * an MP3/M4A, the soundtrack was cut at its reported length and seeked back to loop; when that
+     * length or seek is off, the audio stops arriving and the export stalls at the loop point
+     * ("no output sample written in the last … milliseconds").
+     */
+    fun prepareAudioOverlays(context: Context, clip: Clip, forExport: Boolean = false): List<Overlay> = clip.playbackOverlays().map { overlay ->
+        if (!overlay.replacesClipAudio) return@map overlay
+        var source = overlay
+        if (clip.reversesAudio() && overlay.sourceDurationMs > 0) {
+            val duration = overlay.sourceDurationMs
+            reversedAudio(context, overlay.sourceUri, 0, duration)?.let { uri ->
+                // Reverse the portion heard in this clip, including the phase of a looping or split source.
+                val end = overlay.sourceMsAt(clip.durationMs).mod(duration)
+                source = overlay.copy(sourceUri = uri, sourceStartMs = (duration - end).mod(duration), sourceOffsetMs = 0)
+            }
+        }
+        if (!forExport) return@map source
+        val heardMs = (clip.durationMs * source.playbackSpeed.toDouble()).toLong().coerceAtLeast(1)
+        val startMs = source.sourceStartMs + source.sourceOffsetMs
+        val uri = loopedAudio(context, source.sourceUri, startMs, heardMs) ?: return@map source
+        // Already looped and cut to this clip: no loop pieces, read from the start of the file.
+        source.copy(sourceUri = uri, sourceStartMs = 0, sourceOffsetMs = 0, sourceDurationMs = 0)
     }
+
+    /**
+     * [lengthMs] of [sourceUri]'s sound from [startMs], wrapping back to its start whenever it runs
+     * out, as a WAV. The loop length is the sound actually decoded, not the file's reported length.
+     */
+    fun loopedAudio(context: Context, sourceUri: String, startMs: Long, lengthMs: Long): String? =
+        cached(context, "loop", sourceUri, startMs, startMs + lengthMs, "wav") { out ->
+            val raw = File(out.parentFile, out.nameWithoutExtension + ".pcm")
+            try {
+                val (sampleRate, channels) = decodePcm(context, sourceUri, 0, Long.MAX_VALUE / 1_000, raw) ?: return@cached false
+                val frameBytes = 2L * channels
+                val totalFrames = raw.length() / frameBytes
+                if (totalFrames <= 0) return@cached false
+                val wantedFrames = lengthMs * sampleRate / 1_000
+                var position = (startMs * sampleRate / 1_000).mod(totalFrames)
+                RandomAccessFile(raw, "r").use { input ->
+                    BufferedOutputStream(FileOutputStream(out)).use { wav ->
+                        wav.write(wavHeader(wantedFrames * frameBytes, sampleRate, channels))
+                        val block = ByteArray(16_384 * frameBytes.toInt())
+                        var left = wantedFrames
+                        while (left > 0) {
+                            val frames = minOf(left, totalFrames - position, (block.size / frameBytes))
+                            input.seek(position * frameBytes)
+                            input.readFully(block, 0, (frames * frameBytes).toInt())
+                            wav.write(block, 0, (frames * frameBytes).toInt())
+                            left -= frames
+                            position = (position + frames).mod(totalFrames)
+                        }
+                    }
+                }
+                true
+            } finally {
+                raw.delete()
+            }
+        }
+
 
     private fun cached(
         context: Context,
@@ -280,19 +329,35 @@ object ReverseMediaCache {
     /** Decodes [startMs, endMs) to 16-bit PCM and writes it back to front as a WAV file. */
     private fun decodeReversedWav(context: Context, sourceUri: String, startMs: Long, endMs: Long, out: File): Boolean {
         val raw = File(out.parentFile, out.nameWithoutExtension + ".pcm")
+        try {
+            val (sampleRate, channels) = decodePcm(context, sourceUri, startMs, endMs, raw) ?: return false
+            writeReversedWav(raw, out, sampleRate, channels)
+            return true
+        } catch (_: Exception) {
+            return false
+        } finally {
+            raw.delete()
+        }
+    }
+
+    /**
+     * Decodes [startMs, endMs) of the first audio track to interleaved 16-bit PCM in [raw].
+     * Returns (sample rate, channels), or null when there is no audio or nothing decoded.
+     */
+    private fun decodePcm(context: Context, sourceUri: String, startMs: Long, endMs: Long, raw: File): Pair<Int, Int>? {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         try {
             extractor.setDataSource(context, Uri.parse(sourceUri), null)
             val track = (0 until extractor.trackCount).firstOrNull { index ->
                 extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
-            } ?: return false
+            } ?: return null
             extractor.selectTrack(track)
             val inputFormat = extractor.getTrackFormat(track)
-            val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: return false
+            val mime = inputFormat.getString(MediaFormat.KEY_MIME) ?: return null
             val startUs = startMs * 1_000
-            val endUs = endMs * 1_000
-            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+            val endUs = if (endMs >= Long.MAX_VALUE / 1_000) Long.MAX_VALUE - 1_000_000 else endMs * 1_000
+            if (startUs > 0) extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             val decoder = MediaCodec.createDecoderByType(mime)
             codec = decoder
             decoder.configure(inputFormat, null, null, 0)
@@ -305,6 +370,7 @@ object ReverseMediaCache {
             val info = MediaCodec.BufferInfo()
             BufferedOutputStream(FileOutputStream(raw)).use { pcm ->
                 while (!outputDone) {
+                    if (Thread.currentThread().isInterrupted) return null
                     if (!inputDone) {
                         val inIndex = decoder.dequeueInputBuffer(10_000)
                         if (inIndex >= 0) {
@@ -339,16 +405,13 @@ object ReverseMediaCache {
                     }
                 }
             }
-            if (raw.length() == 0L) return false
-            writeReversedWav(raw, out, sampleRate, channels)
-            return true
+            return if (raw.length() == 0L) null else sampleRate to channels
         } catch (_: Exception) {
-            return false
+            return null
         } finally {
             runCatching { codec?.stop() }
             runCatching { codec?.release() }
             extractor.release()
-            raw.delete()
         }
     }
 
