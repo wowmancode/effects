@@ -106,13 +106,14 @@ class ProjectExporter(private val context: Context) {
     return
    }
    val b=batch
+   stallReport=stallReportFor(exportException,b?.ihtx?.base?.durationMs)
    // A crashed or killed plug-in worker gets more tries, each with a fresh worker and a pause.
    val nativeFailure=isNativeWorkerFailure(exportException)
    val pluginStopped=generateSequence<Throwable>(exportException) { it.cause }.take(10).any { it.message?.contains("Plug-in said:")==true }
    val maxRetries=when { pluginStopped -> 0; nativeFailure -> MAX_NATIVE_RETRIES; else -> MAX_STAGE_RETRIES }
    if (b != null && !b.concat && b.done < b.projects.size && b.retries < maxRetries) {
     b.retries++
-    b.lastError=listOfNotNull(exportException.message)+generateSequence(exportException.cause) { it.cause }.take(4).mapNotNull { it.message ?: it.javaClass.simpleName }
+    b.lastError=listOfNotNull(exportException.message)+generateSequence(exportException.cause) { it.cause }.take(4).mapNotNull { it.message ?: it.javaClass.simpleName }+listOfNotNull(stallReport)
     b.files.getOrNull(b.done)?.delete()
     if(nativeFailure) dev.lec.effectapp.effects.NativeCClient.restartWorker()
     transformer=newTransformer()
@@ -123,6 +124,40 @@ class ProjectExporter(private val context: Context) {
   }
  }
  @Volatile private var preparing=false
+ /** Last sample time (µs) written per track ("video"/"audio") by the current export's muxer. */
+ private val written=java.util.concurrent.ConcurrentHashMap<String,Long>()
+ @Volatile private var stallReport:String?=null
+ /** The default muxer, noting how far each track got, so a stall can say which track stopped. */
+ private val trackingMuxer=object:androidx.media3.muxer.Muxer.Factory {
+  val inner=androidx.media3.transformer.DefaultMuxer.Factory()
+  override fun create(path:String):androidx.media3.muxer.Muxer {
+   val muxer=inner.create(path); written.clear()
+   val kinds=java.util.concurrent.ConcurrentHashMap<Int,String>()
+   return object:androidx.media3.muxer.Muxer {
+    override fun addTrack(format:androidx.media3.common.Format):Int = muxer.addTrack(format).also { id ->
+     val kind=when { MimeTypes.isVideo(format.sampleMimeType) -> "video"; MimeTypes.isAudio(format.sampleMimeType) -> "audio"; else -> format.sampleMimeType ?: "track" }
+     kinds[id]=kind; written.putIfAbsent(kind,-1L)
+    }
+    override fun writeSampleData(trackId:Int,byteBuffer:java.nio.ByteBuffer,bufferInfo:androidx.media3.muxer.BufferInfo) {
+     muxer.writeSampleData(trackId,byteBuffer,bufferInfo)
+     kinds[trackId]?.let { written[it]=bufferInfo.presentationTimeUs }
+    }
+    override fun addMetadataEntry(metadataEntry:androidx.media3.common.Metadata.Entry) = muxer.addMetadataEntry(metadataEntry)
+    override fun close() = muxer.close()
+   }
+  }
+  override fun getSupportedSampleMimeTypes(trackType:Int) = inner.getSupportedSampleMimeTypes(trackType)
+  override fun supportsWritingNegativeTimestampsInEditList() = inner.supportsWritingNegativeTimestampsInEditList()
+ }
+ /** "Stalled at video 3.760 s, audio 3.712 s of 8.000 s": where each track was when the export stopped writing. */
+ private fun stallReportFor(error:Throwable,lengthMs:Long?):String? {
+  if(generateSequence(error) { it.cause }.take(10).none { it.message?.contains("no output sample")==true }) return null
+  fun s(us:Long)=String.format(java.util.Locale.ROOT,"%.3f s",us/1_000_000.0)
+  val tracks=listOf("video","audio").map { kind -> written[kind]?.let { if(it<0) "$kind none" else "$kind ${s(it)}" } ?: "$kind not started" }
+  return "Stalled at " + tracks.joinToString(", ") + (lengthMs?.let { " of ${s(it*1_000)}" } ?: "")
+ }
+ /** Where each track stopped when the last export stalled, or null. */
+ fun lastStallReport():String? = stallReport
  @Volatile private var transformer: Transformer = newTransformer()
  private fun newTransformer():Transformer = Transformer.Builder(context)
   .setLooper(exportThread.looper)
@@ -132,6 +167,7 @@ class ProjectExporter(private val context: Context) {
   // milliseconds"). Starting a plug-in worker and compiling can take longer than that; real hangs
   // are still caught by the plug-in's own per-frame timeout.
   .setMaxDelayBetweenMuxerSamplesMs(MAX_DELAY_BETWEEN_SAMPLES_MS)
+  .setMuxerFactory(trackingMuxer)
   .apply { encoderSettings.takeUnless { it.isDefault }?.let { setEncoderFactory(encoderFactory(it)) } }
   .addListener(transformerListener)
   .build()

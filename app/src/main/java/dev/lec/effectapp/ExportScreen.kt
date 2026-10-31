@@ -438,7 +438,7 @@ fun ExportScreen(viewModel: EditorViewModel, onBack: () -> Unit) {
                                             listOfNotNull(
                                                 exporter.lastIhtxFailure()?.let { "IHTX export " + it.current + "/" + it.total },
                                                 errorValue.message,
-                                            ) + causeMessages(errorValue)
+                                            ) + causeMessages(errorValue) + listOfNotNull(exporter.lastStallReport())
                                             ).distinct().joinToString(" · ").ifBlank {
                                             errorValue.javaClass.simpleName
                                         }

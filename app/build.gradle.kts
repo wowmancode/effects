@@ -29,6 +29,17 @@ android {
             isUniversalApk = false
         }
     }
+    signingConfigs {
+        // One debug key for every build (CI runners otherwise each make a random one), so a new
+        // build installs as an update over the last instead of failing with a signature mismatch.
+        // A debug key is not a secret; don't use it for store releases.
+        getByName("debug") {
+            storeFile = file("shared-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
