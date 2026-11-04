@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Release APKs are now signed with the same shared key as debug builds (they used to be
+  unsigned), so every APK from CI, debug or release, installs as an update over the previous
+  one without uninstalling. Uninstall once if the app on the phone was signed with another key.
+
 - Split pitch: the Drums unpitched method (expressfx_drums) is removed. The pitch methods are now
   Original, **Method 2** and **Method 3**. Method 2 is the reconstructed élastique Pro pitch
   shifter; Method 3 is the reconstructed A17 "Drums, unpitched (minimum echo)" preset (resampler

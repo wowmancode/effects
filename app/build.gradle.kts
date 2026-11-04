@@ -30,9 +30,10 @@ android {
         }
     }
     signingConfigs {
-        // One debug key for every build (CI runners otherwise each make a random one), so a new
-        // build installs as an update over the last instead of failing with a signature mismatch.
-        // A debug key is not a secret; don't use it for store releases.
+        // One shared key for every build, debug and release (CI runners otherwise each make a
+        // random debug key, and release APKs were unsigned), so any new APK installs as an update
+        // over the last instead of needing an uninstall. The key is public, not a secret; a
+        // store release would need its own key.
         getByName("debug") {
             storeFile = file("shared-debug.keystore")
             storePassword = "android"
@@ -42,6 +43,7 @@ android {
     }
     buildTypes {
         getByName("release") {
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
