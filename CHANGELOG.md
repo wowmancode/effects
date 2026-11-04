@@ -9,6 +9,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Split pitch: the Drums unpitched method (expressfx_drums) is removed. The pitch methods are now
+  Original, **Method 2** and **Method 3**. Method 2 is the reconstructed élastique Pro pitch
+  shifter; Method 3 is the reconstructed A17 "Drums, unpitched (minimum echo)" preset (resampler
+  plus duration-restoring stretch, mono/stereo). Both run the statically reconstructed C DSP in
+  `core-effects/src/main/c/elastique/`, built for 64-bit ABIs only; on 32-bit phones they show as
+  unavailable and play as Original. Voice pitches are limited to ±24 semitones. Their latency
+  (about 30–300 ms, depending on method and pitch) is removed in exports, so the sound stays on
+  the picture; the live preview plays them that much late. Projects saved with Drums unpitched
+  (stored as 1) open as Method 2; projects from before that with the old a17 drums method (2)
+  open as Method 3.
+
 - Exports with a replacement soundtrack no longer stall partway (at the same point every time)
   with "Muxer error · no output sample written". The soundtrack was cut at its file's reported
   length and seeked back to loop, and with MP3/M4A files that length or seek is often off, so the

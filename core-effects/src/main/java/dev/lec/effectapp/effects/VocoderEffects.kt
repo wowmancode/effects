@@ -9,12 +9,29 @@ data class SplitPitchVoice(val semitones: Float, val level: Float = 1f)
 
 enum class SplitPitchAlgorithm(val storedValue: Float) {
     ORIGINAL(0f),
-    DRUMS_UNPITCHED(1f);
+
+    /** Method 2: the reconstructed élastique Pro pitch shifter (native, 64-bit devices only). */
+    METHOD_2(1f),
+
+    /** Method 3: the reconstructed A17 "Drums, unpitched (minimum echo)" preset (native, 64-bit only). */
+    METHOD_3(2f);
+
+    /** Original always works; Methods 2 and 3 need the native library, which is built for 64-bit ABIs. */
+    val isAvailable: Boolean
+        get() = this == ORIGINAL || SplitPitchNativeBridge.supports(this)
 
     companion object {
-        /** Projects saved with the retired Elastique (1) or a17 drums (2) methods open as drums unpitched. */
+        /**
+         * Stored values: 0 = Original, 1 = Method 2, 2 = Method 3 (the same numbers the earlier
+         * Elastique and a17 drums methods used). Projects saved with the removed Drums unpitched
+         * method stored 1 and open as Method 2.
+         */
         fun from(values: Map<String, Float>): SplitPitchAlgorithm =
-            if ((values["pitch_algorithm"]?.roundToInt() ?: 0) >= 1) DRUMS_UNPITCHED else ORIGINAL
+            when (values["pitch_algorithm"]?.roundToInt() ?: 0) {
+                1 -> METHOD_2
+                in 2..Int.MAX_VALUE -> METHOD_3
+                else -> ORIGINAL
+            }
     }
 }
 
@@ -25,7 +42,7 @@ class SplitPitchEffect : LecEffect {
     override val params = listOf(
         EffectParam("dry_mix", "Original voice", 0f, 1f, 0.2f),
         EffectParam("voice_mix", "Split voices", 0f, 1f, 0.8f),
-        EffectParam("pitch_algorithm", "Pitch method", 0f, 1f, 0f),
+        EffectParam("pitch_algorithm", "Pitch method", 0f, 2f, 0f),
     )
 
     @OptIn(UnstableApi::class)

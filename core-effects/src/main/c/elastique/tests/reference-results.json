@@ -1,0 +1,92 @@
+[
+  {
+    "case": "pro-minus5-mono",
+    "rate": 48000,
+    "channels": 1,
+    "samples": 60000,
+    "normalized_rms": 2.427192629484444e-06,
+    "max_absolute": 8.940696716308594e-07,
+    "bit_identical": false
+  },
+  {
+    "case": "pro-plus8-stereo",
+    "rate": 48000,
+    "channels": 2,
+    "samples": 120000,
+    "normalized_rms": 1.3792472658840397e-06,
+    "max_absolute": 6.915070116519928e-07,
+    "bit_identical": false
+  },
+  {
+    "case": "pro-formants-stereo",
+    "rate": 48000,
+    "channels": 2,
+    "samples": 120000,
+    "normalized_rms": 1.6326492202818965e-06,
+    "max_absolute": 8.121132850646973e-07,
+    "bit_identical": false
+  },
+  {
+    "case": "pro-minus24-44100",
+    "rate": 44100,
+    "channels": 1,
+    "samples": 55125,
+    "normalized_rms": 1.1329393749717019e-06,
+    "max_absolute": 3.8743019104003906e-07,
+    "bit_identical": false
+  },
+  {
+    "case": "pro-plus24-44100",
+    "rate": 44100,
+    "channels": 1,
+    "samples": 55125,
+    "normalized_rms": 6.881628918119895e-06,
+    "max_absolute": 2.421438694000244e-06,
+    "bit_identical": false
+  },
+  {
+    "case": "pro-surround-22050",
+    "rate": 22050,
+    "channels": 6,
+    "samples": 165372,
+    "normalized_rms": 1.450143503420035e-06,
+    "max_absolute": 7.450580596923828e-07,
+    "bit_identical": false
+  },
+  {
+    "case": "a17-minus5-stereo",
+    "rate": 48000,
+    "channels": 2,
+    "samples": 120000,
+    "normalized_rms": 0.0,
+    "max_absolute": 0.0,
+    "bit_identical": true
+  },
+  {
+    "case": "a17-plus8-stereo",
+    "rate": 48000,
+    "channels": 2,
+    "samples": 120000,
+    "normalized_rms": 0.0,
+    "max_absolute": 0.0,
+    "bit_identical": true
+  },
+  {
+    "case": "a17-minus24-44100",
+    "rate": 44100,
+    "channels": 1,
+    "samples": 55125,
+    "normalized_rms": 0.0,
+    "max_absolute": 0.0,
+    "bit_identical": true
+  },
+  {
+    "case": "a17-plus24-44100",
+    "rate": 44100,
+    "channels": 1,
+    "samples": 55125,
+    "normalized_rms": 0.0,
+    "max_absolute": 0.0,
+    "bit_identical": true
+  }
+]

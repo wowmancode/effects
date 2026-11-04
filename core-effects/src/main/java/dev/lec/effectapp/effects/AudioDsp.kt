@@ -99,6 +99,15 @@ private class SegmentedDspProcessor(
     private var nativePitchHandle = 0L
     private var sampleIndex = 0L
 
+    // Split pitch Methods 2 and 3 return their mix [latencySamples] samples late. Export removes
+    // that delay: the first latency samples of native output are dropped, the matching input is
+    // held back until its processed sample arrives, and end of stream pushes silence through to
+    // release the held tail. The processor's output therefore stays aligned with its input.
+    private var latencySamples = 0
+    private var skipSamples = 0
+    private var held = ShortArray(0)
+    private var heldCount = 0
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
@@ -120,6 +129,9 @@ private class SegmentedDspProcessor(
         state?.close()
         state = null
         sampleIndex = 0L
+        latencySamples = 0
+        skipSamples = 0
+        heldCount = 0
     }
 
     private fun configureState(sampleRate: Int, channels: Int) {
@@ -131,12 +143,15 @@ private class SegmentedDspProcessor(
         } else 0L
         state = if (nativePitchHandle == 0L) createAudioDspState(resolved, sampleRate, channels) else null
         sampleIndex = 0L
+        latencySamples = SplitPitchNativeBridge.latencyFrames(nativePitchHandle) * channels.coerceAtLeast(1)
+        skipSamples = latencySamples
+        heldCount = 0
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
-        val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
         if (state is NativeCAudioState) {
+            val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
             val samples = IntArray(inputBuffer.remaining() / 2) { inputBuffer.short.toInt() }
             val timeMs = timeOffsetMs + (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
             state?.processBuffer(samples, timeMs, inputAudioFormat.sampleRate, channels)
@@ -146,20 +161,12 @@ private class SegmentedDspProcessor(
             return
         }
         if (nativePitchHandle != 0L) {
+            val order = inputBuffer.order()
             val inputSamples = ShortArray(inputBuffer.remaining() / 2) { inputBuffer.short }
-            val outputSamples = inputSamples.copyOf()
-            SplitPitchNativeBridge.process(nativePitchHandle, inputSamples, outputSamples,
-                                           inputSamples.size / channels)
-            outputSamples.forEachIndexed { index, sample ->
-                val timeMs = timeOffsetMs + ((sampleIndex + index) / channels) * 1_000 /
-                    inputAudioFormat.sampleRate
-                output.putShort(if (timeMs in segment.startMs until segment.endMs) sample
-                                else inputSamples[index])
-            }
-            sampleIndex += inputSamples.size
-            output.flip()
+            emitNative(inputSamples, order)
             return
         }
+        val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
         while (inputBuffer.remaining() >= 2) {
             val channel = (sampleIndex % channels).toInt()
             val timeMs = timeOffsetMs + (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
@@ -167,6 +174,42 @@ private class SegmentedDspProcessor(
             output.putShort(rendered.coerceToShort())
             sampleIndex++
         }
+        output.flip()
+    }
+
+    override fun onQueueEndOfStream() {
+        // Push silence through to release the input still waiting for its processed sample.
+        if (nativePitchHandle != 0L && heldCount > 0) {
+            emitNative(ShortArray(skipSamples + heldCount), java.nio.ByteOrder.nativeOrder(), flushing = true)
+        }
+    }
+
+    /**
+     * Runs [input] through the native processor and writes every held input sample whose
+     * processed sample is now available. [flushing] input is silence that is not held itself.
+     */
+    private fun emitNative(input: ShortArray, order: java.nio.ByteOrder, flushing: Boolean = false) {
+        val channels = inputAudioFormat.channelCount.coerceAtLeast(1)
+        val processed = ShortArray(input.size)
+        SplitPitchNativeBridge.process(nativePitchHandle, input, processed, input.size / channels)
+        if (!flushing) {
+            if (heldCount + input.size > held.size) {
+                held = held.copyOf(maxOf(heldCount + input.size, held.size * 2, latencySamples + 4_096))
+            }
+            input.copyInto(held, heldCount)
+            heldCount += input.size
+        }
+        val skipped = minOf(skipSamples, processed.size)
+        skipSamples -= skipped
+        val count = minOf(processed.size - skipped, heldCount)
+        val output = replaceOutputBuffer(count * 2).order(order)
+        for (i in 0 until count) {
+            val timeMs = timeOffsetMs + ((sampleIndex + i) / channels) * 1_000 / inputAudioFormat.sampleRate
+            output.putShort(if (timeMs in segment.startMs until segment.endMs) processed[skipped + i] else held[i])
+        }
+        held.copyInto(held, 0, count, heldCount)
+        heldCount -= count
+        sampleIndex += count
         output.flip()
     }
 }
@@ -448,10 +491,9 @@ private class PitchDspState(
         )
 
         fun split(segment: TimelineSegment, sampleRate: Int, channels: Int): AudioDspState {
-            if (SplitPitchAlgorithm.from(segment.params) == SplitPitchAlgorithm.DRUMS_UNPITCHED &&
-                sampleRate in 8_000..384_000 && channels in 1..8
-            ) {
-                return DrumsUnpitchedDspState(segment, sampleRate, channels)
+            if (SplitPitchAlgorithm.from(segment.params) != SplitPitchAlgorithm.ORIGINAL) {
+                val handle = SplitPitchNativeBridge.create(sampleRate, channels, segment.params)
+                if (handle != 0L) return NativeSplitPitchDspState(segment, handle, channels)
             }
             return PitchDspState(
                 segment = segment,
@@ -465,6 +507,44 @@ private class PitchDspState(
                 windowMs = SPLIT_PITCH_WINDOW_MS,
             )
         }
+    }
+}
+
+/**
+ * Split pitch Methods 2 and 3 for the per-sample [AudioDspState] interface (live preview). Samples
+ * are gathered into blocks for the native processor, so the mix is heard one block later than its
+ * input on top of the processor's own latency. Export uses [SegmentedDspProcessor], which removes
+ * both delays.
+ */
+private class NativeSplitPitchDspState(
+    private val segment: TimelineSegment,
+    private var handle: Long,
+    channels: Int,
+) : AudioDspState {
+    private val blockSamples = BLOCK_FRAMES * channels.coerceAtLeast(1)
+    private val pending = ShortArray(blockSamples)
+    private var rendered = ShortArray(blockSamples)
+    private var position = 0
+
+    override fun process(input: Int, timeMs: Long, channel: Int): Int {
+        val previous = rendered[position]
+        pending[position] = input.coerceToShort()
+        if (++position == blockSamples) {
+            val next = ShortArray(blockSamples)
+            if (handle != 0L) SplitPitchNativeBridge.process(handle, pending, next, BLOCK_FRAMES)
+            rendered = next
+            position = 0
+        }
+        return if (timeMs in segment.startMs until segment.endMs) previous.toInt() else input
+    }
+
+    override fun close() {
+        SplitPitchNativeBridge.destroy(handle)
+        handle = 0L
+    }
+
+    private companion object {
+        const val BLOCK_FRAMES = 256
     }
 }
 

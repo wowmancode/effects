@@ -10,7 +10,7 @@ A free and open-source Android video editor focused on stacking time-ranged visu
 - Generic effect registry and parameter editor designed for gradual expansion.
 - Media3 Transformer export without FFmpeg wrappers.
 - JSON project save/load for shareable edits and presets.
-- Split-pitch harmonizer with Original and Drums unpitched pitch methods. Drums unpitched uses the [expressfx_drums C DSP](core-effects/src/main/c/README.md) on Android with a matching Kotlin fallback; both methods keep the same voice pitch settings.
+- Split-pitch harmonizer with three pitch methods: Original, Method 2 (reconstructed élastique Pro) and Method 3 (reconstructed A17 drums preset, minimum echo). Methods 2 and 3 run the [reconstructed C DSP](core-effects/src/main/c/README.md) on 64-bit devices; all methods keep the same voice pitch settings.
 
 ## Online rooms
 

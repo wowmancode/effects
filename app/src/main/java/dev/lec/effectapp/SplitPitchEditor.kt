@@ -27,7 +27,8 @@ internal fun SplitPitchEditor(values: Map<String, Float>, onChange: (Map<String,
         SplitPitchAlgorithm.entries.forEach { option ->
             val label = when (option) {
                 SplitPitchAlgorithm.ORIGINAL -> "Original"
-                SplitPitchAlgorithm.DRUMS_UNPITCHED -> "Drums unpitched"
+                SplitPitchAlgorithm.METHOD_2 -> "Method 2"
+                SplitPitchAlgorithm.METHOD_3 -> "Method 3"
             }
             if (option == algorithm) {
                 Button(
@@ -44,9 +45,21 @@ internal fun SplitPitchEditor(values: Map<String, Float>, onChange: (Map<String,
     }
     Text(when (algorithm) {
         SplitPitchAlgorithm.ORIGINAL -> "The existing split-pitch sound."
-        SplitPitchAlgorithm.DRUMS_UNPITCHED ->
-            "Drum-style stretch-and-resample for percussive audio. Voice pitches are limited to ±24 semitones."
+        SplitPitchAlgorithm.METHOD_2 ->
+            "High-quality pitch shifting that keeps the clip's timing. Voice pitches are limited to ±24 semitones."
+        SplitPitchAlgorithm.METHOD_3 ->
+            "Drum-style stretch-and-resample with minimum echo, for percussive audio. " +
+                "Mono and stereo only. Voice pitches are limited to ±24 semitones."
     })
+    if (algorithm != SplitPitchAlgorithm.ORIGINAL && algorithm.isAvailable) {
+        Text("The preview plays this method's sound slightly late; exports stay in sync.")
+    }
+    if (!algorithm.isAvailable) {
+        Text(
+            "This method isn't available on this device (it needs a 64-bit phone), so it plays as Original.",
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
     Text("Pitch voices", style = MaterialTheme.typography.titleSmall)
     Text("Each voice is a separate copy of the clip audio. Add intervals to build chords.")
 

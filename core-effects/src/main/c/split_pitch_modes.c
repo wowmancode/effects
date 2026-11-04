@@ -1,5 +1,5 @@
 #include "split_pitch_modes.h"
-#include "expressfx_drums.h"
+#include "reconstructed_pitch.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -21,10 +21,13 @@ struct SplitPitchState {
     float ratio[SPLIT_MAX_VOICES];
     float level[SPLIT_MAX_VOICES];
     float phase[SPLIT_MAX_VOICES];
-    /* Drums unpitched: one stream per voice plus a 0-semitone stream that
-       delays the dry signal by the same latency. NULL in Original mode. */
-    ExpressfxDrumsStream *drums[SPLIT_MAX_VOICES];
-    ExpressfxDrumsStream *drums_dry;
+    /* Methods 2 and 3: one reconstructed stream per voice, all set to the
+       same latency, and a delay line that holds the dry signal back by it. */
+    int reconstructed;
+    size_t latency;
+    ReconPitchStream *streams[SPLIT_MAX_VOICES];
+    float *dry_delay;   /* latency frames, ring */
+    size_t dry_index;
     float *scratch;
     size_t scratch_frames;
 };
@@ -79,23 +82,31 @@ SplitPitchState *split_pitch_create(unsigned sample_rate, unsigned channels,
     if (sample_rate < 8000 || channels == 0 || channels > 8 ||
         voice_count == 0 || voice_count > SPLIT_MAX_VOICES ||
         !semitones || !levels || mode < SPLIT_PITCH_ORIGINAL ||
-        mode > SPLIT_PITCH_DRUMS_UNPITCHED) return NULL;
+        mode > SPLIT_PITCH_METHOD_3) return NULL;
     SplitPitchState *s = (SplitPitchState *)calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->channels = channels;
     s->voice_count = voice_count;
     s->dry_mix = clampf(dry_mix, 0.0f, 1.0f);
     s->voice_mix = clampf(voice_mix, 0.0f, 1.0f);
-    if (mode == SPLIT_PITCH_DRUMS_UNPITCHED) {
-        s->drums_dry = expressfx_drums_stream_create(sample_rate, channels, 0.0);
-        int ok = s->drums_dry != NULL;
-        for (size_t v = 0; v < voice_count && ok; ++v) {
+    if (mode == SPLIT_PITCH_METHOD_2 || mode == SPLIT_PITCH_METHOD_3) {
+        ReconPitchEngine engine = mode == SPLIT_PITCH_METHOD_2 ? RECON_PITCH_ELASTIQUE_PRO
+                                                              : RECON_PITCH_A17_DRUMS;
+        s->reconstructed = 1;
+        for (size_t v = 0; v < voice_count; ++v) {
             s->level[v] = clampf(levels[v], 0.0f, 1.0f);
-            s->drums[v] = expressfx_drums_stream_create(sample_rate, channels,
+            s->streams[v] = recon_pitch_create(engine, sample_rate, channels,
                 (double)clampf(semitones[v], -24.0f, 24.0f));
-            ok = s->drums[v] != NULL;
+            if (!s->streams[v]) {
+                split_pitch_destroy(s);
+                return NULL;
+            }
+            size_t latency = recon_pitch_min_latency(s->streams[v]);
+            if (latency > s->latency) s->latency = latency;
         }
-        if (!ok) {
+        for (size_t v = 0; v < voice_count; ++v) recon_pitch_set_latency(s->streams[v], s->latency);
+        s->dry_delay = (float *)calloc((s->latency ? s->latency : 1) * channels, sizeof(float));
+        if (!s->dry_delay) {
             split_pitch_destroy(s);
             return NULL;
         }
@@ -115,13 +126,14 @@ SplitPitchState *split_pitch_create(unsigned sample_rate, unsigned channels,
     return s;
 }
 
-static void drums_process(SplitPitchState *s, const int16_t *input,
-                          int16_t *output, size_t frames) {
-    size_t samples = frames * s->channels;
+static void reconstructed_process(SplitPitchState *s, const int16_t *input,
+                                  int16_t *output, size_t frames) {
+    const unsigned ch = s->channels;
+    size_t samples = frames * ch;
     if (frames > s->scratch_frames) {
         float *grown = (float *)realloc(s->scratch, 3 * samples * sizeof(float));
         if (!grown) {
-            memcpy(output, input, samples * sizeof(int16_t));
+            memset(output, 0, samples * sizeof(int16_t));
             return;
         }
         s->scratch = grown;
@@ -131,10 +143,21 @@ static void drums_process(SplitPitchState *s, const int16_t *input,
     float *mix = in + samples;
     float *voice = mix + samples;
     for (size_t i = 0; i < samples; ++i) in[i] = input[i] / 32768.0f;
-    expressfx_drums_stream_process(s->drums_dry, in, voice, frames);
-    for (size_t i = 0; i < samples; ++i) mix[i] = voice[i] * s->dry_mix;
+    for (size_t f = 0; f < frames; ++f) {
+        for (unsigned c = 0; c < ch; ++c) {
+            float delayed = in[f * ch + c];
+            if (s->latency) {
+                float *slot = s->dry_delay + s->dry_index * ch + c;
+                float held = *slot;
+                *slot = delayed;
+                delayed = held;
+            }
+            mix[f * ch + c] = delayed * s->dry_mix;
+        }
+        if (s->latency && ++s->dry_index == s->latency) s->dry_index = 0;
+    }
     for (size_t v = 0; v < s->voice_count; ++v) {
-        expressfx_drums_stream_process(s->drums[v], in, voice, frames);
+        recon_pitch_process(s->streams[v], in, voice, frames); /* silence once failed */
         float gain = s->level[v] * s->voice_mix;
         for (size_t i = 0; i < samples; ++i) mix[i] += voice[i] * gain;
     }
@@ -145,8 +168,8 @@ static void drums_process(SplitPitchState *s, const int16_t *input,
 void split_pitch_process(SplitPitchState *s, const int16_t *input,
                          int16_t *output, size_t frames) {
     if (!s || !input || !output) return;
-    if (s->drums_dry) {
-        drums_process(s, input, output, frames);
+    if (s->reconstructed) {
+        reconstructed_process(s, input, output, frames);
         return;
     }
     for (size_t frame = 0; frame < frames; ++frame) {
@@ -175,10 +198,20 @@ void split_pitch_process(SplitPitchState *s, const int16_t *input,
     }
 }
 
+int split_pitch_supports(SplitPitchMode mode) {
+    if (mode == SPLIT_PITCH_ORIGINAL) return 1;
+    if (mode == SPLIT_PITCH_METHOD_2 || mode == SPLIT_PITCH_METHOD_3) return recon_pitch_available();
+    return 0;
+}
+
+size_t split_pitch_latency(const SplitPitchState *s) {
+    return s ? s->latency : 0;
+}
+
 void split_pitch_destroy(SplitPitchState *s) {
     if (!s) return;
-    for (size_t v = 0; v < SPLIT_MAX_VOICES; ++v) expressfx_drums_stream_destroy(s->drums[v]);
-    expressfx_drums_stream_destroy(s->drums_dry);
+    for (size_t v = 0; v < SPLIT_MAX_VOICES; ++v) recon_pitch_destroy(s->streams[v]);
+    free(s->dry_delay);
     free(s->scratch);
     free(s->history);
     free(s->initialized);
@@ -231,6 +264,22 @@ Java_dev_lec_effectapp_effects_SplitPitchNativeBridge_nativeProcess(
     split_pitch_process(state, src, dst, (size_t)frames);
     (*env)->ReleaseShortArrayElements(env, input, src, JNI_ABORT);
     (*env)->ReleaseShortArrayElements(env, output, dst, 0);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_dev_lec_effectapp_effects_SplitPitchNativeBridge_nativeSupports(
+    JNIEnv *env, jobject self, jint mode) {
+    (void)env;
+    (void)self;
+    return split_pitch_supports((SplitPitchMode)mode) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_dev_lec_effectapp_effects_SplitPitchNativeBridge_nativeLatency(
+    JNIEnv *env, jobject self, jlong handle) {
+    (void)env;
+    (void)self;
+    return (jint)split_pitch_latency((const SplitPitchState *)(intptr_t)handle);
 }
 
 JNIEXPORT void JNICALL

@@ -70,17 +70,25 @@ jobs:
         with:
           name: effect-app-x86_64-release
           path: app/build/outputs/apk/release/app-x86_64-release-unsigned.apk
-      - name: Test portable split-pitch C processor
+      - name: Test split-pitch C processor (Methods 2 and 3 reconstruction)
         run: |
-          for t in split_pitch_modes expressfx_drums; do
-            gcc -std=c11 -O2 -Wall -Wextra -Werror \
-              -Icore-effects/src/main/c \
-              core-effects/src/main/c/split_pitch_modes.c \
-              core-effects/src/main/c/expressfx_drums.c \
-              core-effects/src/test/c/${t}_test.c \
-              -lm -o /tmp/${t}_test
-            /tmp/${t}_test
-          done
+          set -e
+          C=core-effects/src/main/c
+          # Reconstructed DSP: the A17 reference vectors, then the translated blocks as objects.
+          make -C $C/elastique -j"$(nproc)" test-a17 build/image.o \
+            $(cd $C/elastique && ls generated/blocks_*.c | sed 's#generated/\(.*\)\.c#build/\1.o#')
+          gcc -std=c11 -O2 -ffp-contract=off -fno-fast-math -w -I$C -c $C/reconstructed_pitch.c -o /tmp/rp.o
+          gcc -std=c11 -O2 -ffp-contract=off -Wall -Wextra -Werror -I$C -c $C/elastique/a17.c -o /tmp/a17.o
+          gcc -std=c11 -O2 -ffp-contract=off -Wall -Wextra -Werror -I$C \
+            $C/split_pitch_modes.c core-effects/src/test/c/split_pitch_modes_test.c \
+            /tmp/rp.o /tmp/a17.o $C/elastique/build/blocks_*.o $C/elastique/build/image.o \
+            -lm -lpthread -o /tmp/split_pitch_modes_test
+          /tmp/split_pitch_modes_test
+          # 32-bit builds compile the reconstruction out and keep Original.
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I$C -DRECON_PITCH_DISABLED \
+            $C/reconstructed_pitch.c $C/split_pitch_modes.c core-effects/src/test/c/split_pitch_modes_test.c \
+            -lm -o /tmp/split_pitch_original_test
+          /tmp/split_pitch_original_test
       - uses: actions/upload-artifact@v4
         with:
           name: effect-app-debug

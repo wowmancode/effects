@@ -10,3 +10,9 @@ Dependency copyrights and complete license texts are distributed by their respec
 
 
 - TinyCC — LGPL 2.1 or later, pinned at `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` from https://github.com/TinyCC/tinycc. Its license is bundled at `assets/native-c/COPYING`. Compiler sources are the pinned `third_party/tinycc` submodule; the `lec_native_c` library can be rebuilt from the CMake project. See `core-effects/src/main/c/NATIVE_PLUGINS.md`.
+
+- Split pitch Methods 2 and 3 (`core-effects/src/main/c/elastique/`) are a C reconstruction of DSP
+  routines (élastique Pro, the Sony resampler and the A17 stretch) from the proprietary Vegas Pro 12
+  `vegas120k.dll`. Its data image and translated routines derive from that program; the
+  reconstruction does not grant a new license to the original DSP, and the GPLv3 does not cover it.
+  See that folder's README for provenance.
