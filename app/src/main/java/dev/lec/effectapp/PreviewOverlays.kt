@@ -43,10 +43,15 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import dev.lec.effectapp.effects.PreviewAudioProcessor
 import dev.lec.effectapp.model.Clip
 import dev.lec.effectapp.model.Overlay
 import dev.lec.effectapp.pipeline.OverlayBitmapCache
 import dev.lec.effectapp.pipeline.ProjectCompositionFactory
+import dev.lec.effectapp.pipeline.ReverseMediaCache
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -76,6 +81,10 @@ internal fun PreviewOverlayLayer(
 ) {
     if (clip == null || clip.overlays.isEmpty()) return
     val context = LocalContext.current
+    val overlays by produceState(clip.playbackOverlays(), clip.overlays, clip.audioSegments, clip.durationMs) {
+        value = clip.playbackOverlays()
+        value = withContext(Dispatchers.IO) { ReverseMediaCache.prepareAudioOverlays(context.applicationContext, clip) }
+    }
     val latestTime by rememberUpdatedState(localTimeMs)
     // Per-frame clock so animation keyframes and video sync are smooth, not tied to UI polling.
     var timeMs by remember { mutableLongStateOf(0L) }
@@ -109,7 +118,7 @@ internal fun PreviewOverlayLayer(
 
         // overlays[0] is the top layer, so draw the list back to front. Overlays in a lane share
         // one key, so their player carries on from clip to clip instead of starting over.
-        clip.overlays.asReversed().filterNot { it.audioOnly }.forEach { overlay ->
+        overlays.asReversed().filterNot { it.audioOnly }.forEach { overlay ->
             androidx.compose.runtime.key(overlay.previewKey()) {
                 OverlayItem(
                     overlay = overlay,
@@ -125,7 +134,7 @@ internal fun PreviewOverlayLayer(
                 )
             }
         }
-        clip.overlays.filter { it.audioOnly }.forEach { overlay ->
+        overlays.filter { it.audioOnly }.forEach { overlay ->
             androidx.compose.runtime.key(overlay.previewKey()) {
                 OverlayAudio(overlay, clip.durationMs, timeMs, mainPlaying)
             }
@@ -407,15 +416,31 @@ private fun FollowPreviewClock(player: ExoPlayer, overlay: Overlay, timeMs: Long
 @Composable
 private fun OverlayAudio(overlay: Overlay, clipDurationMs: Long, timeMs: Long, mainPlaying: Boolean) {
     val context = LocalContext.current
-    val player = remember(overlay.previewKey(), overlay.sourceUri) {
-        ExoPlayer.Builder(context.applicationContext).build().apply {
+    val processor = remember(overlay.previewKey()) { PreviewAudioProcessor() }
+    val renderersFactory = remember(processor) {
+        object : DefaultRenderersFactory(context.applicationContext) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioOutputPlaybackParams: Boolean,
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(false)
+                .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
+                .setAudioProcessors(arrayOf(processor))
+                .build()
+        }
+    }
+    val player = remember(overlay.previewKey(), overlay.sourceUri, renderersFactory) {
+        ExoPlayer.Builder(context.applicationContext, renderersFactory).build().apply {
             repeatMode = Player.REPEAT_MODE_ONE
             setMediaItem(MediaItem.fromUri(Uri.parse(overlay.sourceUri)))
             prepare()
         }
     }
     DisposableEffect(player) { onDispose { player.release() } }
+    LaunchedEffect(processor, overlay.audioSegments) { processor.setSegments(overlay.audioSegments) }
     LaunchedEffect(player, overlay.playbackSpeed) { player.setPlaybackSpeed(overlay.playbackSpeed) }
     val endMs = if (overlay.endMs <= overlay.startMs) clipDurationMs else overlay.endMs
     FollowPreviewClock(player, overlay, timeMs, mainPlaying, visible = timeMs in overlay.startMs until endMs)
 }
+

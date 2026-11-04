@@ -77,6 +77,7 @@ class OnlineViewModel(application: Application) : AndroidViewModel(application) 
 
     /** Null when the room started, otherwise what's wrong. */
     fun create(editor: EditorViewModel, maxMembers: Int, defaultPerms: Set<Perm>, mediaCapMb: Int): String? {
+        if (dev.lec.effectapp.model.NativePluginPolicy.containsNative(editor.project.value)) return "Native C plug-ins are offline-only. Remove them before opening an online room."
         if (_session.value?.ui?.value?.phase.let { it != null && it != OnlinePhase.ENDED }) return "You're already in a room."
         val host = _profile.value.relayHost
         if (!Invite.isValidHost(host)) return "Set a relay server first (for example relay.example.com)."
@@ -86,6 +87,7 @@ class OnlineViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun join(editor: EditorViewModel, inviteText: String): String? {
+        if (dev.lec.effectapp.model.NativePluginPolicy.containsNative(editor.project.value)) return "Native C plug-ins are offline-only. Remove them before opening an online room."
         if (_session.value?.ui?.value?.phase.let { it != null && it != OnlinePhase.ENDED }) return "You're already in a room."
         val invite = Invite.parse(inviteText) ?: return "That isn't a room invite. Paste the whole invite (it starts with lecfx1.)."
         launch(RoomStart.Join(invite, _profile.value.displayName), editor)
@@ -124,3 +126,4 @@ class OnlineViewModel(application: Application) : AndroidViewModel(application) 
         session?.shutdown()
     }
 }
+

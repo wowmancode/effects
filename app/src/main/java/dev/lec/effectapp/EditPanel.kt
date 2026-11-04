@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -178,7 +179,9 @@ fun EditPanel(
                         }
                         when (effect.id) {
                             "plugin_video", "plugin_audio" -> {
+                                val online by viewModel.onlineActive.collectAsState()
                                 PluginSourceEditor(
+                                    online = online,
                                     source = segment.stringParams["source"].orEmpty(),
                                     audio = effect.id == "plugin_audio",
                                     language = segment.stringParams["language"] ?: PLUGIN_LANGUAGE_C_STYLE,

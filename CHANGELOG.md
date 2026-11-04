@@ -9,6 +9,32 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Release APKs are now signed with the same shared key as debug builds (they used to be
+  unsigned), so every APK from CI, debug or release, installs as an update over the previous
+  one without uninstalling. Uninstall once if the app on the phone was signed with another key.
+
+- Split pitch: the Drums unpitched method (expressfx_drums) is removed. The pitch methods are now
+  Original, **Method 2** and **Method 3**. Method 2 is the reconstructed élastique Pro pitch
+  shifter; Method 3 is the reconstructed A17 "Drums, unpitched (minimum echo)" preset (resampler
+  plus duration-restoring stretch, mono/stereo). Both run the statically reconstructed C DSP in
+  `core-effects/src/main/c/elastique/`, built for 64-bit ABIs only; on 32-bit phones they show as
+  unavailable and play as Original. Voice pitches are limited to ±24 semitones. Their latency
+  (about 30–300 ms, depending on method and pitch) is removed in exports, so the sound stays on
+  the picture; the live preview plays them that much late. Projects saved with Drums unpitched
+  (stored as 1) open as Method 2; projects from before that with the old a17 drums method (2)
+  open as Method 3.
+
+- Exports with a replacement soundtrack no longer stall partway (at the same point every time)
+  with "Muxer error · no output sample written". The soundtrack was cut at its file's reported
+  length and seeked back to loop, and with MP3/M4A files that length or seek is often off, so the
+  sound stopped arriving. Each clip's soundtrack is now rendered once to a WAV of exactly what's
+  heard (looped from the sound actually decoded) before the export starts.
+- IHTX and normal exports no longer fail with "Muxer error · no output sample written in the
+  last … milliseconds" when they use native C plug-ins. The plug-in worker used to compile each
+  plug-in on the first frame or buffer that needed it, inside the export, so a fresh worker (the
+  first pass, every 10th pass, or after a crash) could go past Media3's timeout before writing
+  anything. Every pass's plug-ins are now compiled before it starts, and the worker keeps up to
+  32 compiled plug-ins instead of 8, so a multi-effect pass doesn't recompile mid-export.
 - IHTX exports keep sound and picture together. Each pass's audio encoder put a little silence
   in front of the sound, so every pass (and every joined segment) pushed the sound later. Later
   passes now read the sound from after that silence, and the final join copies the pictures
@@ -40,6 +66,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Anti-desync export switch. After the export, the picture and sound track lengths are
+  measured; if they differ by more than 15 ms, the picture is re-timed to exactly the sound's
+  length (sound copied untouched), like `setpts=audio/video*PTS`. The finished screen shows the
+  speed used and both lengths; if the extra pass fails, the unsynced export is kept.
+- IHTX exports list the native C plug-ins (from the project, queued presets and overlays) that
+  aren't approved on this phone yet, with an "Allow all plug-ins" checkbox. Ticking it asks for
+  confirmation with the trust warning, then compiles and approves each one. Start export stays
+  off until they're all approved, instead of failing partway in.
+- Multi-effect IHTX preset picker has a search box (matches preset names and the effects
+  inside them, every word in any order) and sort modes: saved order, newest, name A–Z/Z–A,
+  most and fewest effects. Each preset lists its effects and how often it's queued, and
+  "Add all shown" queues every match at once.
+- Export encoding settings: resolution cap (4K to 360p), video bitrate (Mbps, with quick
+  picks), variable or constant bitrate mode, keyframe interval (KEY_I_FRAME_INTERVAL; 0 for
+  all keyframes), max B-frames (Android 10+), AAC audio bitrate and encoder speed (maximum or
+  real time). Anything left on Auto falls back to Very fast's values or the encoder's default.
 - Load opens layered projects from other editors as well as effect-app projects. Each layer
   becomes an overlay that keeps its in-point, speed, crop window and position; sounds become
   sound-only overlays, with pitch shifts. Solid colours, text and noise layers are drawn as
@@ -83,6 +125,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The editor preview no longer stops for about a second at every cut between clips. Effect
+  slots are now positional and sized for the clip with the most effects, so moving to the next
+  clip swaps its effects into the running pipeline (at the moment the player changes item)
+  instead of stopping and rebuilding it. A full rebuild only happens where multi-pass effects
+  (ghost trail, freeze frame, displacement map) sit in different places.
+- When a native C plug-in prints a reason and stops the worker (abort(), a crash after writing to
+  stderr), the export error now shows "Plug-in said: …" with its last lines instead of a bare
+  DeadObjectException, and the pass isn't pointlessly retried.
+- An IHTX export that looked stuck on a pass now shows how long the current pass has run, its
+  own progress when Media3 can report it, and, while a failed pass is being retried, the retry
+  number and the error that caused it. The bar also moves by completed passes when a layered
+  pass can't report progress, instead of sitting at 0 %.
+- Long IHTX exports with native C plug-ins failing partway (e.g. 122/170) with "Native C worker
+  stopped or timed out … DeadObjectException". The plug-in worker is restarted every 10 passes
+  so leaked memory can't build up, a pass whose worker crashed or was killed is retried up to
+  5 times with a fresh worker, and the screen stays on while exporting so Android is less likely
+  to stop the worker in the background. The error now says why the worker stopped.
+- Exports aborting with "no output sample written in the last 10000 milliseconds" while a
+  plug-in worker starts or compiles: Media3's stall limit is raised to 30 s (plug-ins keep their
+  own per-frame timeout).
 - Gradient-map alpha could expose a purple preview surface or freeze playback by
   emitting partially transparent video frames.
 

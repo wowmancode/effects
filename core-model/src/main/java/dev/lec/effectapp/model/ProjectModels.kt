@@ -27,6 +27,16 @@ data class EditProject(
      */
     fun relinkSource(oldUri: String, newUri: String, displayName: String, sourceDurationMs: Long = 0): EditProject =
         copy(
+            presets = presets.map { preset ->
+                val audio = preset.replacementAudio
+                if (audio == null || audio.sourceUri != oldUri) preset else preset.copy(
+                    replacementAudio = audio.copy(
+                        sourceUri = newUri,
+                        displayName = displayName,
+                        sourceDurationMs = if (sourceDurationMs > 0) sourceDurationMs else audio.sourceDurationMs,
+                    ),
+                )
+            },
             clips = clips.map { clip ->
                 val relinked = if (clip.sourceUri == oldUri) {
                     clip.copy(sourceUri = newUri, displayName = displayName, mediaMissing = false)
@@ -52,7 +62,22 @@ data class EffectPreset(
     val thumbnailPath: String? = null,
     val effectSegments: List<TimelineSegment> = emptyList(),
     val audioSegments: List<TimelineSegment> = emptyList(),
+    val replacementAudio: PresetAudio? = null,
 )
+
+/** A preset's soundtrack, independent of the source clip's length and overlay identity. */
+@Serializable
+data class PresetAudio(
+    val sourceUri: String,
+    val displayName: String,
+    val sourceDurationMs: Long,
+    val sourceStartMs: Long = 0,
+    val speed: Float = 1f,
+) {
+    fun applyTo(clip: Clip, overlayId: String): Clip = clip.withReplacedAudio(
+        overlayId, sourceUri, displayName, sourceDurationMs, sourceStartMs, speed,
+    )
+}
 
 @Serializable
 data class Clip(
@@ -87,6 +112,46 @@ data class Clip(
     /** End of the source range the clip reads (equals trimEndMs at normal speed). */
     val sourceEndMs: Long get() = sourceMsAt(durationMs)
 
+    val hasReplacementAudio: Boolean get() = overlays.any { it.replacesClipAudio }
+
+    /** Replacement sound uses the clip's audio stack and the existing looping audio lane. */
+    fun playbackOverlays(): List<Overlay> = overlays.map { overlay ->
+        if (overlay.replacesClipAudio) overlay.copy(audioSegments = audioSegments) else overlay
+    }
+
+    fun toPreset(id: String, name: String, thumbnailPath: String? = null): EffectPreset = EffectPreset(
+        id = id,
+        name = name,
+        thumbnailPath = thumbnailPath,
+        effectSegments = effectSegments.map { it.copy(id = "") },
+        audioSegments = audioSegments.map { it.copy(id = "") },
+        replacementAudio = overlays.lastOrNull { it.replacesClipAudio }?.let {
+            PresetAudio(it.sourceUri, it.displayName, it.sourceDurationMs, it.sourceStartMs + it.sourceOffsetMs, it.playbackSpeed)
+        },
+    )
+
+    fun withReplacedAudio(
+        id: String,
+        uri: String,
+        name: String,
+        sourceDurationMs: Long,
+        sourceStartMs: Long = 0,
+        speed: Float = 1f,
+    ): Clip = copy(
+        overlays = overlays.filterNot { it.replacesClipAudio } + Overlay(
+            id = id,
+            sourceUri = uri,
+            displayName = name,
+            sourceDurationMs = sourceDurationMs,
+            sourceStartMs = sourceStartMs,
+            speed = speed,
+            audioOnly = true,
+            includeAudio = true,
+            endMs = durationMs,
+            replacesClipAudio = true,
+        ),
+    )
+
     fun withReplacedMedia(sourceUri: String, displayName: String, durationMs: Long): Clip {
         val replacementDuration = durationMs.coerceAtLeast(1)
         return copy(
@@ -98,6 +163,7 @@ data class Clip(
             speed = 1f,
             effectSegments = effectSegments.map { it.forWholeClip(replacementDuration) },
             audioSegments = audioSegments.map { it.forWholeClip(replacementDuration) },
+            overlays = overlays.map { if (it.replacesClipAudio) it.copy(startMs = 0, endMs = replacementDuration) else it },
         )
     }
 }
@@ -136,6 +202,8 @@ data class Overlay(
     val speed: Float = 1f,
     /** Sound only: plays the source's audio and draws nothing. */
     val audioOnly: Boolean = false,
+    /** Soundtrack selected with Replace audio; suppresses the clip's original sound. */
+    val replacesClipAudio: Boolean = false,
     /**
      * Overlays sharing a lane (>= 0) never overlap in time and play through one shared player in
      * export; lane 0 is drawn on top of lane 1 and so on. -1 = the overlay gets a lane of its own.

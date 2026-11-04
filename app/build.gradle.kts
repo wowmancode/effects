@@ -21,6 +21,35 @@ android {
         buildConfigField("String", "RELAY_HOST", "\"$relayHost\"")
     }
 
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = false
+        }
+    }
+    signingConfigs {
+        // One shared key for every build, debug and release (CI runners otherwise each make a
+        // random debug key, and release APKs were unsigned), so any new APK installs as an update
+        // over the last instead of needing an uninstall. The key is public, not a secret; a
+        // store release would need its own key.
+        getByName("debug") {
+            storeFile = file("shared-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -59,3 +88,4 @@ dependencies {
     implementation(libs.okhttp)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+

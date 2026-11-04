@@ -1,6 +1,7 @@
 package dev.lec.effectapp
 
 import org.json.JSONObject
+import dev.lec.effectapp.model.NATIVE_C_PLUGIN_LANGUAGE
 import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_C_STYLE
 import dev.lec.effectapp.effects.PLUGIN_LANGUAGE_GLSL
 
@@ -20,17 +21,17 @@ internal object PluginFile {
         }
         return JSONObject()
             .put("format", "lec-effect-plugin")
-            .put("version", 2)
+            .put("version", 3)
             .put("kind", if (audio) "audio" else "video")
             .put("source", source)
-            .put("language", if (audio) PLUGIN_LANGUAGE_C_STYLE else language)
+            .put("language", language)
             .put("controls", controlJson)
             .toString(2)
     }
 
-    fun decode(value: String, expectedAudio: Boolean): SavedPlugin {
+    fun decode(value: String, expectedAudio: Boolean, rawLanguage: String = PLUGIN_LANGUAGE_C_STYLE): SavedPlugin {
         val trimmed = value.trim()
-        if (!trimmed.startsWith("{")) return SavedPlugin(expectedAudio, value, PLUGIN_LANGUAGE_C_STYLE, emptyMap())
+        if (!trimmed.startsWith("{")) return SavedPlugin(expectedAudio, value, rawLanguage, emptyMap())
         val json = JSONObject(trimmed)
         require(json.optString("format") == "lec-effect-plugin") { "This is not a LEC plug-in file." }
         val audio = when (json.getString("kind")) {
@@ -42,8 +43,8 @@ internal object PluginFile {
             "Choose a ${if (expectedAudio) "audio" else "video"} plug-in for this effect."
         }
         val language = json.optString("language", PLUGIN_LANGUAGE_C_STYLE)
-        require(language == PLUGIN_LANGUAGE_C_STYLE || language == PLUGIN_LANGUAGE_GLSL) { "Unknown plug-in language." }
-        require(!audio || language == PLUGIN_LANGUAGE_C_STYLE) { "GLSL is available for video plug-ins only." }
+        require(language in setOf(PLUGIN_LANGUAGE_C_STYLE, PLUGIN_LANGUAGE_GLSL, NATIVE_C_PLUGIN_LANGUAGE)) { "Unknown plug-in language." }
+        require(!audio || language != PLUGIN_LANGUAGE_GLSL) { "GLSL is available for video plug-ins only." }
         val controlsJson = json.optJSONObject("controls")
         val controls = (1..8).associate { index ->
             val key = "control$index"
@@ -53,3 +54,4 @@ internal object PluginFile {
         return SavedPlugin(audio, json.getString("source"), language, controls)
     }
 }
+

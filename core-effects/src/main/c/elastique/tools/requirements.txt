@@ -1,0 +1,2 @@
+pypcode==4.1.0
+capstone==5.0.9

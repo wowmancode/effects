@@ -34,6 +34,8 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun onFlush() {
+        states.forEach { it.close() }
+        states = emptyList()
         sampleIndex = 0
         rebuildStates()
     }
@@ -42,6 +44,7 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
         sampleIndex = 0
         appliedSegments = emptyList()
         appliedRevision = -1
+        states.forEach { it.close() }
         states = emptyList()
         appliedParamSets = emptyList()
     }
@@ -55,6 +58,21 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
             rebuildStates(parameterTimeMs)
         }
         val output = replaceOutputBuffer(inputBuffer.remaining()).order(inputBuffer.order())
+        if (states.any { it is NativeCAudioState }) {
+            val samples = IntArray(inputBuffer.remaining() / 2) { inputBuffer.short.toInt() }
+            states.forEach { state ->
+                if (!state.processBuffer(samples, currentTimeMs, inputAudioFormat.sampleRate, channels)) {
+                    samples.indices.forEach { index ->
+                        val timeMs = ((sampleIndex + index) / channels) * 1_000 / inputAudioFormat.sampleRate
+                        samples[index] = state.process(samples[index], timeMs, ((sampleIndex + index) % channels).toInt())
+                    }
+                }
+            }
+            samples.forEach { output.putShort(it.coerceIn(-32768, 32767).toShort()) }
+            sampleIndex += samples.size
+            output.flip()
+            return
+        }
         while (inputBuffer.remaining() >= 2) {
             val channel = (sampleIndex % channels).toInt()
             val timeMs = (sampleIndex / channels) * 1_000 / inputAudioFormat.sampleRate
@@ -71,14 +89,20 @@ class PreviewAudioProcessor : BaseAudioProcessor() {
         appliedSegments = next
         appliedRevision = requestedRevision
         if (inputAudioFormat == AudioProcessor.AudioFormat.NOT_SET) {
+            states.forEach { it.close() }
             states = emptyList()
             appliedParamSets = emptyList()
             return
         }
         appliedParamSets = next.map { it.paramsAt(timeMs) }
+        val previous = states
+        val reused = HashSet<AudioDspState>()
         states = next.mapIndexedNotNull { index, segment ->
             val resolved = segment.copy(params = appliedParamSets[index], keyframes = emptyList())
-            createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
+            val old = previous.getOrNull(index) as? NativeCAudioState
+            if (old != null && old.update(resolved)) { reused += old; old }
+            else createAudioDspState(resolved, inputAudioFormat.sampleRate, inputAudioFormat.channelCount)
         }
+        previous.filterNot { it in reused }.forEach { it.close() }
     }
 }

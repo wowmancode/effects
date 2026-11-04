@@ -48,7 +48,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     private val _missingPrompt = MutableStateFlow(0)
     val missingPrompt: StateFlow<Int> = _missingPrompt.asStateFlow()
 
+    private val _onlineActive = MutableStateFlow(false)
+    val onlineActive = _onlineActive.asStateFlow()
+    private var onlineOwner: Any? = null
+
+    fun setOnlineMode(owner: Any, active: Boolean) {
+        if (!active && onlineOwner !== owner) return
+        onlineOwner = if (active) owner else null
+        dev.lec.effectapp.effects.NativeCClient.setOnlineMode(active)
+        _onlineActive.value = active
+    }
+
     init {
+        dev.lec.effectapp.effects.NativeCClient.initialize(application)
         val savedPresets = runCatching {
             if (presetFile.exists()) PresetLibraryJson.decode(presetFile.readText()) else emptyList()
         }.getOrDefault(emptyList())
@@ -119,6 +131,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
         updateClip(id) { withReplacedMedia(uri, displayName, durationMs) }
     }
 
+    fun replaceClipAudio(id: String, uri: String, displayName: String, durationMs: Long) {
+        if (durationMs <= 0 || _project.value.clips.none { it.id == id }) return
+        updateClip(id) { withReplacedAudio(UUID.randomUUID().toString(), uri, displayName, durationMs) }
+    }
+
+    fun restoreClipAudio(id: String) {
+        updateClip(id) { copy(overlays = overlays.filterNot { it.replacesClipAudio }) }
+    }
+
     /**
      * Online mode gets first look at a relink: media shared in a room is identified by its
      * content, so the picked file has to be checked before it's used. Returns true when
@@ -135,6 +156,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
     fun relinkMediaNow(oldUri: String, newUri: String, displayName: String, durationMs: Long) {
         recordUndo()
         _project.value = _project.value.relinkSource(oldUri, newUri, displayName, durationMs)
+        persistPresets()
         refreshMissingMedia()
     }
 
@@ -451,12 +473,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
 
     fun savePreset(name: String, clipId: String, thumbnailPath: String?) {
         val clip = _project.value.clips.find { it.id == clipId } ?: return
-        val preset = EffectPreset(
+        val preset = clip.toPreset(
             id = UUID.randomUUID().toString(),
             name = name.trim().ifEmpty { "Untitled preset" },
             thumbnailPath = thumbnailPath,
-            effectSegments = clip.effectSegments.map { it.copy(id = "") },
-            audioSegments = clip.audioSegments.map { it.copy(id = "") },
         )
         _project.value = _project.value.copy(presets = deduplicatePresets(_project.value.presets + preset))
         persistPresets()
@@ -472,10 +492,11 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
             it.copy(id = UUID.randomUUID().toString()).forWholeClip(clip.durationMs)
         }
         updateClip(clipId) {
-            copy(
+            val updated = copy(
                 effectSegments = effectSegments + visual,
                 audioSegments = audioSegments + audio,
             )
+            preset.replacementAudio?.applyTo(updated, UUID.randomUUID().toString()) ?: updated
         }
         val selected = visual.lastOrNull() ?: audio.lastOrNull()
         if (selected != null) {
@@ -484,6 +505,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application),
                 segmentId = selected.id,
                 category = if (selected in visual) EffectCategory.EFFECTS else EffectCategory.AUDIO,
             )
+        } else if (preset.replacementAudio != null) {
+            _selection.value = Selection(clipId, null, EffectCategory.AUDIO)
+        }
+        if (preset.replacementAudio != null) {
+            refreshMissingMedia()
+            if (_missingMedia.value.isNotEmpty()) _missingPrompt.value++
         }
     }
 
